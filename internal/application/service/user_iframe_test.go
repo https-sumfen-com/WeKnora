@@ -24,6 +24,8 @@ func setupIframeTestDB(t *testing.T) *gorm.DB {
 		&types.User{},
 		&types.IframeNonce{},
 		&types.AuthToken{},
+		&types.Organization{},
+		&types.OrganizationMember{},
 	); err != nil {
 		t.Fatalf("automigrate failed: %v", err)
 	}
@@ -35,41 +37,57 @@ func newIframeTestService(t *testing.T) (*userService, *gorm.DB) {
 	t.Helper()
 	// Set the AES key so BeforeSave/AfterFind hooks work correctly.
 	t.Setenv("SYSTEM_AES_KEY", iframeTestAESKey)
+	// TENANT_AES_KEY is used by CreateTenant → generateApiKey.
+	t.Setenv("TENANT_AES_KEY", iframeTestAESKey)
 	db := setupIframeTestDB(t)
+	tenantRepo := repository.NewTenantRepository(db)
 	svc := &userService{
-		userRepo:        repository.NewUserRepository(db),
-		tokenRepo:       repository.NewAuthTokenRepository(db),
-		tenantRepo:      repository.NewTenantRepository(db),
-		iframeNonceRepo: repository.NewIframeNonceRepository(db),
-		// tenantService and config are not used by IframeLogin; left nil.
+		userRepo:         repository.NewUserRepository(db),
+		tokenRepo:        repository.NewAuthTokenRepository(db),
+		tenantRepo:       tenantRepo,
+		tenantService:    NewTenantService(tenantRepo),
+		iframeNonceRepo:  repository.NewIframeNonceRepository(db),
+		organizationRepo: repository.NewOrganizationRepository(db),
 	}
 	return svc, db
 }
 
-// seedTenant inserts a tenant with the given external_id and plaintext iframe_secret.
-func seedTenant(t *testing.T, db *gorm.DB, cid, plaintextSecret string) *types.Tenant {
+// seedOrganization inserts an organization with the given external_id and plaintext iframe_secret.
+func seedOrganization(t *testing.T, db *gorm.DB, cid, plaintextSecret string) *types.Organization {
 	t.Helper()
-	tenant := &types.Tenant{
+	// We need a placeholder owner user first (OwnerID is required NOT NULL).
+	ownerUser := &types.User{
+		ID:       "owner-" + cid,
+		Username: "owner_" + cid,
+		Email:    "owner_" + cid + "@test.invalid",
+		IsActive: true,
+	}
+	if err := db.Create(ownerUser).Error; err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	org := &types.Organization{
+		ID:           "org-" + cid,
 		Name:         "Test-" + cid,
-		Status:       "active",
 		ExternalID:   cid,
 		IframeSecret: plaintextSecret,
+		OwnerID:      ownerUser.ID,
 	}
-	if err := db.Create(tenant).Error; err != nil {
-		t.Fatalf("create tenant: %v", err)
+	if err := db.Create(org).Error; err != nil {
+		t.Fatalf("create organization: %v", err)
 	}
-	return tenant
+	return org
 }
 
 func TestIframeLogin_HappyPath_CreatesUser(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	seedTenant(t, db, "ACME", "secret1")
+	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n1",
-		Sig:    SignIframeMessage("secret1", "ACME", "13812345678", "1000", "n1"),
+		Role:   "editor",
+		Sig:    SignIframeMessage("secret1", "ACME", "13812345678", "1000", "n1", "editor"),
 	}
 	resp, err := svc.IframeLogin(context.Background(), req)
 	if err != nil {
@@ -84,18 +102,31 @@ func TestIframeLogin_HappyPath_CreatesUser(t *testing.T) {
 	if resp.Token == "" {
 		t.Fatalf("expected non-empty token")
 	}
+	// Verify personal tenant was created and returned.
+	if resp.Tenant == nil || resp.Tenant.ID == 0 {
+		t.Fatalf("expected personal tenant to be created and returned")
+	}
+	// Verify OrganizationMember was created with correct role.
+	var member types.OrganizationMember
+	if err := db.Where("user_id = ? AND organization_id = ?", resp.User.ID, "org-ACME").First(&member).Error; err != nil {
+		t.Fatalf("expected org member to be created: %v", err)
+	}
+	if member.Role != types.OrgRoleEditor {
+		t.Fatalf("expected role editor, got %q", member.Role)
+	}
 }
 
 func TestIframeLogin_Replay(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	seedTenant(t, db, "ACME", "secret1")
+	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n1",
+		Role:   "editor",
 	}
-	req.Sig = SignIframeMessage("secret1", req.CID, req.Mobile, req.TS, req.Nonce)
+	req.Sig = SignIframeMessage("secret1", req.CID, req.Mobile, req.TS, req.Nonce, req.Role)
 
 	// First call succeeds.
 	if _, err := svc.IframeLogin(context.Background(), req); err != nil {
@@ -111,12 +142,13 @@ func TestIframeLogin_Replay(t *testing.T) {
 
 func TestIframeLogin_BadSignature(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	seedTenant(t, db, "ACME", "secret1")
+	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n2",
+		Role:   "viewer",
 		// 64 hex chars, but wrong HMAC
 		Sig: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 	}
@@ -134,7 +166,8 @@ func TestIframeLogin_UnknownTenant(t *testing.T) {
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n3",
-		Sig:    SignIframeMessage("any", "UNKNOWN", "13812345678", "1000", "n3"),
+		Role:   "viewer",
+		Sig:    SignIframeMessage("any", "UNKNOWN", "13812345678", "1000", "n3", "viewer"),
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
@@ -145,12 +178,13 @@ func TestIframeLogin_UnknownTenant(t *testing.T) {
 
 func TestIframeLogin_NotEnabled(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	seedTenant(t, db, "ACME2", "") // empty secret means iframe not enabled
+	seedOrganization(t, db, "ACME2", "") // empty secret means iframe not enabled
 	req := &types.IframeLoginRequest{
 		CID:    "ACME2",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n4",
+		Role:   "viewer",
 		Sig:    "any",
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
@@ -162,13 +196,14 @@ func TestIframeLogin_NotEnabled(t *testing.T) {
 
 func TestIframeLogin_InvalidMobile(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	seedTenant(t, db, "ACME3", "secret")
+	seedOrganization(t, db, "ACME3", "secret")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME3",
 		Mobile: "not-a-number",
 		TS:     "1000",
 		Nonce:  "n5",
-		Sig:    SignIframeMessage("secret", "ACME3", "not-a-number", "1000", "n5"),
+		Role:   "editor",
+		Sig:    SignIframeMessage("secret", "ACME3", "not-a-number", "1000", "n5", "editor"),
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
@@ -185,12 +220,31 @@ func TestIframeLogin_MissingParams(t *testing.T) {
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n6",
+		Role:   "viewer",
 		Sig:    "s",
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
 	if !ok || ilErr.Code != types.IframeErrParamsMissing {
 		t.Fatalf("expected IFRAME_PARAMS_MISSING, got %v", err)
+	}
+}
+
+func TestIframeLogin_MissingRole(t *testing.T) {
+	svc, _ := newIframeTestService(t)
+	// Missing Role — must fail before DB lookup
+	req := &types.IframeLoginRequest{
+		CID:    "ACME",
+		Mobile: "13812345678",
+		TS:     "1000",
+		Nonce:  "n6b",
+		Role:   "",
+		Sig:    "s",
+	}
+	_, err := svc.IframeLogin(context.Background(), req)
+	ilErr, ok := err.(*types.IframeLoginError)
+	if !ok || ilErr.Code != types.IframeErrParamsMissing {
+		t.Fatalf("expected IFRAME_PARAMS_MISSING for missing role, got %v", err)
 	}
 }
 
@@ -201,6 +255,7 @@ func TestIframeLogin_NonIntegerTS(t *testing.T) {
 		Mobile: "13812345678",
 		TS:     "abc",
 		Nonce:  "n7",
+		Role:   "editor",
 		Sig:    "s",
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
@@ -210,17 +265,36 @@ func TestIframeLogin_NonIntegerTS(t *testing.T) {
 	}
 }
 
+func TestIframeLogin_InvalidRole(t *testing.T) {
+	svc, db := newIframeTestService(t)
+	seedOrganization(t, db, "ACME5", "secret5")
+	req := &types.IframeLoginRequest{
+		CID:    "ACME5",
+		Mobile: "13812345678",
+		TS:     "1000",
+		Nonce:  "n_role",
+		Role:   "banana",
+		Sig:    SignIframeMessage("secret5", "ACME5", "13812345678", "1000", "n_role", "banana"),
+	}
+	_, err := svc.IframeLogin(context.Background(), req)
+	ilErr, ok := err.(*types.IframeLoginError)
+	if !ok || ilErr.Code != types.IframeErrRoleInvalid {
+		t.Fatalf("expected IFRAME_ROLE_INVALID, got %v", err)
+	}
+}
+
 func TestIframeLogin_ExistingUserReturned(t *testing.T) {
 	svc, db := newIframeTestService(t)
-	tenant := seedTenant(t, db, "ACME4", "secret4")
+	seedOrganization(t, db, "ACME4", "secret4")
 
-	// Pre-create the user so the second call finds them.
+	// First login creates the user.
 	req := &types.IframeLoginRequest{
 		CID:    "ACME4",
 		Mobile: "13800000001",
 		TS:     "2000",
 		Nonce:  "n8",
-		Sig:    SignIframeMessage("secret4", "ACME4", "13800000001", "2000", "n8"),
+		Role:   "editor",
+		Sig:    SignIframeMessage("secret4", "ACME4", "13800000001", "2000", "n8", "editor"),
 	}
 	resp1, err := svc.IframeLogin(context.Background(), req)
 	if err != nil {
@@ -234,14 +308,55 @@ func TestIframeLogin_ExistingUserReturned(t *testing.T) {
 		Mobile: "13800000001",
 		TS:     "3000",
 		Nonce:  "n9",
+		Role:   "editor",
 	}
-	req2.Sig = SignIframeMessage("secret4", req2.CID, req2.Mobile, req2.TS, req2.Nonce)
-	_ = tenant
+	req2.Sig = SignIframeMessage("secret4", req2.CID, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
 	resp2, err := svc.IframeLogin(context.Background(), req2)
 	if err != nil {
 		t.Fatalf("second login error: %v", err)
 	}
 	if resp2.User.ID != userID {
 		t.Fatalf("expected same user ID %q, got %q", userID, resp2.User.ID)
+	}
+}
+
+func TestIframeLogin_RoleSync(t *testing.T) {
+	svc, db := newIframeTestService(t)
+	seedOrganization(t, db, "ACME6", "secret6")
+
+	// First login creates user as editor.
+	req := &types.IframeLoginRequest{
+		CID:    "ACME6",
+		Mobile: "13900000002",
+		TS:     "4000",
+		Nonce:  "n10",
+		Role:   "editor",
+		Sig:    SignIframeMessage("secret6", "ACME6", "13900000002", "4000", "n10", "editor"),
+	}
+	resp1, err := svc.IframeLogin(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first login error: %v", err)
+	}
+
+	// Second login with role=admin → member role should be updated.
+	req2 := &types.IframeLoginRequest{
+		CID:    "ACME6",
+		Mobile: "13900000002",
+		TS:     "5000",
+		Nonce:  "n11",
+		Role:   "admin",
+	}
+	req2.Sig = SignIframeMessage("secret6", req2.CID, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
+	if _, err := svc.IframeLogin(context.Background(), req2); err != nil {
+		t.Fatalf("second login error: %v", err)
+	}
+
+	// Verify role was synced in DB.
+	var member types.OrganizationMember
+	if err := db.Where("user_id = ? AND organization_id = ?", resp1.User.ID, "org-ACME6").First(&member).Error; err != nil {
+		t.Fatalf("member lookup: %v", err)
+	}
+	if member.Role != types.OrgRoleAdmin {
+		t.Fatalf("expected role to be synced to admin, got %q", member.Role)
 	}
 }

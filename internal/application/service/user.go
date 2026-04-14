@@ -65,6 +65,7 @@ type userService struct {
 	config          *config.Config
 	tenantRepo      interfaces.TenantRepository
 	iframeNonceRepo interfaces.IframeNonceRepository
+	organizationRepo interfaces.OrganizationRepository
 }
 
 // NewUserService creates a new user service instance
@@ -75,14 +76,16 @@ func NewUserService(
 	tenantService interfaces.TenantService,
 	tenantRepo interfaces.TenantRepository,
 	iframeNonceRepo interfaces.IframeNonceRepository,
+	organizationRepo interfaces.OrganizationRepository,
 ) interfaces.UserService {
 	return &userService{
-		userRepo:        userRepo,
-		tokenRepo:       tokenRepo,
-		tenantService:   tenantService,
-		config:          configInfo,
-		tenantRepo:      tenantRepo,
-		iframeNonceRepo: iframeNonceRepo,
+		userRepo:         userRepo,
+		tokenRepo:        tokenRepo,
+		tenantService:    tenantService,
+		config:           configInfo,
+		tenantRepo:       tenantRepo,
+		iframeNonceRepo:  iframeNonceRepo,
+		organizationRepo: organizationRepo,
 	}
 }
 
@@ -869,16 +872,30 @@ func iframeMobileSuffix(m string) string {
 	return m[len(m)-4:]
 }
 
+// normalizeIframeRole returns (canonical OrgMemberRole, true) for admin/editor/viewer
+// (case-insensitive), ("", false) otherwise.
+func normalizeIframeRole(raw string) (types.OrgMemberRole, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "admin":
+		return types.OrgRoleAdmin, true
+	case "editor":
+		return types.OrgRoleEditor, true
+	case "viewer":
+		return types.OrgRoleViewer, true
+	}
+	return "", false
+}
+
 // IframeLogin authenticates an HMAC-signed iframe URL request.
-// On success, creates the placeholder user if absent and returns a LoginResponse
-// with a fresh JWT (delegating to GenerateTokens).
+// On success, creates the placeholder user if absent (scoped to the organization)
+// and returns a LoginResponse with a fresh JWT (delegating to GenerateTokens).
 func (s *userService) IframeLogin(
 	ctx context.Context, req *types.IframeLoginRequest,
 ) (*types.LoginResponse, error) {
 	logger.Info(ctx, "Start iframe login")
 
-	// 1. Presence + mobile shape + ts integer validation
-	if req.CID == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" {
+	// 1. Presence + shape validation
+	if req.CID == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" || req.Role == "" {
 		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "required parameter missing")
 	}
 	if !iframeMobileRegexp.MatchString(req.Mobile) {
@@ -888,31 +905,35 @@ func (s *userService) IframeLogin(
 	if err != nil {
 		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "ts must be an integer unix timestamp")
 	}
+	role, ok := normalizeIframeRole(req.Role)
+	if !ok {
+		return nil, types.NewIframeLoginError(types.IframeErrRoleInvalid, "role must be admin, editor or viewer")
+	}
 
-	// 2. Tenant by cid
-	tenant, err := s.tenantRepo.GetByExternalID(ctx, req.CID)
+	// 2. Organization lookup by cid
+	org, err := s.organizationRepo.GetByExternalID(ctx, req.CID)
 	if err != nil {
-		if errors.Is(err, apprepo.ErrTenantNotFound) {
-			return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "tenant not found")
+		if errors.Is(err, apprepo.ErrOrganizationNotFound) {
+			return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "organization not found")
 		}
-		logger.Errorf(ctx, "iframe_login tenant lookup failed: %v", err)
-		return nil, types.NewIframeLoginError(types.IframeErrInternal, "tenant lookup failed")
+		logger.Errorf(ctx, "iframe_login org lookup failed: %v", err)
+		return nil, types.NewIframeLoginError(types.IframeErrInternal, "organization lookup failed")
 	}
-	if tenant.IframeSecret == "" {
-		return nil, types.NewIframeLoginError(types.IframeErrNotEnabled, "iframe login not enabled")
+	if org.IframeSecret == "" {
+		return nil, types.NewIframeLoginError(types.IframeErrNotEnabled, "iframe login not enabled for this organization")
 	}
 
-	// 3. HMAC
-	if !VerifyIframeSignature(tenant.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Sig) {
+	// 3. HMAC signature verification
+	if !VerifyIframeSignature(org.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
 		return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
 	}
 
-	// 4. Nonce consume
+	// 4. Nonce consume (scoped to organization)
 	inserted, err := s.iframeNonceRepo.Consume(ctx, &types.IframeNonce{
-		TenantID:   tenant.ID,
-		Nonce:      req.Nonce,
-		TS:         tsInt,
-		ConsumedAt: time.Now(),
+		OrganizationID: org.ID,
+		Nonce:          req.Nonce,
+		TS:             tsInt,
+		ConsumedAt:     time.Now(),
 	})
 	if err != nil {
 		logger.Errorf(ctx, "iframe_login nonce consume failed: %v", err)
@@ -922,32 +943,51 @@ func (s *userService) IframeLogin(
 		return nil, types.NewIframeLoginError(types.IframeErrReplay, "nonce already consumed")
 	}
 
-	// 5. User find or create
-	user, err := s.userRepo.GetUserByTenantAndMobile(ctx, tenant.ID, req.Mobile)
+	// 5. Find user via OrganizationMember JOIN
+	user, member, err := s.findIframeUser(ctx, org.ID, req.Mobile)
 	if err != nil {
-		if errors.Is(err, apprepo.ErrUserNotFound) {
-			user, err = s.createIframeUser(ctx, tenant.ID, req.Mobile)
-			if err != nil {
-				logger.Errorf(ctx, "iframe_login user creation failed: %v", err)
-				return nil, types.NewIframeLoginError(types.IframeErrInternal, "user creation failed")
-			}
-		} else {
-			logger.Errorf(ctx, "iframe_login user lookup failed: %v", err)
-			return nil, types.NewIframeLoginError(types.IframeErrInternal, "user lookup failed")
-		}
-	} else if !user.IsActive {
-		return nil, types.NewIframeLoginError(types.IframeErrUserDisabled, "user disabled")
+		logger.Errorf(ctx, "iframe_login user lookup failed: %v", err)
+		return nil, types.NewIframeLoginError(types.IframeErrInternal, "user lookup failed")
 	}
 
-	// 6. Tokens
+	// 6. Create or sync user
+	if user == nil {
+		user, _, err = s.createIframeUserInOrg(ctx, org, req.Mobile, role)
+		if err != nil {
+			logger.Errorf(ctx, "iframe_login user creation failed: %v", err)
+			return nil, types.NewIframeLoginError(types.IframeErrInternal, "user creation failed")
+		}
+	} else {
+		if !user.IsActive {
+			return nil, types.NewIframeLoginError(types.IframeErrUserDisabled, "user disabled")
+		}
+		// Parent system is authoritative: sync role if changed.
+		if member != nil && string(member.Role) != string(role) {
+			if err := s.organizationRepo.UpdateMemberRole(ctx, org.ID, member.UserID, role); err != nil {
+				// Log but don't fail — keep existing member role as fallback.
+				logger.Warnf(ctx, "iframe_login role sync failed: %v", err)
+			}
+		}
+	}
+
+	// 7. Load the user's personal tenant
+	var tenant *types.Tenant
+	if user.TenantID != 0 {
+		tenant, err = s.tenantService.GetTenantByID(ctx, user.TenantID)
+		if err != nil {
+			logger.Warnf(ctx, "iframe_login tenant load failed: %v", err)
+		}
+	}
+
+	// 8. Issue JWT (reuses GenerateTokens — 24h access + 7d refresh)
 	accessToken, refreshToken, err := s.GenerateTokens(ctx, user)
 	if err != nil {
 		logger.Errorf(ctx, "iframe_login token generation failed: %v", err)
 		return nil, types.NewIframeLoginError(types.IframeErrInternal, "token generation failed")
 	}
 
-	logger.Infof(ctx, "iframe_login.success tenant_id=%d user_id=%s mobile_suffix=%s",
-		tenant.ID, user.ID, iframeMobileSuffix(req.Mobile))
+	logger.Infof(ctx, "iframe_login.success org_id=%s user_id=%s mobile_suffix=%s role=%s",
+		org.ID, user.ID, iframeMobileSuffix(req.Mobile), role)
 
 	return &types.LoginResponse{
 		Success:      true,
@@ -958,32 +998,101 @@ func (s *userService) IframeLogin(
 	}, nil
 }
 
-// createIframeUser provisions a placeholder user for an iframe-login flow.
-func (s *userService) createIframeUser(
-	ctx context.Context, tenantID uint64, mobile string,
-) (*types.User, error) {
+// findIframeUser looks up a user belonging to orgID by mobile number.
+// Returns (nil, nil, nil) if not found; (user, member, nil) if found;
+// (nil, nil, err) on DB failure.
+func (s *userService) findIframeUser(
+	ctx context.Context, orgID, mobile string,
+) (*types.User, *types.OrganizationMember, error) {
+	members, err := s.organizationRepo.ListMembers(ctx, orgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(members) == 0 {
+		return nil, nil, nil
+	}
+	userIDs := make([]string, 0, len(members))
+	for _, m := range members {
+		userIDs = append(userIDs, m.UserID)
+	}
+	// Fetch users in batch, filter by mobile.
+	user, err := s.userRepo.FindOneByUserIDsAndMobile(ctx, userIDs, mobile)
+	if err != nil {
+		return nil, nil, err
+	}
+	if user == nil {
+		return nil, nil, nil
+	}
+	for i := range members {
+		if members[i].UserID == user.ID {
+			return user, members[i], nil
+		}
+	}
+	return user, nil, nil
+}
+
+// createIframeUserInOrg provisions (personal tenant, user, org member) as one atomic iframe flow.
+func (s *userService) createIframeUserInOrg(
+	ctx context.Context, org *types.Organization, mobile string, role types.OrgMemberRole,
+) (*types.User, *types.OrganizationMember, error) {
+	// Random bcrypt placeholder (never used for login)
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	passHash, err := bcrypt.GenerateFromPassword(randomBytes, bcrypt.DefaultCost)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	placeholder := fmt.Sprintf("iframe_%d_%s", tenantID, mobile)
+
+	// 1. Personal tenant (one per user)
+	placeholder := fmt.Sprintf("iframe_%s_%s", org.ID, mobile)
+	personalTenant := &types.Tenant{
+		Name:        fmt.Sprintf("iframe-user-%s-%s", org.Name, mobile),
+		Description: "iframe personal workspace",
+		Status:      "active",
+	}
+	createdTenant, err := s.tenantService.CreateTenant(ctx, personalTenant)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create personal tenant: %w", err)
+	}
+
+	// 2. User
 	user := &types.User{
 		ID:           uuid.New().String(),
 		Username:     placeholder,
 		Email:        placeholder + "@iframe.invalid",
 		PasswordHash: string(passHash),
 		Mobile:       mobile,
-		TenantID:     tenantID,
+		TenantID:     createdTenant.ID,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
 	if err := s.userRepo.CreateUser(ctx, user); err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("create user: %w", err)
 	}
-	return user, nil
+
+	// 3. Organization member
+	member := &types.OrganizationMember{
+		ID:             uuid.New().String(),
+		OrganizationID: org.ID,
+		UserID:         user.ID,
+		TenantID:       createdTenant.ID,
+		Role:           role,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	if err := s.organizationRepo.AddMember(ctx, member); err != nil {
+		return nil, nil, fmt.Errorf("add org member: %w", err)
+	}
+
+	// If org has no owner yet, first admin becomes owner.
+	if org.OwnerID == "" && role == types.OrgRoleAdmin {
+		if err := s.organizationRepo.UpdateOwner(ctx, org.ID, user.ID); err != nil {
+			logger.Warnf(ctx, "iframe_login update owner failed: %v", err)
+		}
+	}
+
+	return user, member, nil
 }
