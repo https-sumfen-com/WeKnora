@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useEmbeddedStore } from '@/stores/embedded'
 import { autoSetup } from '@/api/auth'
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
@@ -35,6 +36,12 @@ const router = createRouter({
       name: "login",
       component: () => import("../views/auth/Login.vue"),
       meta: { requiresAuth: false, requiresInit: false }
+    },
+    {
+      path: '/iframe-login',
+      name: 'iframe-login',
+      component: () => import('@/views/auth/IframeLogin.vue'),
+      meta: { requiresAuth: false },
     },
     {
       path: "/join",
@@ -159,6 +166,7 @@ let liteDeepLinkRestoreDone = false
 // 路由守卫：检查认证状态和系统初始化状态
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+  const embeddedStore = useEmbeddedStore()
 
   // Lite：硬刷新后若落在默认首页，恢复本次会话中最后访问的 /platform 子路径
   if (!liteDeepLinkRestoreDone) {
@@ -176,8 +184,13 @@ router.beforeEach(async (to, from, next) => {
 
   // 如果访问的是登录页面或初始化页面，直接放行
   if (to.meta.requiresAuth === false || to.meta.requiresInit === false) {
-    // 如果已登录用户访问登录页面，重定向到知识库列表页面
-    if (to.path === '/login' && authStore.isLoggedIn) {
+    // iframe 嵌入模式下，不允许跳到普通登录页（避免 iframe 内出现独立登录界面）
+    if (embeddedStore.embedded && to.path === '/login') {
+      next(false)
+      return
+    }
+    // 如果已登录用户访问登录页面，重定向到知识库列表页面（仅非 iframe 模式）
+    if (to.path === '/login' && authStore.isLoggedIn && !embeddedStore.embedded) {
       next('/platform/knowledge-bases')
       return
     }
