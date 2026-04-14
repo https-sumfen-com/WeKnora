@@ -4,22 +4,23 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/types"
-	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
 // newDB opens a minimal GORM connection using DB_* env vars, bypassing the full
-// WeKnora dig container. The admin CLI only needs tenant CRUD; it does not need
+// WeKnora dig container. The admin CLI only needs organization CRUD; it does not need
 // Redis, asynq, docreader, or any other backend-only infrastructure.
 func newDB() (*gorm.DB, error) {
 	host := envOr("DB_HOST", "localhost")
@@ -45,8 +46,8 @@ func envOr(key, def string) string {
 
 func runIframe(sub string, args []string) {
 	fs := flag.NewFlagSet("iframe "+sub, flag.ExitOnError)
-	cid := fs.String("cid", "", "tenant external id (required)")
-	name := fs.String("name", "", "tenant display name (provision only)")
+	cid := fs.String("cid", "", "organization external id (required)")
+	name := fs.String("name", "", "organization display name (provision only)")
 	_ = fs.Parse(args)
 	if *cid == "" {
 		fmt.Fprintln(os.Stderr, "--cid is required")
@@ -58,7 +59,7 @@ func runIframe(sub string, args []string) {
 		fmt.Fprintf(os.Stderr, "db connect failed: %v\n", err)
 		os.Exit(1)
 	}
-	tenantRepo := repository.NewTenantRepository(db)
+	orgRepo := repository.NewOrganizationRepository(db)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -69,11 +70,11 @@ func runIframe(sub string, args []string) {
 			fmt.Fprintln(os.Stderr, "--name is required for provision")
 			os.Exit(2)
 		}
-		err = provision(ctx, tenantRepo, *cid, *name)
+		err = provision(ctx, orgRepo, *cid, *name)
 	case "rotate":
-		err = rotate(ctx, tenantRepo, *cid)
+		err = rotate(ctx, orgRepo, *cid)
 	case "revoke":
-		err = revoke(ctx, tenantRepo, *cid)
+		err = revoke(ctx, orgRepo, *cid)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", sub)
 		os.Exit(2)
@@ -92,27 +93,52 @@ func generateSecret() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func provision(ctx context.Context, repo interfaces.TenantRepository, cid, name string) error {
+// generateInviteCode returns a 32-character hex string for organizations.invite_code (required unique column).
+func generateInviteCode() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func provision(ctx context.Context, repo interface {
+	Create(context.Context, *types.Organization) error
+	GetByExternalID(context.Context, string) (*types.Organization, error)
+}, cid, name string) error {
 	existing, err := repo.GetByExternalID(ctx, cid)
 	if err == nil && existing != nil {
-		return fmt.Errorf("tenant with cid=%s already exists (id=%d); use 'rotate' to refresh secret", cid, existing.ID)
+		return fmt.Errorf("organization with cid=%s already exists (id=%s); use 'rotate' to refresh secret", cid, existing.ID)
 	}
+	if err != nil && !errors.Is(err, repository.ErrOrganizationNotFound) {
+		return fmt.Errorf("lookup failed: %w", err)
+	}
+
 	secret, err := generateSecret()
 	if err != nil {
 		return err
 	}
-	t := &types.Tenant{
+	invite, err := generateInviteCode()
+	if err != nil {
+		return err
+	}
+
+	org := &types.Organization{
+		ID:           uuid.New().String(),
 		Name:         name,
 		Description:  "iframe-provisioned",
-		Status:       "active",
-		Business:     "iframe",
+		OwnerID:      "", // no user yet; first admin-role login promotes themselves
+		InviteCode:   invite,
 		ExternalID:   cid,
 		IframeSecret: secret,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
-	if err := repo.CreateTenant(ctx, t); err != nil {
+	if err := repo.Create(ctx, org); err != nil {
 		return fmt.Errorf("create failed: %w", err)
 	}
-	fmt.Printf("Tenant created: id=%d, external_id=%s\n", t.ID, cid)
+
+	fmt.Printf("Organization created: id=%s, external_id=%s\n", org.ID, cid)
 	fmt.Println("iframe_secret (SAVE THIS, shown only once):")
 	fmt.Println("────────────────────────────────────────")
 	fmt.Println(secret)
@@ -120,19 +146,22 @@ func provision(ctx context.Context, repo interfaces.TenantRepository, cid, name 
 	return nil
 }
 
-func rotate(ctx context.Context, repo interfaces.TenantRepository, cid string) error {
-	t, err := repo.GetByExternalID(ctx, cid)
-	if err != nil || t == nil {
+func rotate(ctx context.Context, repo interface {
+	GetByExternalID(context.Context, string) (*types.Organization, error)
+	UpdateIframeSecret(context.Context, string, string) error
+}, cid string) error {
+	org, err := repo.GetByExternalID(ctx, cid)
+	if err != nil || org == nil {
 		return fmt.Errorf("cid=%s not found; provision first", cid)
 	}
 	secret, err := generateSecret()
 	if err != nil {
 		return err
 	}
-	if err := repo.UpdateIframeSecret(ctx, t.ID, secret); err != nil {
+	if err := repo.UpdateIframeSecret(ctx, org.ID, secret); err != nil {
 		return err
 	}
-	fmt.Printf("Secret rotated for cid=%s (tenant_id=%d)\n", cid, t.ID)
+	fmt.Printf("Secret rotated for cid=%s (org_id=%s)\n", cid, org.ID)
 	fmt.Println("new iframe_secret (SAVE THIS, shown only once):")
 	fmt.Println("────────────────────────────────────────")
 	fmt.Println(secret)
@@ -140,12 +169,15 @@ func rotate(ctx context.Context, repo interfaces.TenantRepository, cid string) e
 	return nil
 }
 
-func revoke(ctx context.Context, repo interfaces.TenantRepository, cid string) error {
-	t, err := repo.GetByExternalID(ctx, cid)
-	if err != nil || t == nil {
+func revoke(ctx context.Context, repo interface {
+	GetByExternalID(context.Context, string) (*types.Organization, error)
+	UpdateIframeSecret(context.Context, string, string) error
+}, cid string) error {
+	org, err := repo.GetByExternalID(ctx, cid)
+	if err != nil || org == nil {
 		return fmt.Errorf("cid=%s not found", cid)
 	}
-	if err := repo.UpdateIframeSecret(ctx, t.ID, ""); err != nil {
+	if err := repo.UpdateIframeSecret(ctx, org.ID, ""); err != nil {
 		return err
 	}
 	fmt.Printf("iframe access revoked for cid=%s\n", cid)
