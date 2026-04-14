@@ -18,6 +18,7 @@ const errorMsg = ref<string>('')
 const errorMap: Record<string, string> = {
   IFRAME_PARAMS_MISSING: '链接参数不完整，请联系系统管理员',
   IFRAME_MOBILE_INVALID: '手机号格式非法',
+  IFRAME_ROLE_INVALID: '角色参数无效（应为 admin / editor / viewer）',
   IFRAME_BAD_SIGNATURE: '鉴权失败，请联系系统管理员',
   IFRAME_REPLAY: '请求重复，请刷新页面后重试',
   IFRAME_USER_DISABLED: '账号已被禁用',
@@ -45,9 +46,10 @@ onMounted(async () => {
     mobile: String(q.mobile ?? ''),
     ts: String(q.ts ?? ''),
     nonce: String(q.nonce ?? ''),
+    role: String(q.role ?? ''),
     sig: String(q.sig ?? ''),
   }
-  if (!params.cid || !params.mobile || !params.ts || !params.nonce || !params.sig) {
+  if (!params.cid || !params.mobile || !params.ts || !params.nonce || !params.role || !params.sig) {
     errorMsg.value = errorMap.IFRAME_PARAMS_MISSING
     loading.value = false
     return

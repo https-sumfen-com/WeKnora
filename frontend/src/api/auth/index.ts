@@ -304,6 +304,7 @@ export interface IframeLoginParams {
   mobile: string
   ts: string
   nonce: string
+  role: string
   sig: string
 }
 
