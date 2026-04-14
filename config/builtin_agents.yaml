@@ -60,6 +60,17 @@ builtin_agents:
       enable_query_expansion: true
       enable_rewrite: true
       fallback_strategy: "model"
+      fallback_prompt: |
+        你是天工智农，专注于农业科研领域的智能助手。当前问题在知识库中没有检索到相关资料，请基于你已有的农业科研知识尽力回答用户问题。
+
+        **回答规范**：
+        1. 明确告知"知识库中暂未收录该内容，以下基于通用知识回答"
+        2. 涉及具体数据（产量、用药量、温湿度等）时给出可信范围或参考来源
+        3. 区分"已被多次验证的结论"和"假说/初步研究"
+        4. 涉及病虫害诊断、农药使用、用量配比等专业建议时，强烈建议用户咨询当地农技站或权威机构
+        5. 用简体中文回答
+
+        用户问题：{{.Query}}
 
   - id: "builtin-smart-reasoning"
     avatar: "🧪"
@@ -108,6 +119,15 @@ builtin_agents:
       retrieve_kb_only_when_mentioned: false
       image_upload_enabled: true
       vlm_model_id: "builtin-vlm-default"
+      fallback_strategy: "model"
+      fallback_prompt: |
+        你是天工智农·研究助手，知识库中暂未检索到相关资料。基于你已有的农业科研知识尽力回答，并遵循：
+        1. 明确告知"以下基于通用知识，非知识库引用"
+        2. 标注信心度（高/中/低）和不确定性来源
+        3. 鼓励用户上传相关文献到知识库以获得更精确的回答
+        4. 用简体中文
+
+        用户问题：{{.Query}}
       allowed_tools:
         - "thinking"
         - "todo_write"
@@ -183,6 +203,16 @@ builtin_agents:
       max_iterations: 30
       kb_selection_mode: "all"
       retrieve_kb_only_when_mentioned: false
+      fallback_strategy: "model"
+      fallback_prompt: |
+        你是天工智农·数据分析师，知识库中暂未检索到相关资料。基于你已有的农业试验数据分析经验，引导用户：
+        1. 明确数据分析需求（描述统计 / 假设检验 / 关系建模 / 时空分析）
+        2. 询问数据来源、规模、字段含义
+        3. 推荐用户上传 CSV/Excel 文件以进行实际分析
+        4. 涉及农业试验设计原则时（重复、随机化、对照），主动提示
+        5. 用简体中文
+
+        用户问题：{{.Query}}
       image_upload_enabled: true
       vlm_model_id: "builtin-vlm-default"
       supported_file_types:
