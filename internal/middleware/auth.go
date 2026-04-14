@@ -24,8 +24,9 @@ var noAuthAPI = map[string][]string{
 	"/api/v1/auth/auto-setup":    {"POST"},
 	"/api/v1/auth/oidc/config":   {"GET"},
 	"/api/v1/auth/oidc/url":      {"GET"},
-	"/api/v1/auth/oidc/callback": {"GET"},
-	"/api/v1/auth/refresh":       {"POST"},
+	"/api/v1/auth/oidc/callback":  {"GET"},
+	"/api/v1/auth/refresh":        {"POST"},
+	"/api/v1/auth/iframe-login":   {"POST"},
 }
 
 // 检查请求是否在无需认证的API列表中

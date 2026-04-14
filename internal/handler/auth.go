@@ -14,6 +14,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/middleware"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
@@ -660,6 +661,16 @@ func (h *AuthHandler) IframeLogin(c *gin.Context) {
 	resp, err := h.userService.IframeLogin(ctx, &req)
 	if err != nil {
 		if ilErr, ok := err.(*types.IframeLoginError); ok {
+			// Rate limit bad-signature attempts per IP to mitigate secret brute-force
+			if ilErr.Code == types.IframeErrBadSignature &&
+				!middleware.AllowBadSignature(c.ClientIP()) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"success": false,
+					"code":    string(types.IframeErrBadSignature),
+					"message": "too many attempts, please retry later",
+				})
+				return
+			}
 			status := iframeErrorStatus(ilErr.Code)
 			logger.Warnf(ctx, "iframe_login.reject code=%s cid=%s ip=%s",
 				ilErr.Code, secutils.SanitizeForLog(req.CID), c.ClientIP())
