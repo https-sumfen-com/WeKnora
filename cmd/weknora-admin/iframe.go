@@ -9,11 +9,39 @@ import (
 	"os"
 	"time"
 
-	"github.com/Tencent/WeKnora/internal/container"
-	"github.com/Tencent/WeKnora/internal/runtime"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
+	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
+
+// newDB opens a minimal GORM connection using DB_* env vars, bypassing the full
+// WeKnora dig container. The admin CLI only needs tenant CRUD; it does not need
+// Redis, asynq, docreader, or any other backend-only infrastructure.
+func newDB() (*gorm.DB, error) {
+	host := envOr("DB_HOST", "localhost")
+	port := envOr("DB_PORT", "5432")
+	user := envOr("DB_USER", "postgres")
+	pass := envOr("DB_PASSWORD", "postgres123!@#")
+	name := envOr("DB_NAME", "WeKnora")
+	sslmode := envOr("DB_SSLMODE", "disable")
+
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, pass, name, sslmode)
+	return gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 func runIframe(sub string, args []string) {
 	fs := flag.NewFlagSet("iframe "+sub, flag.ExitOnError)
@@ -25,25 +53,31 @@ func runIframe(sub string, args []string) {
 		os.Exit(2)
 	}
 
-	c := container.BuildContainer(runtime.GetContainer())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	db, err := newDB()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db connect failed: %v\n", err)
+		os.Exit(1)
+	}
+	tenantRepo := repository.NewTenantRepository(db)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	err := c.Invoke(func(tenantRepo interfaces.TenantRepository) error {
-		switch sub {
-		case "provision":
-			if *name == "" {
-				return fmt.Errorf("--name is required for provision")
-			}
-			return provision(ctx, tenantRepo, *cid, *name)
-		case "rotate":
-			return rotate(ctx, tenantRepo, *cid)
-		case "revoke":
-			return revoke(ctx, tenantRepo, *cid)
-		default:
-			return fmt.Errorf("unknown subcommand: %s", sub)
+	switch sub {
+	case "provision":
+		if *name == "" {
+			fmt.Fprintln(os.Stderr, "--name is required for provision")
+			os.Exit(2)
 		}
-	})
+		err = provision(ctx, tenantRepo, *cid, *name)
+	case "rotate":
+		err = rotate(ctx, tenantRepo, *cid)
+	case "revoke":
+		err = revoke(ctx, tenantRepo, *cid)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", sub)
+		os.Exit(2)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -63,7 +97,6 @@ func provision(ctx context.Context, repo interfaces.TenantRepository, cid, name 
 	if err == nil && existing != nil {
 		return fmt.Errorf("tenant with cid=%s already exists (id=%d); use 'rotate' to refresh secret", cid, existing.ID)
 	}
-	// if err is ErrTenantNotFound, proceed to create
 	secret, err := generateSecret()
 	if err != nil {
 		return err
@@ -118,3 +151,4 @@ func revoke(ctx context.Context, repo interfaces.TenantRepository, cid string) e
 	fmt.Printf("iframe access revoked for cid=%s\n", cid)
 	return nil
 }
+
