@@ -52,8 +52,8 @@
           <t-icon name="setting" class="menu-icon" />
           <span>{{ $t('general.allSettings') }}</span>
         </div>
-        <div class="menu-divider"></div>
-        <div class="menu-item" @click="openClawhubSkill">
+        <div v-if="!embedded" class="menu-divider"></div>
+        <div v-if="!embedded" class="menu-item" @click="openClawhubSkill">
           <span class="menu-icon menu-icon--emoji" role="img" :aria-label="$t('common.clawhubSkill')">🦞</span>
           <span class="menu-text-with-icon">
             <span>{{ $t('common.clawhubSkill') }}</span>
@@ -66,7 +66,7 @@
             </svg>
           </span>
         </div>
-        <div class="menu-item" @click="openChromeExtension">
+        <div v-if="!embedded" class="menu-item" @click="openChromeExtension">
           <t-icon name="extension" class="menu-icon" />
           <span class="menu-text-with-icon">
             <span>{{ $t('common.chromeExtension') }}</span>
@@ -97,7 +97,7 @@
             </svg>
           </span>
         </div>
-        <template v-if="!authStore.isLiteMode">
+        <template v-if="!authStore.isLiteMode && !embedded">
           <div class="menu-divider"></div>
           <div class="menu-item danger" @click="handleLogout">
             <t-icon name="logout" class="menu-icon" />
