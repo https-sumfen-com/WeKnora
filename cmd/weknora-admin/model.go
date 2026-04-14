@@ -32,7 +32,10 @@ var providerPresets = map[string]providerPreset{
 	"aliyun": {
 		baseURL:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		apiKeyEnv: "WEKNORA_ALIYUN_API_KEY",
-		source:    string(types.ModelSourceAliyun),
+		// BUILTIN_MODELS.md convention: source = "remote"; provider lives in parameters JSON.
+		// Using ModelSourceAliyun here was wrong — chat pipeline routes by generic source
+		// values ("remote"/"local"), not per-provider source enums.
+		source: string(types.ModelSourceRemote),
 	},
 }
 
