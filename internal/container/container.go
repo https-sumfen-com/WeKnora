@@ -149,6 +149,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewWebSearchStateService))
 	must(container.Provide(repository.NewDataSourceRepository))
 	must(container.Provide(repository.NewSyncLogRepository))
+	must(container.Provide(repository.NewIframeNonceRepository))
 
 	// MCP manager for managing MCP client connections
 	logger.Debugf(ctx, "[Container] Registering MCP manager...")
