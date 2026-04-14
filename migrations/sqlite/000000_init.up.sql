@@ -5,8 +5,6 @@ CREATE TABLE IF NOT EXISTS tenants (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     api_key VARCHAR(256) NOT NULL,
-    external_id TEXT,
-    iframe_secret TEXT,
     retriever_engines TEXT NOT NULL DEFAULT '[]',
     status VARCHAR(50) DEFAULT 'active',
     business VARCHAR(255) NOT NULL,
@@ -302,6 +300,8 @@ CREATE TABLE IF NOT EXISTS organizations (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    external_id TEXT,
+    iframe_secret TEXT,
     owner_id VARCHAR(36) NOT NULL,
     invite_code VARCHAR(32),
     require_approval BOOLEAN DEFAULT 0,
@@ -544,17 +544,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_mobile
     ON users(tenant_id, mobile)
     WHERE mobile IS NOT NULL AND deleted_at IS NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_external_id
-    ON tenants(external_id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_external_id
+    ON organizations(external_id)
     WHERE external_id IS NOT NULL AND deleted_at IS NULL;
 
--- iframe_nonces table for replay protection
+-- iframe_nonces table for replay protection (keyed by organization, not tenant)
 CREATE TABLE IF NOT EXISTS iframe_nonces (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id   INTEGER      NOT NULL,
-    nonce       TEXT         NOT NULL,
-    ts          INTEGER      NOT NULL,
-    consumed_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (tenant_id, nonce)
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id TEXT         NOT NULL,
+    nonce           TEXT         NOT NULL,
+    ts              INTEGER      NOT NULL,
+    consumed_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (organization_id, nonce)
 );
 CREATE INDEX IF NOT EXISTS idx_iframe_nonces_ts ON iframe_nonces(ts);
