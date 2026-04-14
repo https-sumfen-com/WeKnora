@@ -299,6 +299,29 @@ export async function validateToken(): Promise<{ success: boolean; valid?: boole
   }
 }
 
+export interface IframeLoginParams {
+  cid: string
+  mobile: string
+  ts: string
+  nonce: string
+  sig: string
+}
+
+export interface IframeLoginResponse {
+  success: boolean
+  user: any
+  tenant: any
+  token: string
+  refresh_token: string
+}
+
+// NOTE: 调用时 HTTP 错误（4xx/5xx）会抛出——组件用 try/catch，从 err.response.data.code
+// 读 IframeErrorCode 做文案映射。
+export async function iframeLogin(params: IframeLoginParams): Promise<IframeLoginResponse> {
+  const response = await post('/api/v1/auth/iframe-login', params)
+  return response as unknown as IframeLoginResponse
+}
+
 
 
 
