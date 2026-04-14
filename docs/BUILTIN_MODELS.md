@@ -173,3 +173,45 @@ WHERE id = '模型ID';
 
 注意：移除内置模型标记后，该模型将恢复为普通模型，可以被编辑和删除。
 
+## 使用 CLI 管理（推荐）
+
+`weknora-admin model` 子命令组提供了比直接执行 SQL 更安全、更方便的内置模型管理方式。CLI 会自动对 API Key 进行 AES-256-GCM 加密存储，与后端保持一致。
+
+### 前置条件
+
+在 `.env` 文件中设置阿里云 DashScope API Key：
+
+```bash
+WEKNORA_ALIYUN_API_KEY=sk-your_dashscope_api_key
+```
+
+获取地址：https://bailian.console.aliyun.com/#/api-key
+
+CLI 在运行时会自动加载项目根目录下的 `.env` 文件（如存在）。
+
+### 添加阿里云内置模型示例
+
+```bash
+# 添加 LLM（KnowledgeQA）模型
+weknora-admin model add-builtin --type KnowledgeQA --provider aliyun --name qwen3.6-plus
+
+# 添加 Embedding 模型（默认 dimension=1024）
+weknora-admin model add-builtin --type Embedding --provider aliyun --name text-embedding-v4
+
+# 添加 Rerank 模型
+weknora-admin model add-builtin --type Rerank --provider aliyun --name gte-rerank
+```
+
+以上命令会自动使用 `https://dashscope.aliyuncs.com/compatible-mode/v1` 作为 base_url，并从 `WEKNORA_ALIYUN_API_KEY` 环境变量读取 API Key。
+
+### 常用子命令
+
+| 子命令 | 说明 |
+|--------|------|
+| `model add-builtin` | 创建新的内置模型，支持 `--is-default` 设为默认 |
+| `model list` | 列出所有内置模型（`--all` 查看全部模型）|
+| `model unmark-builtin` | 取消内置标记，恢复为可编辑的普通模型 |
+| `model delete` | 软删除模型（需先 `unmark-builtin` 或直接按 ID 删除）|
+
+运行 `weknora-admin model` 可查看完整的参数说明。
+
