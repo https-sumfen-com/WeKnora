@@ -87,6 +87,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
 	r.Use(middleware.ErrorHandler())
+	r.Use(middleware.FrameAncestors())
 
 	// 健康检查（不需要认证）
 	r.GET("/health", func(c *gin.Context) {
@@ -401,6 +402,7 @@ func RegisterEvaluationRoutes(r *gin.RouterGroup, handler *handler.EvaluationHan
 func RegisterAuthRoutes(r *gin.RouterGroup, handler *handler.AuthHandler) {
 	r.POST("/auth/register", handler.Register)
 	r.POST("/auth/login", handler.Login)
+	r.POST("/auth/iframe-login", handler.IframeLogin)
 	r.POST("/auth/auto-setup", handler.AutoSetup)
 	r.GET("/auth/oidc/config", handler.GetOIDCConfig)
 	r.GET("/auth/oidc/url", handler.GetOIDCAuthorizationURL)
