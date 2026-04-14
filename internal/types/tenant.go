@@ -79,10 +79,6 @@ type Tenant struct {
 	Description string `yaml:"description"         json:"description"`
 	// API key
 	APIKey string `yaml:"api_key"             json:"api_key"`
-	// ExternalID is the business-side tenant identifier exposed in iframe URLs (cid)
-	ExternalID string `yaml:"external_id"    json:"external_id,omitempty"    gorm:"type:varchar(128);uniqueIndex"`
-	// IframeSecret is an AES-256-GCM encrypted HMAC secret for iframe URL signatures
-	IframeSecret string `yaml:"iframe_secret"  json:"-"                        gorm:"type:text"`
 	// Status
 	Status string `yaml:"status"              json:"status"              gorm:"default:'active'"`
 	// Retriever engines
@@ -150,11 +146,6 @@ func (t *Tenant) BeforeSave(tx *gorm.DB) error {
 				tx.Statement.SetColumn("api_key", encrypted)
 			}
 		}
-		if t.IframeSecret != "" {
-			if encrypted, err := utils.EncryptAESGCM(t.IframeSecret, key); err == nil {
-				tx.Statement.SetColumn("iframe_secret", encrypted)
-			}
-		}
 	}
 	return nil
 }
@@ -167,11 +158,6 @@ func (t *Tenant) AfterFind(tx *gorm.DB) error {
 		if t.APIKey != "" {
 			if decrypted, err := utils.DecryptAESGCM(t.APIKey, key); err == nil {
 				t.APIKey = decrypted
-			}
-		}
-		if t.IframeSecret != "" {
-			if decrypted, err := utils.DecryptAESGCM(t.IframeSecret, key); err == nil {
-				t.IframeSecret = decrypted
 			}
 		}
 	}

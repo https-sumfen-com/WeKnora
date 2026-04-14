@@ -6,6 +6,7 @@ type IframeLoginRequest struct {
 	Mobile string `json:"mobile" binding:"required"`
 	TS     string `json:"ts"     binding:"required"`
 	Nonce  string `json:"nonce"  binding:"required"`
+	Role   string `json:"role"   binding:"required"`
 	Sig    string `json:"sig"    binding:"required"`
 }
 
@@ -20,6 +21,7 @@ const (
 	IframeErrUserDisabled   IframeErrorCode = "IFRAME_USER_DISABLED"
 	IframeErrNotEnabled     IframeErrorCode = "IFRAME_NOT_ENABLED"
 	IframeErrTenantNotFound IframeErrorCode = "IFRAME_TENANT_NOT_FOUND"
+	IframeErrRoleInvalid    IframeErrorCode = "IFRAME_ROLE_INVALID"
 	IframeErrInternal       IframeErrorCode = "IFRAME_INTERNAL"
 )
 

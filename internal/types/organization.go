@@ -3,6 +3,7 @@ package types
 import (
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/utils"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +47,12 @@ type Organization struct {
 	Name string `json:"name" gorm:"type:varchar(255);not null"`
 	// Description of the organization
 	Description string `json:"description" gorm:"type:text"`
+	// ExternalID is the business-side identifier exposed in iframe URLs (cid).
+	// Unique; multi-tenant systems use it to map parent-system orgs to WeKnora orgs.
+	ExternalID string `json:"external_id,omitempty" gorm:"type:varchar(128);uniqueIndex"`
+	// IframeSecret is an AES-256-GCM encrypted HMAC secret for iframe URL signatures.
+	// Managed by weknora-admin iframe {provision,rotate,revoke}.
+	IframeSecret string `json:"-" gorm:"type:text"`
 	// Avatar URL for display in list and settings
 	Avatar string `json:"avatar" gorm:"type:varchar(512)"`
 	// User ID of the organization owner
@@ -78,6 +85,28 @@ type Organization struct {
 // TableName returns the table name for GORM
 func (Organization) TableName() string {
 	return "organizations"
+}
+
+// BeforeSave encrypts IframeSecret before persisting to DB.
+// Uses tx.Statement.SetColumn to avoid mutating the in-memory struct.
+func (o *Organization) BeforeSave(tx *gorm.DB) error {
+	if key := utils.GetAESKey(); key != nil && o.IframeSecret != "" {
+		if encrypted, err := utils.EncryptAESGCM(o.IframeSecret, key); err == nil {
+			tx.Statement.SetColumn("iframe_secret", encrypted)
+		}
+	}
+	return nil
+}
+
+// AfterFind decrypts IframeSecret after loading from DB.
+// Legacy plaintext (without enc:v1: prefix) is returned as-is.
+func (o *Organization) AfterFind(tx *gorm.DB) error {
+	if key := utils.GetAESKey(); key != nil && o.IframeSecret != "" {
+		if decrypted, err := utils.DecryptAESGCM(o.IframeSecret, key); err == nil {
+			o.IframeSecret = decrypted
+		}
+	}
+	return nil
 }
 
 // OrganizationMember represents a member of an organization
