@@ -1,8 +1,3 @@
-<script setup lang="ts">
-import { useEmbedded } from '@/composables/useEmbedded'
-const { embedded } = useEmbedded()
-</script>
-
 <template>
   <div class="weknoracloud-settings">
     <div class="section-header">
@@ -113,6 +108,9 @@ import { ref, computed, onMounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
 import { saveWeKnoraCloudCredentials, getWeKnoraCloudStatus } from '@/api/model'
+import { useEmbedded } from '@/composables/useEmbedded'
+
+const { embedded } = useEmbedded()
 
 const { t } = useI18n()
 
