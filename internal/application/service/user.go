@@ -877,12 +877,16 @@ func (s *userService) IframeLogin(
 ) (*types.LoginResponse, error) {
 	logger.Info(ctx, "Start iframe login")
 
-	// 1. Presence + mobile shape
+	// 1. Presence + mobile shape + ts integer validation
 	if req.CID == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" {
 		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "required parameter missing")
 	}
 	if !iframeMobileRegexp.MatchString(req.Mobile) {
 		return nil, types.NewIframeLoginError(types.IframeErrMobileInvalid, "invalid mobile format")
+	}
+	tsInt, err := strconv.ParseInt(req.TS, 10, 64)
+	if err != nil {
+		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "ts must be an integer unix timestamp")
 	}
 
 	// 2. Tenant by cid
@@ -904,10 +908,6 @@ func (s *userService) IframeLogin(
 	}
 
 	// 4. Nonce consume
-	tsInt, err := strconv.ParseInt(req.TS, 10, 64)
-	if err != nil {
-		return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "ts not an integer")
-	}
 	inserted, err := s.iframeNonceRepo.Consume(ctx, &types.IframeNonce{
 		TenantID:   tenant.ID,
 		Nonce:      req.Nonce,
