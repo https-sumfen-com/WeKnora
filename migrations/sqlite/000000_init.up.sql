@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     api_key VARCHAR(256) NOT NULL,
+    external_id TEXT,
+    iframe_secret TEXT,
     retriever_engines TEXT NOT NULL DEFAULT '[]',
     status VARCHAR(50) DEFAULT 'active',
     business VARCHAR(255) NOT NULL,
@@ -204,6 +206,7 @@ CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(36) PRIMARY KEY,
     username VARCHAR(100) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
+    mobile TEXT,
     password_hash VARCHAR(255) NOT NULL,
     avatar VARCHAR(500),
     tenant_id INTEGER,
@@ -535,3 +538,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_stores_name_tenant
 CREATE INDEX IF NOT EXISTS idx_vector_stores_tenant_id ON vector_stores(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_vector_stores_engine_type ON vector_stores(engine_type);
 CREATE INDEX IF NOT EXISTS idx_vector_stores_deleted_at ON vector_stores(deleted_at);
+
+-- iframe login indexes (added in 000035_iframe_login for Postgres; mirrored here for Lite)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_mobile
+    ON users(tenant_id, mobile)
+    WHERE mobile IS NOT NULL AND deleted_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_external_id
+    ON tenants(external_id)
+    WHERE external_id IS NOT NULL AND deleted_at IS NULL;
+
+-- iframe_nonces table for replay protection
+CREATE TABLE IF NOT EXISTS iframe_nonces (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id   INTEGER      NOT NULL,
+    nonce       TEXT         NOT NULL,
+    ts          INTEGER      NOT NULL,
+    consumed_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_iframe_nonces_ts ON iframe_nonces(ts);
