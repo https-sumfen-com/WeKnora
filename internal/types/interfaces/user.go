@@ -58,6 +58,8 @@ type UserRepository interface {
 	GetUserByUsername(ctx context.Context, username string) (*types.User, error)
 	// GetUserByTenantID gets the first user (owner) of a tenant
 	GetUserByTenantID(ctx context.Context, tenantID uint64) (*types.User, error)
+	// GetUserByTenantAndMobile gets a user within a tenant by mobile number
+	GetUserByTenantAndMobile(ctx context.Context, tenantID uint64, mobile string) (*types.User, error)
 	// UpdateUser updates a user
 	UpdateUser(ctx context.Context, user *types.User) error
 	// DeleteUser deletes a user

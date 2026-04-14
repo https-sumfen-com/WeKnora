@@ -78,6 +78,19 @@ func (r *userRepository) GetUserByTenantID(ctx context.Context, tenantID uint64)
 	return &user, nil
 }
 
+// GetUserByTenantAndMobile retrieves a user by tenant ID and mobile number.
+// Returns ErrUserNotFound when the user does not exist.
+func (r *userRepository) GetUserByTenantAndMobile(ctx context.Context, tenantID uint64, mobile string) (*types.User, error) {
+	var user types.User
+	if err := r.db.WithContext(ctx).Where("tenant_id = ? AND mobile = ?", tenantID, mobile).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 // UpdateUser updates a user
 func (r *userRepository) UpdateUser(ctx context.Context, user *types.User) error {
 	return r.db.WithContext(ctx).Save(user).Error
