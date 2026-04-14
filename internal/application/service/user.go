@@ -849,3 +849,9 @@ func isUserLookupNotFound(err error) bool {
 	}
 	return errors.Is(err, apprepo.ErrUserNotFound) || strings.Contains(strings.ToLower(err.Error()), "user not found")
 }
+
+// IframeLogin is implemented in a separate file or a follow-up task.
+// Stub to satisfy the interface until Task 11 provides the real impl.
+func (s *userService) IframeLogin(ctx context.Context, req *types.IframeLoginRequest) (*types.LoginResponse, error) {
+	return nil, types.NewIframeLoginError(types.IframeErrInternal, "not implemented")
+}

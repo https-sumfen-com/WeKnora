@@ -16,6 +16,10 @@ type UserService interface {
 	GetOIDCAuthorizationURL(ctx context.Context, redirectURI string) (*types.OIDCAuthURLResponse, error)
 	// LoginWithOIDC exchanges the callback code, auto-provisions users if needed, and completes login
 	LoginWithOIDC(ctx context.Context, code, redirectURI string) (*types.OIDCCallbackResponse, error)
+	// IframeLogin authenticates a request from an embedded iframe URL (HMAC-signed cid + mobile)
+	// and returns a login response. Returns *types.IframeLoginError for expected failure cases
+	// (bad signature, replay, tenant not found, etc.) and an ordinary error for internal failures.
+	IframeLogin(ctx context.Context, req *types.IframeLoginRequest) (*types.LoginResponse, error)
 	// GetUserByID gets a user by ID
 	GetUserByID(ctx context.Context, id string) (*types.User, error)
 	// GetUserByEmail gets a user by email
