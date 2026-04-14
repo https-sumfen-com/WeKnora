@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -872,6 +875,44 @@ func iframeMobileSuffix(m string) string {
 	return m[len(m)-4:]
 }
 
+// deriveIframeSecret computes a deterministic per-cid HMAC secret from a
+// master secret. External systems use the same formula to sign URLs without
+// needing a separate secret per cid. The output matches SignIframeMessage's
+// expected secret format (raw bytes, hex-encoded for transport).
+func deriveIframeSecret(master, cid string) string {
+	h := hmac.New(sha256.New, []byte(master))
+	h.Write([]byte(cid))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// autoProvisionIframeOrg creates an Organization for a cid that didn't exist
+// when iframe-login was called, after master-secret signature verification has
+// already passed. The org's iframe_secret is the derived per-cid secret so
+// future requests can use the normal stored-secret verification path.
+func (s *userService) autoProvisionIframeOrg(
+	ctx context.Context, cid, derivedSecret string,
+) (*types.Organization, error) {
+	inviteBytes := make([]byte, 16)
+	if _, err := rand.Read(inviteBytes); err != nil {
+		return nil, fmt.Errorf("generate invite code: %w", err)
+	}
+	org := &types.Organization{
+		ID:           uuid.New().String(),
+		Name:         cid,
+		Description:  "iframe auto-provisioned",
+		OwnerID:      "",
+		InviteCode:   hex.EncodeToString(inviteBytes),
+		ExternalID:   cid,
+		IframeSecret: derivedSecret,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := s.organizationRepo.Create(ctx, org); err != nil {
+		return nil, fmt.Errorf("create org: %w", err)
+	}
+	return org, nil
+}
+
 // normalizeIframeRole returns (canonical OrgMemberRole, true) for admin/editor/viewer
 // (case-insensitive), ("", false) otherwise.
 func normalizeIframeRole(raw string) (types.OrgMemberRole, bool) {
@@ -910,22 +951,49 @@ func (s *userService) IframeLogin(
 		return nil, types.NewIframeLoginError(types.IframeErrRoleInvalid, "role must be admin, editor or viewer")
 	}
 
-	// 2. Organization lookup by cid
+	// 2. Organization lookup by cid (with master-secret auto-provision fallback)
 	org, err := s.organizationRepo.GetByExternalID(ctx, req.CID)
+	autoProvisioned := false
 	if err != nil {
 		if errors.Is(err, apprepo.ErrOrganizationNotFound) {
-			return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "organization not found")
+			// Org not found: if WEKNORA_IFRAME_MASTER_SECRET is set, try to verify
+			// the request against a per-cid secret derived from master, and if the
+			// signature is valid, auto-provision the org. This lets external systems
+			// generate cids on the fly without operators running provision per-cid.
+			master := strings.TrimSpace(os.Getenv("WEKNORA_IFRAME_MASTER_SECRET"))
+			if master == "" {
+				return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "organization not found")
+			}
+			derived := deriveIframeSecret(master, req.CID)
+			if !VerifyIframeSignature(derived, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
+				return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
+			}
+			org, err = s.autoProvisionIframeOrg(ctx, req.CID, derived)
+			if err != nil {
+				logger.Errorf(ctx, "iframe_login auto-provision failed: %v", err)
+				return nil, types.NewIframeLoginError(types.IframeErrInternal, "auto-provision failed")
+			}
+			autoProvisioned = true
+			logger.Infof(ctx, "iframe_login auto-provisioned org cid=%s id=%s", req.CID, org.ID)
+		} else {
+			logger.Errorf(ctx, "iframe_login org lookup failed: %v", err)
+			return nil, types.NewIframeLoginError(types.IframeErrInternal, "organization lookup failed")
 		}
-		logger.Errorf(ctx, "iframe_login org lookup failed: %v", err)
-		return nil, types.NewIframeLoginError(types.IframeErrInternal, "organization lookup failed")
 	}
-	if org.IframeSecret == "" {
+	if !autoProvisioned && org.IframeSecret == "" {
+		// Org exists but secret cleared (revoked) — refuse even if master is set,
+		// because revoke is an explicit operator action that must not be bypassed
+		// by auto-provision.
 		return nil, types.NewIframeLoginError(types.IframeErrNotEnabled, "iframe login not enabled for this organization")
 	}
 
-	// 3. HMAC signature verification
-	if !VerifyIframeSignature(org.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
-		return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
+	// 3. HMAC signature verification (skip if just auto-provisioned: BeforeSave hook
+	// mutated org.IframeSecret to the encrypted value, and we already verified
+	// against the plaintext derived secret inside the auto-provision branch).
+	if !autoProvisioned {
+		if !VerifyIframeSignature(org.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
+			return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
+		}
 	}
 
 	// 4. Nonce consume (scoped to organization)
