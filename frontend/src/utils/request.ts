@@ -97,7 +97,10 @@ instance.interceptors.response.use(
     }
     
     // 如果是登录接口的401，直接返回错误以便页面展示toast，不做跳转
-    if (error.response.status === 401 && originalRequest?.url?.includes('/auth/login')) {
+    // 注意：includes('/auth/login') 也会匹配 /auth/iframe-login，需排除以保留其 code 字段
+    if (error.response.status === 401
+        && originalRequest?.url?.includes('/auth/login')
+        && !originalRequest?.url?.includes('/auth/iframe-login')) {
       const { status, data } = error.response;
       return Promise.reject({ status, message: (typeof data === 'object' ? data?.message : data) || t('error.invalidCredentials') });
     }
