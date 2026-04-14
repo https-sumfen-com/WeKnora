@@ -27,7 +27,10 @@ const errorMap: Record<string, string> = {
 }
 
 function pickError(e: any): string {
-  const code = e?.response?.data?.code ?? e?.data?.code
+  // The project's axios interceptor rejects with { status, message, ...data }
+  // so the IFRAME_* code is directly on the error object as e.code.
+  // Fall back to nested paths in case the shape changes in tests/mocks.
+  const code = e?.code ?? e?.data?.code ?? e?.response?.data?.code
   if (code && errorMap[code]) return errorMap[code]
   return '登录失败，请刷新页面重试'
 }
@@ -53,7 +56,7 @@ onMounted(async () => {
   try {
     const data = await iframeLogin(params)
     if (!data?.success || !data?.token) {
-      errorMsg.value = pickError({ data })
+      errorMsg.value = pickError(data)
       loading.value = false
       return
     }
