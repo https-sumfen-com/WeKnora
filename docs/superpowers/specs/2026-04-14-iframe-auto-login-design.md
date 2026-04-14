@@ -75,7 +75,7 @@ WeKnora 需要作为 iframe 嵌入外部自维护的业务系统。外部系统�
 
 | 变更 | 说明 |
 |---|---|
-| 新增列 `mobile VARCHAR(20) NULL` | 国际区号最长 16 位，留余量 |
+| 新增列 `mobile VARCHAR(11) NULL` | 仅中国大陆手机号，11 位数字 |
 | 新增唯一索引 `uk_users_tenant_mobile` | `(tenant_id, mobile) WHERE mobile IS NOT NULL AND deleted_at IS NULL`（Postgres 部分索引；MySQL 走联合唯一索引 + 应用层保证 NULL 不写入） |
 | `email` / `username` | 维持全局唯一不变；iframe 创建时填充占位值 |
 
@@ -145,7 +145,7 @@ sig     = hex(HMAC-SHA256(secret, message))
 
 ### 5.3 服务端校验顺序
 
-1. 5 个字段完整性，`mobile` 正则 `^\+?[0-9]{6,20}$`
+1. 5 个字段完整性，`mobile` 正则 `^1[3-9][0-9]{9}$`（中国大陆手机号：1 开头，第 2 位 3-9，共 11 位）
 2. 查 tenant by external_id；不存在 → 404 `IFRAME_TENANT_NOT_FOUND`
 3. tenant.iframe_secret 非空；空 → 403 `IFRAME_NOT_ENABLED`
 4. HMAC 校验；不等 → 401 `IFRAME_BAD_SIGNATURE`
