@@ -4,6 +4,11 @@
 //	iframe provision --cid <cid> --name <display-name>
 //	iframe rotate    --cid <cid>
 //	iframe revoke    --cid <cid>
+//
+//	model add-builtin --type <T> --name <N> --provider <P> [flags]
+//	model list        [--all]
+//	model unmark-builtin --id <id>
+//	model delete      --id <id>
 package main
 
 import (
@@ -38,6 +43,12 @@ func main() {
 			os.Exit(2)
 		}
 		runIframe(os.Args[2], os.Args[3:])
+	case "model":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, modelUsage())
+			os.Exit(2)
+		}
+		runModel(os.Args[2], os.Args[3:])
 	default:
 		usage()
 		os.Exit(2)
@@ -70,5 +81,10 @@ func usage() {
 Usage:
   weknora-admin iframe provision --cid <cid> --name <display-name>
   weknora-admin iframe rotate    --cid <cid>
-  weknora-admin iframe revoke    --cid <cid>`)
+  weknora-admin iframe revoke    --cid <cid>
+
+  weknora-admin model add-builtin  --type <T> --name <N> --provider <P> [flags]
+  weknora-admin model list         [--all]
+  weknora-admin model unmark-builtin --id <id>
+  weknora-admin model delete       --id <id>`)
 }
