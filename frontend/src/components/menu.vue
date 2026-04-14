@@ -2,7 +2,7 @@
     <div class="aside_box" :class="{ 'aside_box--collapsed': uiStore.sidebarCollapsed }">
         <!-- 展开时：Logo + 折叠按钮同行 -->
         <div class="logo_row" v-if="!uiStore.sidebarCollapsed">
-            <div class="logo_box" @click="router.push('/platform/knowledge-bases')" style="cursor: pointer;">
+            <div v-if="!embedded" class="logo_box" @click="router.push('/platform/knowledge-bases')" style="cursor: pointer;">
                 <img class="logo" src="@/assets/img/weknora.png" alt="">
                 <sup v-if="isLiteEdition" class="lite-badge">Lite</sup>
             </div>
@@ -147,8 +147,10 @@ import UserMenu from '@/components/UserMenu.vue';
 import TenantSelector from '@/components/TenantSelector.vue';
 import { useI18n } from 'vue-i18n';
 import { getSystemInfo } from '@/api/system';
+import { useEmbedded } from '@/composables/useEmbedded';
 
 const { t } = useI18n();
+const { embedded } = useEmbedded();
 const usemenuStore = useMenuStore();
 const authStore = useAuthStore();
 const orgStore = useOrganizationStore();

@@ -80,6 +80,7 @@
           </span>
         </div>
         <div
+          v-if="!embedded"
           class="menu-item"
           :title="$t('common.githubStarTip')"
           @click="openGithub"
@@ -116,8 +117,10 @@ import { useAuthStore } from '@/stores/auth'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, logout as logoutApi } from '@/api/auth'
 import { useI18n } from 'vue-i18n'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t } = useI18n()
+const { embedded } = useEmbedded()
 
 const router = useRouter()
 const uiStore = useUIStore()

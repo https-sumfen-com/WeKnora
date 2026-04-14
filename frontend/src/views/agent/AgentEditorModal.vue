@@ -1211,7 +1211,7 @@
                     <h2>{{ $t('agentEditor.im.title') }}</h2>
                     <p class="section-description">
                       {{ $t('agentEditor.im.description') }}
-                      <a href="https://github.com/Tencent/WeKnora/blob/main/docs/IM%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3.md" target="_blank" rel="noopener noreferrer" class="section-doc-link">
+                      <a v-if="!embedded" href="https://github.com/Tencent/WeKnora/blob/main/docs/IM%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3.md" target="_blank" rel="noopener noreferrer" class="section-doc-link">
                         <t-icon name="link" class="link-icon" />{{ $t('agentEditor.im.docLink') }}
                       </a>
                     </p>
@@ -1254,12 +1254,14 @@ import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
 import ModelSelector from '@/components/ModelSelector.vue';
 import AgentShareSettings from '@/components/AgentShareSettings.vue';
 import IMChannelPanel from '@/components/IMChannelPanel.vue';
+import { useEmbedded } from '@/composables/useEmbedded';
 
 const uiStore = useUIStore();
 const authStore = useAuthStore();
 const orgStore = useOrganizationStore();
 
 const { t } = useI18n();
+const { embedded } = useEmbedded();
 
 const props = defineProps<{
   visible: boolean;
