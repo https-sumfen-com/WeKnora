@@ -5,12 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### 🚀 New Features
-- **NEW**: iframe 嵌入免登 — 外部系统可通过 HMAC-SHA256 签名的 URL (`cid + mobile + ts + nonce + sig`) 把 WeKnora 嵌入 iframe，按需自动创建 tenant/user 并签发 JWT；支持通过 `weknora-admin iframe provision/rotate/revoke` CLI 管理每个 cid 的独立 secret（AES-256-GCM 加密存储）；nonce 一次性消费防重放；嵌入模式下前端隐藏所有 logo/外链/语言切换器。见 `docs/iframe-integration.md`
+- **NEW**: iframe 嵌入免登 — 外部系统可通过 HMAC-SHA256 签名的 URL 把 WeKnora 嵌入 iframe，按需自动创建 tenant/user 并签发 JWT；支持通过 `weknora-admin iframe provision/rotate/revoke` CLI 管理每个 cid 的独立 secret（AES-256-GCM 加密存储）；nonce 一次性消费防重放；嵌入模式下前端隐藏所有 logo/外链/语言切换器。见 `docs/iframe-integration.md`
+  - **BREAKING (internal feature only — R1 未发布即重构)**: iframe cid 语义从 Tenant 改为 Organization；URL 新增必填 `role` 参数（admin/editor/viewer），签名消息加入 role；数据模型同步迁移（000036）；所有 R1 签发的 URL 全部失效
 - **NEW**: `WEKNORA_FRAME_ANCESTORS` 环境变量 — 可选地限制允许嵌入 WeKnora 的父域名（通过 CSP `frame-ancestors`）
 
 ### 🛠️ 其他改进
 - Makefile 增加 `build-admin` 目标，构建 `weknora-admin` 操作 CLI
 - 新增迁移 `000035_iframe_login`（users.mobile / tenants.external_id+iframe_secret / iframe_nonces 表）
+- 新增迁移 `000036_iframe_organization`（Organization/OrganizationMember 表，iframe 从 tenant 迁移至 organization）
 - 修复 `scripts/dev.sh` 中 `make dev-app` 使用 `go run cmd/server/main.go` 导致同包其他文件未被编译的问题，改为 `go run ./cmd/server`
 
 ## [0.3.6] - 2026-04-03
