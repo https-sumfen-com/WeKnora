@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,10 +59,12 @@ func getJwtSecret() string {
 
 // userService implements the UserService interface
 type userService struct {
-	userRepo      interfaces.UserRepository
-	tokenRepo     interfaces.AuthTokenRepository
-	tenantService interfaces.TenantService
-	config        *config.Config
+	userRepo        interfaces.UserRepository
+	tokenRepo       interfaces.AuthTokenRepository
+	tenantService   interfaces.TenantService
+	config          *config.Config
+	tenantRepo      interfaces.TenantRepository
+	iframeNonceRepo interfaces.IframeNonceRepository
 }
 
 // NewUserService creates a new user service instance
@@ -69,12 +73,16 @@ func NewUserService(
 	userRepo interfaces.UserRepository,
 	tokenRepo interfaces.AuthTokenRepository,
 	tenantService interfaces.TenantService,
+	tenantRepo interfaces.TenantRepository,
+	iframeNonceRepo interfaces.IframeNonceRepository,
 ) interfaces.UserService {
 	return &userService{
-		userRepo:      userRepo,
-		tokenRepo:     tokenRepo,
-		tenantService: tenantService,
-		config:        configInfo,
+		userRepo:        userRepo,
+		tokenRepo:       tokenRepo,
+		tenantService:   tenantService,
+		config:          configInfo,
+		tenantRepo:      tenantRepo,
+		iframeNonceRepo: iframeNonceRepo,
 	}
 }
 
@@ -850,8 +858,132 @@ func isUserLookupNotFound(err error) bool {
 	return errors.Is(err, apprepo.ErrUserNotFound) || strings.Contains(strings.ToLower(err.Error()), "user not found")
 }
 
-// IframeLogin is implemented in a separate file or a follow-up task.
-// Stub to satisfy the interface until Task 11 provides the real impl.
-func (s *userService) IframeLogin(ctx context.Context, req *types.IframeLoginRequest) (*types.LoginResponse, error) {
-	return nil, types.NewIframeLoginError(types.IframeErrInternal, "not implemented")
+// iframeMobileRegexp matches China mainland mobile numbers: 1, [3-9], 9 more digits.
+var iframeMobileRegexp = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+
+// iframeMobileSuffix returns the last 4 digits for log sanitization.
+func iframeMobileSuffix(m string) string {
+	if len(m) < 4 {
+		return "****"
+	}
+	return m[len(m)-4:]
+}
+
+// IframeLogin authenticates an HMAC-signed iframe URL request.
+// On success, creates the placeholder user if absent and returns a LoginResponse
+// with a fresh JWT (delegating to GenerateTokens).
+func (s *userService) IframeLogin(
+	ctx context.Context, req *types.IframeLoginRequest,
+) (*types.LoginResponse, error) {
+	logger.Info(ctx, "Start iframe login")
+
+	// 1. Presence + mobile shape
+	if req.CID == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" {
+		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "required parameter missing")
+	}
+	if !iframeMobileRegexp.MatchString(req.Mobile) {
+		return nil, types.NewIframeLoginError(types.IframeErrMobileInvalid, "invalid mobile format")
+	}
+
+	// 2. Tenant by cid
+	tenant, err := s.tenantRepo.GetByExternalID(ctx, req.CID)
+	if err != nil {
+		if errors.Is(err, apprepo.ErrTenantNotFound) {
+			return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "tenant not found")
+		}
+		logger.Errorf(ctx, "iframe_login tenant lookup failed: %v", err)
+		return nil, types.NewIframeLoginError(types.IframeErrInternal, "tenant lookup failed")
+	}
+	if tenant.IframeSecret == "" {
+		return nil, types.NewIframeLoginError(types.IframeErrNotEnabled, "iframe login not enabled")
+	}
+
+	// 3. HMAC
+	if !VerifyIframeSignature(tenant.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Sig) {
+		return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
+	}
+
+	// 4. Nonce consume
+	tsInt, err := strconv.ParseInt(req.TS, 10, 64)
+	if err != nil {
+		return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "ts not an integer")
+	}
+	inserted, err := s.iframeNonceRepo.Consume(ctx, &types.IframeNonce{
+		TenantID:   tenant.ID,
+		Nonce:      req.Nonce,
+		TS:         tsInt,
+		ConsumedAt: time.Now(),
+	})
+	if err != nil {
+		logger.Errorf(ctx, "iframe_login nonce consume failed: %v", err)
+		return nil, types.NewIframeLoginError(types.IframeErrInternal, "nonce persistence failed")
+	}
+	if !inserted {
+		return nil, types.NewIframeLoginError(types.IframeErrReplay, "nonce already consumed")
+	}
+
+	// 5. User find or create
+	user, err := s.userRepo.GetUserByTenantAndMobile(ctx, tenant.ID, req.Mobile)
+	if err != nil {
+		if errors.Is(err, apprepo.ErrUserNotFound) {
+			user, err = s.createIframeUser(ctx, tenant.ID, req.Mobile)
+			if err != nil {
+				logger.Errorf(ctx, "iframe_login user creation failed: %v", err)
+				return nil, types.NewIframeLoginError(types.IframeErrInternal, "user creation failed")
+			}
+		} else {
+			logger.Errorf(ctx, "iframe_login user lookup failed: %v", err)
+			return nil, types.NewIframeLoginError(types.IframeErrInternal, "user lookup failed")
+		}
+	} else if !user.IsActive {
+		return nil, types.NewIframeLoginError(types.IframeErrUserDisabled, "user disabled")
+	}
+
+	// 6. Tokens
+	accessToken, refreshToken, err := s.GenerateTokens(ctx, user)
+	if err != nil {
+		logger.Errorf(ctx, "iframe_login token generation failed: %v", err)
+		return nil, types.NewIframeLoginError(types.IframeErrInternal, "token generation failed")
+	}
+
+	logger.Infof(ctx, "iframe_login.success tenant_id=%d user_id=%s mobile_suffix=%s",
+		tenant.ID, user.ID, iframeMobileSuffix(req.Mobile))
+
+	return &types.LoginResponse{
+		Success:      true,
+		User:         user,
+		Tenant:       tenant,
+		Token:        accessToken,
+		RefreshToken: refreshToken,
+	}, nil
+}
+
+// createIframeUser provisions a placeholder user for an iframe-login flow.
+func (s *userService) createIframeUser(
+	ctx context.Context, tenantID uint64, mobile string,
+) (*types.User, error) {
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return nil, err
+	}
+	passHash, err := bcrypt.GenerateFromPassword(randomBytes, bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	placeholder := fmt.Sprintf("iframe_%d_%s", tenantID, mobile)
+	user := &types.User{
+		ID:           uuid.New().String(),
+		Username:     placeholder,
+		Email:        placeholder + "@iframe.invalid",
+		PasswordHash: string(passHash),
+		Mobile:       mobile,
+		TenantID:     tenantID,
+		IsActive:     true,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := s.userRepo.CreateUser(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
