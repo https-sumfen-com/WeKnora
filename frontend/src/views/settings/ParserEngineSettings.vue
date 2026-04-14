@@ -70,7 +70,7 @@
               </t-tooltip>
               <t-tag v-else theme="danger" variant="light" size="small">{{ $t('settings.parser.unavailable') }}</t-tag>
               <a
-                v-if="engineDocLink(engine.Name)"
+                v-if="engineDocLink(engine.Name) && !embedded"
                 :href="engineDocLink(engine.Name)"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -230,9 +230,11 @@ import {
   type ParserEngineConfig,
 } from '@/api/system'
 import { getWeKnoraCloudStatus } from '@/api/model'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t } = useI18n()
 const uiStore = useUIStore()
+const { embedded } = useEmbedded()
 
 const CONFIGURABLE_ENGINES = new Set(['mineru', 'mineru_cloud'])
 

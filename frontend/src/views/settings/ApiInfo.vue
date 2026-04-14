@@ -146,7 +146,7 @@
       </template>
 
       <!-- API docs -->
-      <div class="setting-row">
+      <div v-if="!embedded" class="setting-row">
         <div class="setting-info">
           <label>{{ $t('tenant.api.docLabel') }}</label>
           <p class="desc">
@@ -216,8 +216,10 @@ import { getCurrentUser, type TenantInfo, type UserInfo } from '@/api/auth'
 import { getApiBaseUrl } from '@/utils/api-base'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t, locale } = useI18n()
+const { embedded } = useEmbedded()
 
 // Reactive state
 const tenantInfo = ref<TenantInfo | null>(null)

@@ -4,7 +4,7 @@
       <h2>{{ $t('modelSettings.title') }}</h2>
       <p class="section-description">{{ $t('modelSettings.description') }}</p>
 
-      <div class="builtin-models-hint" role="note">
+      <div v-if="!embedded" class="builtin-models-hint" role="note">
         <p class="builtin-hint-label">{{ $t('modelSettings.builtinModels.title') }}</p>
         <p class="builtin-hint-text">{{ $t('modelSettings.builtinModels.description') }}</p>
         <a
@@ -296,8 +296,10 @@ import { AddIcon } from 'tdesign-icons-vue-next'
 import { useI18n } from 'vue-i18n'
 import ModelEditorDialog from '@/components/ModelEditorDialog.vue'
 import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, type ModelConfig } from '@/api/model'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t } = useI18n()
+const { embedded } = useEmbedded()
 
 const showDialog = ref(false)
 const currentModelType = ref<'chat' | 'embedding' | 'rerank' | 'vllm' | 'asr'>('chat')

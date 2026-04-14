@@ -62,7 +62,7 @@
         </div>
       </div>
       <t-alert
-        v-if="!isNeo4jAvailable"
+        v-if="!isNeo4jAvailable && !embedded"
         theme="warning"
         style="margin-top: -8px; margin-bottom: 16px;"
       >
@@ -98,11 +98,13 @@ import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { getSystemInfo } from '@/api/system'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
 const { currentTheme, setTheme } = useTheme()
+const { embedded } = useEmbedded()
 
 // 本地状态
 const localLanguage = ref('zh-CN')

@@ -1,9 +1,15 @@
+<script setup lang="ts">
+import { useEmbedded } from '@/composables/useEmbedded'
+const { embedded } = useEmbedded()
+</script>
+
 <template>
   <div class="weknoracloud-settings">
     <div class="section-header">
       <h2>{{ $t('settings.weknoraCloud.title') }}</h2>
       <p class="section-description">{{ $t('settings.weknoraCloud.description') }}</p>
       <a
+        v-if="!embedded"
         class="doc-link"
         href="https://developers.weixin.qq.com/doc/aispeech/knowledge/atomic_capability/atomic_interface.html"
         target="_blank"

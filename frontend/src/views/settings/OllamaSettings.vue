@@ -94,7 +94,7 @@
           <h3>{{ $t('ollamaSettings.download.title') }}</h3>
           <p>
             {{ $t('ollamaSettings.download.descPrefix') }}
-            <a href="https://ollama.com/search" target="_blank" rel="noopener noreferrer" class="model-link">
+            <a v-if="!embedded" href="https://ollama.com/search" target="_blank" rel="noopener noreferrer" class="model-link">
               {{ $t('ollamaSettings.download.browse') }}
               <t-icon name="link" class="link-icon" />
             </a>
@@ -178,9 +178,11 @@ import { useSettingsStore } from '@/stores/settings'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
 import { checkOllamaStatus, listOllamaModels, downloadOllamaModel, getDownloadProgress, type OllamaModelInfo } from '@/api/initialization'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const settingsStore = useSettingsStore()
 const { t } = useI18n()
+const { embedded } = useEmbedded()
 
 const localBaseUrl = ref(settingsStore.settings.ollamaConfig?.baseUrl ?? '')
 

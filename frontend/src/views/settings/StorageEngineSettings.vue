@@ -211,8 +211,8 @@
             </div>
             <p>
               {{ $t('settings.storage.cosDesc') }}
-              <a class="engine-link" href="https://console.cloud.tencent.com/cos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
-              <a class="engine-link" href="https://cloud.tencent.com/document/product/436" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://console.cloud.tencent.com/cos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://cloud.tencent.com/document/product/436" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
         </div>
@@ -285,8 +285,8 @@
             </div>
             <p>
               {{ $t('settings.storage.tosDesc') }}
-              <a class="engine-link" href="https://console.volcengine.com/tos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
-              <a class="engine-link" href="https://www.volcengine.com/docs/6349" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://console.volcengine.com/tos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://www.volcengine.com/docs/6349" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
         </div>
@@ -359,8 +359,8 @@
             </div>
             <p>
               {{ $t('settings.storage.s3Desc') }}
-              <a class="engine-link" href="https://aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
-              <a class="engine-link" href="https://docs.aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://docs.aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
         </div>
@@ -433,8 +433,8 @@
             </div>
             <p>
               {{ $t('settings.storage.ossDesc') }}
-              <a class="engine-link" href="https://oss.console.aliyun.com/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
-              <a class="engine-link" href="https://help.aliyun.com/zh/oss/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://oss.console.aliyun.com/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
+              <a v-if="!embedded" class="engine-link" href="https://help.aliyun.com/zh/oss/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
         </div>
@@ -520,8 +520,10 @@ import {
   type StorageEngineConfig,
   type MinioBucketInfo,
 } from '@/api/system'
+import { useEmbedded } from '@/composables/useEmbedded'
 
 const { t } = useI18n()
+const { embedded } = useEmbedded()
 
 const defaultConfig = (): StorageEngineConfig => ({
   default_provider: 'local',
