@@ -630,3 +630,69 @@ func (h *AuthHandler) ValidateToken(c *gin.Context) {
 		"user":    user.ToUserInfo(),
 	})
 }
+
+// IframeLogin godoc
+// @Summary      iframe 免登
+// @Description  通过 HMAC 签名 URL 参数自动创建/登录用户（cid + mobile）
+// @Tags         认证
+// @Accept       json
+// @Produce      json
+// @Param        request  body      types.IframeLoginRequest  true  "iframe 登录请求"
+// @Success      200      {object}  types.LoginResponse
+// @Failure      400      {object}  map[string]interface{}  "参数错误"
+// @Failure      401      {object}  map[string]interface{}  "鉴权失败"
+// @Failure      403      {object}  map[string]interface{}  "禁用/未启用"
+// @Failure      404      {object}  map[string]interface{}  "租户不存在"
+// @Router       /auth/iframe-login [post]
+func (h *AuthHandler) IframeLogin(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req types.IframeLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"code":    string(types.IframeErrParamsMissing),
+			"message": "required parameter missing",
+		})
+		return
+	}
+
+	resp, err := h.userService.IframeLogin(ctx, &req)
+	if err != nil {
+		if ilErr, ok := err.(*types.IframeLoginError); ok {
+			status := iframeErrorStatus(ilErr.Code)
+			logger.Warnf(ctx, "iframe_login.reject code=%s cid=%s ip=%s",
+				ilErr.Code, secutils.SanitizeForLog(req.CID), c.ClientIP())
+			c.JSON(status, gin.H{
+				"success": false,
+				"code":    string(ilErr.Code),
+				"message": ilErr.Message,
+			})
+			return
+		}
+		logger.Errorf(ctx, "iframe_login unexpected error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"code":    string(types.IframeErrInternal),
+			"message": "internal error",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// iframeErrorStatus maps IframeErrorCode to HTTP status code.
+func iframeErrorStatus(code types.IframeErrorCode) int {
+	switch code {
+	case types.IframeErrParamsMissing, types.IframeErrMobileInvalid:
+		return http.StatusBadRequest
+	case types.IframeErrBadSignature, types.IframeErrReplay:
+		return http.StatusUnauthorized
+	case types.IframeErrUserDisabled, types.IframeErrNotEnabled:
+		return http.StatusForbidden
+	case types.IframeErrTenantNotFound:
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
+}
