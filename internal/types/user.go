@@ -14,6 +14,8 @@ type User struct {
 	Username string `json:"username"   gorm:"type:varchar(100);uniqueIndex;not null"`
 	// Email address of the user
 	Email string `json:"email"      gorm:"type:varchar(255);uniqueIndex;not null"`
+	// Mobile phone number (China mainland, 11 digits), unique per tenant
+	Mobile string `json:"mobile,omitempty" gorm:"type:varchar(11);index"`
 	// Hashed password of the user
 	PasswordHash string `json:"-"          gorm:"type:varchar(255);not null"`
 	// Avatar URL of the user
@@ -124,6 +126,7 @@ type UserInfo struct {
 	ID                  string    `json:"id"`
 	Username            string    `json:"username"`
 	Email               string    `json:"email"`
+	Mobile              string    `json:"mobile,omitempty"`
 	Avatar              string    `json:"avatar"`
 	TenantID            uint64    `json:"tenant_id"`
 	IsActive            bool      `json:"is_active"`
@@ -138,6 +141,7 @@ func (u *User) ToUserInfo() *UserInfo {
 		ID:                  u.ID,
 		Username:            u.Username,
 		Email:               u.Email,
+		Mobile:              u.Mobile,
 		Avatar:              u.Avatar,
 		TenantID:            u.TenantID,
 		IsActive:            u.IsActive,
