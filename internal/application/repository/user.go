@@ -91,6 +91,26 @@ func (r *userRepository) GetUserByTenantAndMobile(ctx context.Context, tenantID 
 	return &user, nil
 }
 
+// FindOneByUserIDsAndMobile returns the first user whose ID is in userIDs and whose Mobile matches.
+// Returns (nil, nil) if no match.
+func (r *userRepository) FindOneByUserIDsAndMobile(
+	ctx context.Context, userIDs []string, mobile string,
+) (*types.User, error) {
+	if len(userIDs) == 0 || mobile == "" {
+		return nil, nil
+	}
+	var user types.User
+	if err := r.db.WithContext(ctx).
+		Where("id IN ? AND mobile = ?", userIDs, mobile).
+		First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 // UpdateUser updates a user
 func (r *userRepository) UpdateUser(ctx context.Context, user *types.User) error {
 	return r.db.WithContext(ctx).Save(user).Error

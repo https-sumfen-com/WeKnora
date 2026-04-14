@@ -339,6 +339,14 @@ func (r *organizationRepository) GetByExternalID(ctx context.Context, externalID
 	return &org, nil
 }
 
+// UpdateOwner sets the organization's owner user ID.
+func (r *organizationRepository) UpdateOwner(ctx context.Context, orgID, userID string) error {
+	return r.db.WithContext(ctx).
+		Model(&types.Organization{}).
+		Where("id = ?", orgID).
+		Updates(map[string]interface{}{"owner_id": userID, "updated_at": time.Now()}).Error
+}
+
 // UpdateIframeSecret sets or clears the plaintext iframe secret for an org.
 // Non-empty values are AES-GCM encrypted by the BeforeSave hook via Save.
 // Empty string clears the column bypassing the hook (hook skips empty values).

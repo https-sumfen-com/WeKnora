@@ -64,6 +64,9 @@ type UserRepository interface {
 	GetUserByTenantID(ctx context.Context, tenantID uint64) (*types.User, error)
 	// GetUserByTenantAndMobile gets a user within a tenant by mobile number
 	GetUserByTenantAndMobile(ctx context.Context, tenantID uint64, mobile string) (*types.User, error)
+	// FindOneByUserIDsAndMobile returns the first user whose ID is in userIDs and whose Mobile matches.
+	// Returns (nil, nil) if no match.
+	FindOneByUserIDsAndMobile(ctx context.Context, userIDs []string, mobile string) (*types.User, error)
 	// UpdateUser updates a user
 	UpdateUser(ctx context.Context, user *types.User) error
 	// DeleteUser deletes a user

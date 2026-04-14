@@ -72,6 +72,7 @@ type OrganizationRepository interface {
 	// iframe support
 	GetByExternalID(ctx context.Context, externalID string) (*types.Organization, error)
 	UpdateIframeSecret(ctx context.Context, orgID, plaintextSecret string) error
+	UpdateOwner(ctx context.Context, orgID, userID string) error
 
 	// Join requests
 	CreateJoinRequest(ctx context.Context, request *types.OrganizationJoinRequest) error
