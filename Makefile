@@ -1,4 +1,4 @@
-.PHONY: help build run test clean docker-build-app docker-build-docreader docker-build-frontend docker-build-all docker-run migrate-up migrate-down docker-restart docker-stop start-all stop-all start-ollama stop-ollama build-images build-images-app build-images-docreader build-images-frontend clean-images check-env list-containers pull-images show-platform dev-start dev-stop dev-restart dev-logs dev-status dev-app dev-frontend docs install-swagger build-lite run-lite package-lite
+.PHONY: help build run test clean docker-build-app docker-build-docreader docker-build-frontend docker-build-all docker-run migrate-up migrate-down docker-restart docker-stop start-all stop-all start-ollama stop-ollama build-images build-images-app build-images-docreader build-images-frontend clean-images check-env list-containers pull-images show-platform dev-start dev-stop dev-restart dev-logs dev-status dev-app dev-frontend docs install-swagger build-lite run-lite package-lite build-admin
 
 # Show help
 help:
@@ -236,6 +236,12 @@ build-prod:
 	GO_VERSION=$${GO_VERSION:-unknown}; \
 	LDFLAGS="-X 'github.com/Tencent/WeKnora/internal/handler.Version=$$VERSION' -X 'github.com/Tencent/WeKnora/internal/handler.Edition=standard' -X 'github.com/Tencent/WeKnora/internal/handler.CommitID=$$COMMIT_ID' -X 'github.com/Tencent/WeKnora/internal/handler.BuildTime=$$BUILD_TIME' -X 'github.com/Tencent/WeKnora/internal/handler.GoVersion=$$GO_VERSION' -X 'google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn'"; \
 	go build -ldflags="-w -s $$LDFLAGS" -o $(BINARY_NAME) $(MAIN_PATH)
+
+# Build weknora-admin CLI (server-side operator tool)
+build-admin:
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="-Wno-deprecated-declarations" \
+	go build -ldflags="-X 'google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn'" -o weknora-admin ./cmd/weknora-admin
 
 # Build Lite version (single binary, SQLite + in-memory queue)
 # 会先构建前端到 web/，再构建 Go 二进制；SKIP_FRONTEND=1 可跳过前端
