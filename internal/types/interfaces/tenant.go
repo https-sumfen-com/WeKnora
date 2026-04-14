@@ -48,9 +48,4 @@ type TenantRepository interface {
 	DeleteTenant(ctx context.Context, id uint64) error
 	// AdjustStorageUsed adjusts the storage used for a tenant
 	AdjustStorageUsed(ctx context.Context, tenantID uint64, delta int64) error
-	// GetByExternalID fetches a tenant by external business ID (cid).
-	GetByExternalID(ctx context.Context, externalID string) (*types.Tenant, error)
-	// UpdateIframeSecret sets or clears the plaintext secret. Empty string clears.
-	// Uses Save so BeforeSave hook encrypts non-empty values via AES-GCM.
-	UpdateIframeSecret(ctx context.Context, tenantID uint64, plaintextSecret string) error
 }

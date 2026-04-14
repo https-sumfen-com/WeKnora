@@ -69,6 +69,10 @@ type OrganizationRepository interface {
 	// Invite code
 	UpdateInviteCode(ctx context.Context, orgID string, inviteCode string, expiresAt *time.Time) error
 
+	// iframe support
+	GetByExternalID(ctx context.Context, externalID string) (*types.Organization, error)
+	UpdateIframeSecret(ctx context.Context, orgID, plaintextSecret string) error
+
 	// Join requests
 	CreateJoinRequest(ctx context.Context, request *types.OrganizationJoinRequest) error
 	GetJoinRequestByID(ctx context.Context, id string) (*types.OrganizationJoinRequest, error)

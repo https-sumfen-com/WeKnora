@@ -323,3 +323,36 @@ func (r *organizationRepository) UpdateJoinRequestStatus(ctx context.Context, id
 			"review_message": reviewMessage,
 		}).Error
 }
+
+// GetByExternalID finds an organization by external iframe identifier (cid).
+// Returns (nil, gorm.ErrRecordNotFound) when absent — same convention as GetByID.
+func (r *organizationRepository) GetByExternalID(ctx context.Context, externalID string) (*types.Organization, error) {
+	var org types.Organization
+	if err := r.db.WithContext(ctx).
+		Where("external_id = ?", externalID).
+		First(&org).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrOrganizationNotFound
+		}
+		return nil, err
+	}
+	return &org, nil
+}
+
+// UpdateIframeSecret sets or clears the plaintext iframe secret for an org.
+// Non-empty values are AES-GCM encrypted by the BeforeSave hook via Save.
+// Empty string clears the column bypassing the hook (hook skips empty values).
+func (r *organizationRepository) UpdateIframeSecret(ctx context.Context, orgID, plaintextSecret string) error {
+	if plaintextSecret == "" {
+		return r.db.WithContext(ctx).
+			Model(&types.Organization{}).
+			Where("id = ?", orgID).
+			Update("iframe_secret", "").Error
+	}
+	var org types.Organization
+	if err := r.db.WithContext(ctx).Where("id = ?", orgID).First(&org).Error; err != nil {
+		return err
+	}
+	org.IframeSecret = plaintextSecret
+	return r.db.WithContext(ctx).Save(&org).Error
+}

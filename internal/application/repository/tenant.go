@@ -123,37 +123,6 @@ func (r *tenantRepository) DeleteTenant(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&types.Tenant{}).Error
 }
 
-// GetByExternalID finds a tenant by ExternalID.
-func (r *tenantRepository) GetByExternalID(ctx context.Context, externalID string) (*types.Tenant, error) {
-	var t types.Tenant
-	if err := r.db.WithContext(ctx).Where("external_id = ?", externalID).First(&t).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTenantNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
-}
-
-// UpdateIframeSecret sets or clears the plaintext iframe secret.
-// Uses Save (not Updates) so Tenant.BeforeSave hook encrypts the value via AES-GCM.
-func (r *tenantRepository) UpdateIframeSecret(ctx context.Context, tenantID uint64, plaintextSecret string) error {
-	if plaintextSecret == "" {
-		// Clear: bypass BeforeSave hook (it only re-encrypts non-empty)
-		return r.db.WithContext(ctx).
-			Model(&types.Tenant{}).
-			Where("id = ?", tenantID).
-			Update("iframe_secret", "").Error
-	}
-	// Set: use Save so BeforeSave encrypts
-	var t types.Tenant
-	if err := r.db.WithContext(ctx).Where("id = ?", tenantID).First(&t).Error; err != nil {
-		return err
-	}
-	t.IframeSecret = plaintextSecret
-	return r.db.WithContext(ctx).Save(&t).Error
-}
-
 func (r *tenantRepository) AdjustStorageUsed(ctx context.Context, tenantID uint64, delta int64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var tenant types.Tenant
