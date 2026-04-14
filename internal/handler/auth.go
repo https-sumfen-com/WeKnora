@@ -695,7 +695,7 @@ func (h *AuthHandler) IframeLogin(c *gin.Context) {
 // iframeErrorStatus maps IframeErrorCode to HTTP status code.
 func iframeErrorStatus(code types.IframeErrorCode) int {
 	switch code {
-	case types.IframeErrParamsMissing, types.IframeErrMobileInvalid:
+	case types.IframeErrParamsMissing, types.IframeErrMobileInvalid, types.IframeErrRoleInvalid:
 		return http.StatusBadRequest
 	case types.IframeErrBadSignature, types.IframeErrReplay:
 		return http.StatusUnauthorized
