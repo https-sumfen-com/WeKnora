@@ -26,6 +26,9 @@ builtin_agents:
       agent_mode: "quick-answer"
       system_prompt_id: "default_kb"
       context_template_id: "default_context"
+      model_id: "builtin-llm-default"
+      rerank_model_id: "builtin-rerank-default"
+      thinking: true
       temperature: 0.7
       max_completion_tokens: 2048
       web_search_enabled: true
@@ -68,6 +71,9 @@ builtin_agents:
     config:
       agent_mode: "smart-reasoning"
       system_prompt: ""
+      model_id: "builtin-llm-default"
+      rerank_model_id: "builtin-rerank-default"
+      thinking: true
       temperature: 0.7
       max_completion_tokens: 2048
       max_iterations: 50
@@ -117,6 +123,9 @@ builtin_agents:
     config:
       agent_mode: "smart-reasoning"
       system_prompt_id: "data_analyst"
+      model_id: "builtin-llm-default"
+      rerank_model_id: "builtin-rerank-default"
+      thinking: true
       temperature: 0.3
       max_completion_tokens: 4096
       max_iterations: 30
