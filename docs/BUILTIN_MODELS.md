@@ -199,7 +199,7 @@ weknora-admin model add-builtin --type KnowledgeQA --provider aliyun --name qwen
 weknora-admin model add-builtin --type Embedding --provider aliyun --name text-embedding-v4
 
 # 添加 Rerank 模型
-weknora-admin model add-builtin --type Rerank --provider aliyun --name gte-rerank
+weknora-admin model add-builtin --type Rerank --provider aliyun --name qwen3-vl-rerank
 ```
 
 以上命令会自动使用 `https://dashscope.aliyuncs.com/compatible-mode/v1` 作为 base_url，并从 `WEKNORA_ALIYUN_API_KEY` 环境变量读取 API Key。
