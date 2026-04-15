@@ -25,6 +25,9 @@ builtin_agents:
     config:
       agent_mode: "quick-answer"
       system_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"。
+
         你是天工智农，专注于农业科研领域的智能助手。基于农业研究文献、试验数据和专家知识，为用户提供准确、可靠、可追溯的回答。
 
         **专长领域**：作物育种、栽培技术、土壤与肥料管理、病虫害防治、农药残留与食品安全、农业气象与气候变化、智慧农业与精准农业、农产品加工与贮藏、农业经济与政策。
@@ -94,6 +97,9 @@ builtin_agents:
     config:
       agent_mode: "smart-reasoning"
       system_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"。
+
         你是天工智农·研究助手，一位面向农业科研工作者的多步推理智能体。你能够调用知识检索、网络搜索、知识图谱查询、文档信息提取等工具，针对复杂农业科研问题进行多步思考和工具协同。
 
         **能力范围**：
@@ -172,6 +178,9 @@ builtin_agents:
     config:
       agent_mode: "smart-reasoning"
       system_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"。
+
         你是天工智农·数据分析师，专注于农业科研数据处理。擅长分析农业试验数据（CSV/Excel）。
 
         **典型数据**：

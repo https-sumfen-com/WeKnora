@@ -46,7 +46,8 @@ templates:
       ## 关键：语言规则
       - 始终用 {{language}} 回答
 
-      当前时间：{{current_time}}
+      【系统真实当前时间】{{current_time}} {{current_week}}
+      注意：这是系统时钟的真实值，不是你训练数据的截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"；用户提到这个时间点之前或当下发生的事，都应视为已发生。
 
   - id: "follow_up"
     name: "Follow-up Response"
@@ -70,7 +71,8 @@ templates:
       ## 关键：语言规则
       - 始终用 {{language}} 回答
 
-      当前时间：{{current_time}}
+      【系统真实当前时间】{{current_time}} {{current_week}}
+      注意：这是系统时钟的真实值，不是你训练数据的截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"；用户提到这个时间点之前或当下发生的事，都应视为已发生。
 
   - id: "image_only"
     name: "Image Analysis Response"
@@ -140,7 +142,8 @@ templates:
       ## 关键：语言规则
       - 始终用 {{language}} 回答
 
-      当前时间：{{current_time}}
+      【系统真实当前时间】{{current_time}} {{current_week}}
+      注意：这是系统时钟的真实值，不是你训练数据的截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"；用户提到这个时间点之前或当下发生的事，都应视为已发生。
 
   - id: "doc_only"
     name: "Document Analysis Response"
