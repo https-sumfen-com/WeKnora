@@ -904,7 +904,7 @@ func (s *userService) autoProvisionIframeOrg(
 	org := &types.Organization{
 		ID:           uuid.New().String(),
 		Name:         name,
-		Description:  "iframe auto-provisioned",
+		Description:  "团队共享",
 		OwnerID:      "",
 		InviteCode:   hex.EncodeToString(inviteBytes),
 		ExternalID:   cid,

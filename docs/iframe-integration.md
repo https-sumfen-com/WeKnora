@@ -170,25 +170,36 @@ const crypto = require('crypto');
 function deriveSecret(master, cid) {
   return crypto.createHmac('sha256', master).update(cid).digest('hex');
 }
+  /*
+    c_name  团队名称
+    cid     平台cid+用户体系+团队
+    mobile   账号手机号
+    role    'admin' | 'editor'
+
+ */
+
 
 function buildIframeUrl(baseUrl, cid, cName, mobile, role, secret) {
   const ts = Math.floor(Date.now() / 1000).toString();
   const nonce = crypto.randomBytes(16).toString('hex');
   // 字典序：c_name < cid < mobile < nonce < role < ts
+
   const msg = `c_name=${cName}&cid=${cid}&mobile=${mobile}&nonce=${nonce}&role=${role}&ts=${ts}`;
   const sig = crypto.createHmac('sha256', secret).update(msg).digest('hex');
   const qs = new URLSearchParams({ cid, c_name: cName, mobile, role, ts, nonce, sig });
   return `${baseUrl}/iframe-login?${qs.toString()}`;
 }
 
-// 模式 A
-const MASTER = process.env.WEKNORA_IFRAME_MASTER_SECRET;
-const cid = 'ACME-2024';
+// 示例
+const MASTER = 'bf09f51aeca6c93d3cbe5be3600e2aaf4317c94840aba9689';
+const cid = '1000-5025';
 const url = buildIframeUrl(
-  'https://weknora.example.com',
-  cid, 'ACME 公司', '13812345678', 'editor',
+  'http://localhost:5173',
+  cid, '作物数字化表型团队', '13812345679', 'admin',
   deriveSecret(MASTER, cid),
 );
+
+console.log(url);
 ```
 
 ### Go
