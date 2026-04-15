@@ -54,7 +54,7 @@ class ParserEngineRegistry:
         Falls back to builtin engine when the requested engine doesn't
         support the file type.
         """
-        ft = file_type.lower()
+        ft = file_type.lower().lstrip(".")
 
         if engine and engine in self._engines:
             cls = self._engines[engine].get(ft)

@@ -232,13 +232,22 @@ func (p *AttachmentProcessor) processWithDocumentReader(
 		return fmt.Errorf("DocumentReader not configured")
 	}
 
+	// docreader's parser registry keys are dotless ("xlsx", "docx"), so strip the
+	// leading dot before the gRPC call. The attachment's own FileType field keeps
+	// the dot for frontend display.
 	result, err := p.documentReader.Read(ctx, &types.ReadRequest{
 		FileContent: data,
 		FileName:    fileName,
-		FileType:    fileType,
+		FileType:    strings.TrimPrefix(fileType, "."),
 	})
 	if err != nil {
 		return fmt.Errorf("DocumentReader failed: %w", err)
+	}
+	// Python docreader catches parse exceptions and returns a success gRPC response
+	// with the message in result.Error and empty markdown_content. Surface it here
+	// so callers don't treat it as "extraction succeeded with empty content".
+	if result.Error != "" {
+		return fmt.Errorf("DocumentReader reported error: %s", result.Error)
 	}
 
 	// Resolve embedded image refs to storage URLs.

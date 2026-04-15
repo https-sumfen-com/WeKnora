@@ -177,6 +177,13 @@ func (s *sessionService) AgentQA(
 	if req.QuotedContext != "" {
 		agentQuery += "\n\n" + req.QuotedContext
 	}
+	// Inject document attachment content (xlsx/csv/txt/pdf/docx/...) into the agent's query.
+	// ReACT path has no INTO_CHAT_MESSAGE stage, so without this the agent never sees the
+	// extracted document content that attachment_processor.go produced.
+	if len(req.Attachments) > 0 {
+		agentQuery += req.Attachments.BuildPrompt()
+		logger.Infof(ctx, "Injected %d attachment(s) into agent query", len(req.Attachments))
+	}
 
 	// Execute agent with streaming (asynchronously)
 	// Events will be emitted to EventBus and handled by the Handler layer
