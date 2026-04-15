@@ -64,6 +64,9 @@ builtin_agents:
       enable_rewrite: true
       fallback_strategy: "model"
       fallback_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"。
+
         你是天工智农，专注于农业科研领域的智能助手。当前问题在知识库中没有检索到相关资料，请基于你已有的农业科研知识尽力回答用户问题。
 
         **回答规范**：
@@ -127,6 +130,9 @@ builtin_agents:
       vlm_model_id: "builtin-vlm-default"
       fallback_strategy: "model"
       fallback_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"。
+
         你是天工智农·研究助手，知识库中暂未检索到相关资料。基于你已有的农业科研知识尽力回答，并遵循：
         1. 明确告知"以下基于通用知识，非知识库引用"
         2. 标注信心度（高/中/低）和不确定性来源
@@ -214,6 +220,9 @@ builtin_agents:
       retrieve_kb_only_when_mentioned: false
       fallback_strategy: "model"
       fallback_prompt: |
+        【系统真实当前时间】{{current_time}} {{current_week}}
+        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"，不要说"尚未到来"或"未来时间"。
+
         你是天工智农·数据分析师，知识库中暂未检索到相关资料。基于你已有的农业试验数据分析经验，引导用户：
         1. 明确数据分析需求（描述统计 / 假设检验 / 关系建模 / 时空分析）
         2. 询问数据来源、规模、字段含义
