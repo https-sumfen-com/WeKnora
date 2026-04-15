@@ -41,8 +41,12 @@ onMounted(async () => {
   locale.value = 'zh-CN'
 
   const q = route.query
+  // URL exposes the external identifier as `company_id`; internally and in the
+  // HMAC canonical message we still call it `cid`. External integrators sign
+  // the canonical string with `cid=<company_id>` — the URL key is a display
+  // alias only.
   const params = {
-    cid: String(q.cid ?? ''),
+    cid: String(q.company_id ?? ''),
     c_name: String(q.c_name ?? ''),
     mobile: String(q.mobile ?? ''),
     ts: String(q.ts ?? ''),

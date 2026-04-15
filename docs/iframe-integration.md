@@ -83,7 +83,7 @@ Master 全局轮换：改 `.env` 的 `WEKNORA_IFRAME_MASTER_SECRET` → 重启 b
 URL 格式：
 ```
 https://weknora.example.com/iframe-login
-    ?cid=ACME-2024
+    ?company_id=ACME-2024
     &c_name=ACME 公司
     &mobile=13812345678
     &role=editor
@@ -94,9 +94,10 @@ https://weknora.example.com/iframe-login
 
 签名消息（字段按**字典序**升序拼接，值不做 URL 编码）：
 ```
-c_name={c_name}&cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}
+c_name={c_name}&cid={company_id}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}
 ```
-（`c_name` 排在 `cid` 前是因 ASCII 中 `_` (0x5F) < `i` (0x69)）
+- URL 上这个字段叫 `company_id`，签名 canonical message 里的 key 仍是 `cid`（两边指的是同一个值——组织业务标识）
+- `c_name` 排在 `cid` 前是因 ASCII 中 `_` (0x5F) < `i` (0x69)
 
 签名：
 ```
@@ -104,7 +105,7 @@ sig = hex( HMAC-SHA256(secret, message) )
 ```
 
 参数要求：
-- `cid` 必填，组织业务标识（稳定、大小写敏感）
+- `company_id` 必填，组织业务标识（稳定、大小写敏感）。**签名消息里这个字段仍写作 `cid=`，仅 URL 参数名叫 `company_id`。**
 - `c_name` 必填，共享空间（Organization）人类可读显示名——模式 A 自动 provision 时作为 `organizations.name` 存入；已存在的 org 以**数据库里的 name 为准**（不会被 URL 覆盖，如需改名走 WeKnora 前端或 CLI）
 - `mobile` 必须是中国大陆 11 位手机号，正则 `^1[3-9][0-9]{9}$`
 - `role` 必填，取值 `admin` / `editor` / `viewer`，决定 user 加入 organization 时的权限。父系统为 URL 源头，每次登录 WeKnora 会同步更新用户在该 org 的角色
@@ -139,8 +140,9 @@ def build_iframe_url(base_url: str, cid: str, c_name: str, mobile: str, role: st
     msg = f"c_name={c_name}&cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}"
     sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
     # URL 上值需要 URL 编码（c_name 可能有中文/空格）
+    # 注意：URL 查询参数名是 company_id，但签名消息里仍用 cid=
     return (
-        f"{base_url}/iframe-login?cid={quote(cid)}&c_name={quote(c_name)}"
+        f"{base_url}/iframe-login?company_id={quote(cid)}&c_name={quote(c_name)}"
         f"&mobile={mobile}&role={role}&ts={ts}&nonce={nonce}&sig={sig}"
     )
 
@@ -186,16 +188,17 @@ function buildIframeUrl(baseUrl, cid, cName, mobile, role, secret) {
 
   const msg = `c_name=${cName}&cid=${cid}&mobile=${mobile}&nonce=${nonce}&role=${role}&ts=${ts}`;
   const sig = crypto.createHmac('sha256', secret).update(msg).digest('hex');
-  const qs = new URLSearchParams({ cid, c_name: cName, mobile, role, ts, nonce, sig });
+  // URL 查询参数名是 company_id，签名消息里仍用 cid=
+  const qs = new URLSearchParams({ company_id: cid, c_name: cName, mobile, role, ts, nonce, sig });
   return `${baseUrl}/iframe-login?${qs.toString()}`;
 }
 
 // 示例
 const MASTER = 'bf09f51aeca6c93d3cbe5be3600e2aaf4317c94840aba9689';
-const cid = '1000-5025-40';
+const cid = '1000-158-1';
 const url = buildIframeUrl(
   'http://localhost:5173',
-  cid, '作物数字化表型团队2', '13812345679', 'admin',
+  cid, '甜菜团队', '13726214776', 'admin',
   deriveSecret(MASTER, cid),
 );
 
@@ -238,7 +241,8 @@ func BuildIframeURL(baseURL, cid, cName, mobile, role, secret string) string {
     h.Write([]byte(msg))
     sig := hex.EncodeToString(h.Sum(nil))
     q := url.Values{}
-    q.Set("cid", cid); q.Set("c_name", cName); q.Set("mobile", mobile)
+    // URL 查询参数名是 company_id，签名消息里仍用 cid=
+    q.Set("company_id", cid); q.Set("c_name", cName); q.Set("mobile", mobile)
     q.Set("role", role); q.Set("ts", ts); q.Set("nonce", nonce); q.Set("sig", sig)
     return baseURL + "/iframe-login?" + q.Encode()
 }
