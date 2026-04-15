@@ -148,6 +148,13 @@ func modelAddBuiltin(args []string) error {
 			return fmt.Errorf("--base-url required for unknown provider %q", *provider)
 		}
 		effectiveBaseURL = preset.baseURL
+		// Aliyun DashScope Rerank does NOT go through the OpenAI-compatible
+		// endpoint (compatible-mode/v1 returns 404 for rerank calls). Use the
+		// native DashScope rerank API instead. Override only when the preset
+		// pointed at compatible-mode.
+		if mType == types.ModelTypeRerank && strings.ToLower(*provider) == "aliyun" {
+			effectiveBaseURL = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+		}
 	}
 	effectiveKey := *apiKey
 	if effectiveKey == "" {
