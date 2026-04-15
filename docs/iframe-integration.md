@@ -9,10 +9,26 @@ WeKnora 的 iframe 嵌入走 HMAC 签名 URL 免登流程：
 - 每个 `(cid, mobile)` 会创建一个独立的 **Tenant**（个人工作空间）
 - 用户通过 OrganizationMember 加入 org，角色由 URL 的 `role` 参数决定
 - 同一 org 下的成员可以通过原生"共享空间"能力共享知识库和智能体（由管理员在 WeKnora 前端配置）
-- 每个 `cid` 独立持有一把 HMAC secret，外部系统用它给 URL 签名
-- 同一 `cid` 下的用户数据完全隔离，不同 `cid` 之间无法互相访问
-- WeKnora 按 `(cid, mobile)` 查找用户，不存在时自动创建占位用户并签发 JWT
+- 同一 org 下用户数据按**个人 tenant** 隔离（不同 mobile 互相看不到对话/知识库）
+- 跨 org（不同 cid）之间数据完全隔离
+- WeKnora 按 `(cid, mobile)` 查找用户，不存在时自动创建个人 tenant + 用户 + OrganizationMember
 - 同一 iframe URL 只能消费一次（nonce 防重放）
+
+## 运行模式（两选一）
+
+**模式 A · master secret 自动 provision（推荐，适合外部系统动态生成 cid 的场景）**
+- 在 WeKnora 部署 `.env` 设 `WEKNORA_IFRAME_MASTER_SECRET=<hex 64>`
+- 外部系统用**同一把** master 派生 per-cid secret：`derived = HMAC-SHA256(master, cid)`
+- 用 `derived` 签 URL 消息
+- 未知 cid 首次访问时 WeKnora 用同公式重算 `derived` 验签，通过后**自动创建** org
+- 无需运维手动 provision，cid 可实时生成
+
+**模式 B · 每 cid 独立 secret（更严格的安全边界，适合 cid 数量少且可预知）**
+- 运维为每个 cid 执行 `weknora-admin iframe provision --cid X --name Y` 获取独立 secret
+- 外部系统为每个 cid 存对应 secret
+- 单 cid 泄漏不影响其他 cid；可单独 rotate
+
+两种模式可共存：已 provision 的 org 用自己的 stored secret，未 provision 的走 master 派生。
 
 ## 1. 前置步骤（运维，在 WeKnora 部署机上执行）
 
