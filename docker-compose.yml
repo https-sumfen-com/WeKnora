@@ -16,6 +16,9 @@ services:
       # For remote deployment, set this to the remote App's service port.
       - APP_PORT=${APP_BACKEND_PORT:-8080}
       - APP_SCHEME=${APP_SCHEME:-http}
+      # iframe 嵌入白名单：和 Go 后端 FrameAncestors 中间件共用同一个 env。
+      # 留空 = 任意父域可嵌入；非空（空格分隔多个）= 只允许列出的父域。
+      - WEKNORA_FRAME_ANCESTORS=${WEKNORA_FRAME_ANCESTORS:-}
     # NOTE: If using a remote App backend, comment out or remove the depends_on
     # block below and set APP_HOST/APP_BACKEND_PORT/APP_SCHEME in your .env file.
     depends_on:
