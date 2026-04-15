@@ -192,10 +192,10 @@ function buildIframeUrl(baseUrl, cid, cName, mobile, role, secret) {
 
 // 示例
 const MASTER = 'bf09f51aeca6c93d3cbe5be3600e2aaf4317c94840aba9689';
-const cid = '1000-5025';
+const cid = '1000-5025-40';
 const url = buildIframeUrl(
   'http://localhost:5173',
-  cid, '作物数字化表型团队', '13812345679', 'admin',
+  cid, '作物数字化表型团队2', '13812345679', 'admin',
   deriveSecret(MASTER, cid),
 );
 
