@@ -43,13 +43,14 @@ onMounted(async () => {
   const q = route.query
   const params = {
     cid: String(q.cid ?? ''),
+    c_name: String(q.c_name ?? ''),
     mobile: String(q.mobile ?? ''),
     ts: String(q.ts ?? ''),
     nonce: String(q.nonce ?? ''),
     role: String(q.role ?? ''),
     sig: String(q.sig ?? ''),
   }
-  if (!params.cid || !params.mobile || !params.ts || !params.nonce || !params.role || !params.sig) {
+  if (!params.cid || !params.c_name || !params.mobile || !params.ts || !params.nonce || !params.role || !params.sig) {
     errorMsg.value = errorMap.IFRAME_PARAMS_MISSING
     loading.value = false
     return

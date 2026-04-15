@@ -301,6 +301,7 @@ export async function validateToken(): Promise<{ success: boolean; valid?: boole
 
 export interface IframeLoginParams {
   cid: string
+  c_name: string
   mobile: string
   ts: string
   nonce: string

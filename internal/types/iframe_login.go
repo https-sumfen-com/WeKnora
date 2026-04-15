@@ -3,6 +3,7 @@ package types
 // IframeLoginRequest carries HMAC-signed parameters from an embedding parent system.
 type IframeLoginRequest struct {
 	CID    string `json:"cid"    binding:"required"`
+	CName  string `json:"c_name" binding:"required"`
 	Mobile string `json:"mobile" binding:"required"`
 	TS     string `json:"ts"     binding:"required"`
 	Nonce  string `json:"nonce"  binding:"required"`

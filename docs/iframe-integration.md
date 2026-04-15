@@ -84,6 +84,7 @@ URL 格式：
 ```
 https://weknora.example.com/iframe-login
     ?cid=ACME-2024
+    &c_name=ACME 公司
     &mobile=13812345678
     &role=editor
     &ts=<unix 时间戳>
@@ -93,8 +94,9 @@ https://weknora.example.com/iframe-login
 
 签名消息（字段按**字典序**升序拼接，值不做 URL 编码）：
 ```
-cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}
+c_name={c_name}&cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}
 ```
+（`c_name` 排在 `cid` 前是因 ASCII 中 `_` (0x5F) < `i` (0x69)）
 
 签名：
 ```
@@ -102,6 +104,8 @@ sig = hex( HMAC-SHA256(secret, message) )
 ```
 
 参数要求：
+- `cid` 必填，组织业务标识（稳定、大小写敏感）
+- `c_name` 必填，共享空间（Organization）人类可读显示名——模式 A 自动 provision 时作为 `organizations.name` 存入；已存在的 org 以**数据库里的 name 为准**（不会被 URL 覆盖，如需改名走 WeKnora 前端或 CLI）
 - `mobile` 必须是中国大陆 11 位手机号，正则 `^1[3-9][0-9]{9}$`
 - `role` 必填，取值 `admin` / `editor` / `viewer`，决定 user 加入 organization 时的权限。父系统为 URL 源头，每次登录 WeKnora 会同步更新用户在该 org 的角色
 - `ts` 必须是整数字符串（Unix 秒时间戳）
@@ -121,19 +125,23 @@ sig = hex( HMAC-SHA256(secret, message) )
 ```python
 import hmac, hashlib, time, secrets
 
+from urllib.parse import quote
+
 def derive_secret(master: str, cid: str) -> str:
     """模式 A 用：master secret 派生 per-cid secret。与 WeKnora 后端公式一致。"""
     return hmac.new(master.encode(), cid.encode(), hashlib.sha256).hexdigest()
 
-def build_iframe_url(base_url: str, cid: str, mobile: str, role: str, secret: str) -> str:
+def build_iframe_url(base_url: str, cid: str, c_name: str, mobile: str, role: str, secret: str) -> str:
     """secret 可以是 master 派生的 derived（模式 A）或 provision 得到的 per-cid secret（模式 B）。"""
     ts = str(int(time.time()))
     nonce = secrets.token_hex(16)
-    msg = f"cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}"
+    # 字典序：c_name < cid < mobile < nonce < role < ts（_ < i in ASCII）
+    msg = f"c_name={c_name}&cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}"
     sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    # URL 上值需要 URL 编码（c_name 可能有中文/空格）
     return (
-        f"{base_url}/iframe-login?cid={cid}&mobile={mobile}"
-        f"&role={role}&ts={ts}&nonce={nonce}&sig={sig}"
+        f"{base_url}/iframe-login?cid={quote(cid)}&c_name={quote(c_name)}"
+        f"&mobile={mobile}&role={role}&ts={ts}&nonce={nonce}&sig={sig}"
     )
 
 # 模式 A 用法（推荐）：外部系统只存 master 一把 key
@@ -141,14 +149,14 @@ MASTER = "<WEKNORA_IFRAME_MASTER_SECRET 同一值>"
 cid = "ACME-2024"
 url = build_iframe_url(
     "https://weknora.example.com",
-    cid, "13812345678", "editor",
+    cid, "ACME 公司", "13812345678", "editor",
     derive_secret(MASTER, cid),
 )
 
 # 模式 B 用法：外部系统持有 per-cid secret
 url = build_iframe_url(
     "https://weknora.example.com",
-    "ACME-2024", "13812345678", "editor",
+    "ACME-2024", "ACME 公司", "13812345678", "editor",
     "<64-char secret from weknora-admin provision>",
 )
 # 在外部系统模板里：<iframe :src="url" ...>
@@ -163,12 +171,14 @@ function deriveSecret(master, cid) {
   return crypto.createHmac('sha256', master).update(cid).digest('hex');
 }
 
-function buildIframeUrl(baseUrl, cid, mobile, role, secret) {
+function buildIframeUrl(baseUrl, cid, cName, mobile, role, secret) {
   const ts = Math.floor(Date.now() / 1000).toString();
   const nonce = crypto.randomBytes(16).toString('hex');
-  const msg = `cid=${cid}&mobile=${mobile}&nonce=${nonce}&role=${role}&ts=${ts}`;
+  // 字典序：c_name < cid < mobile < nonce < role < ts
+  const msg = `c_name=${cName}&cid=${cid}&mobile=${mobile}&nonce=${nonce}&role=${role}&ts=${ts}`;
   const sig = crypto.createHmac('sha256', secret).update(msg).digest('hex');
-  return `${baseUrl}/iframe-login?cid=${cid}&mobile=${mobile}&role=${role}&ts=${ts}&nonce=${nonce}&sig=${sig}`;
+  const qs = new URLSearchParams({ cid, c_name: cName, mobile, role, ts, nonce, sig });
+  return `${baseUrl}/iframe-login?${qs.toString()}`;
 }
 
 // 模式 A
@@ -176,7 +186,7 @@ const MASTER = process.env.WEKNORA_IFRAME_MASTER_SECRET;
 const cid = 'ACME-2024';
 const url = buildIframeUrl(
   'https://weknora.example.com',
-  cid, '13812345678', 'editor',
+  cid, 'ACME 公司', '13812345678', 'editor',
   deriveSecret(MASTER, cid),
 );
 ```
@@ -195,6 +205,8 @@ import (
     "time"
 )
 
+import "net/url"
+
 // DeriveSecret 模式 A 用：master 派生 per-cid secret。
 func DeriveSecret(master, cid string) string {
     h := hmac.New(sha256.New, []byte(master))
@@ -203,17 +215,21 @@ func DeriveSecret(master, cid string) string {
 }
 
 // BuildIframeURL 的 secret 参数可以是派生值（模式 A）或 provision 得到的值（模式 B）。
-func BuildIframeURL(baseURL, cid, mobile, role, secret string) string {
+func BuildIframeURL(baseURL, cid, cName, mobile, role, secret string) string {
     ts := fmt.Sprintf("%d", time.Now().Unix())
     nonceBytes := make([]byte, 16)
     _, _ = rand.Read(nonceBytes)
     nonce := hex.EncodeToString(nonceBytes)
-    msg := "cid=" + cid + "&mobile=" + mobile + "&nonce=" + nonce + "&role=" + role + "&ts=" + ts
+    // 字典序：c_name < cid < mobile < nonce < role < ts
+    msg := "c_name=" + cName + "&cid=" + cid + "&mobile=" + mobile +
+        "&nonce=" + nonce + "&role=" + role + "&ts=" + ts
     h := hmac.New(sha256.New, []byte(secret))
     h.Write([]byte(msg))
     sig := hex.EncodeToString(h.Sum(nil))
-    return fmt.Sprintf("%s/iframe-login?cid=%s&mobile=%s&role=%s&ts=%s&nonce=%s&sig=%s",
-        baseURL, cid, mobile, role, ts, nonce, sig)
+    q := url.Values{}
+    q.Set("cid", cid); q.Set("c_name", cName); q.Set("mobile", mobile)
+    q.Set("role", role); q.Set("ts", ts); q.Set("nonce", nonce); q.Set("sig", sig)
+    return baseURL + "/iframe-login?" + q.Encode()
 }
 ```
 

@@ -889,16 +889,21 @@ func deriveIframeSecret(master, cid string) string {
 // when iframe-login was called, after master-secret signature verification has
 // already passed. The org's iframe_secret is the derived per-cid secret so
 // future requests can use the normal stored-secret verification path.
+// The human-readable display name comes from the URL's c_name parameter.
 func (s *userService) autoProvisionIframeOrg(
-	ctx context.Context, cid, derivedSecret string,
+	ctx context.Context, cid, cName, derivedSecret string,
 ) (*types.Organization, error) {
 	inviteBytes := make([]byte, 16)
 	if _, err := rand.Read(inviteBytes); err != nil {
 		return nil, fmt.Errorf("generate invite code: %w", err)
 	}
+	name := strings.TrimSpace(cName)
+	if name == "" {
+		name = cid // defensive; request binding already rejects empty c_name
+	}
 	org := &types.Organization{
 		ID:           uuid.New().String(),
-		Name:         cid,
+		Name:         name,
 		Description:  "iframe auto-provisioned",
 		OwnerID:      "",
 		InviteCode:   hex.EncodeToString(inviteBytes),
@@ -936,7 +941,7 @@ func (s *userService) IframeLogin(
 	logger.Info(ctx, "Start iframe login")
 
 	// 1. Presence + shape validation
-	if req.CID == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" || req.Role == "" {
+	if req.CID == "" || req.CName == "" || req.Mobile == "" || req.TS == "" || req.Nonce == "" || req.Sig == "" || req.Role == "" {
 		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "required parameter missing")
 	}
 	if !iframeMobileRegexp.MatchString(req.Mobile) {
@@ -965,10 +970,10 @@ func (s *userService) IframeLogin(
 				return nil, types.NewIframeLoginError(types.IframeErrTenantNotFound, "organization not found")
 			}
 			derived := deriveIframeSecret(master, req.CID)
-			if !VerifyIframeSignature(derived, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
+			if !VerifyIframeSignature(derived, req.CID, req.CName, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
 				return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
 			}
-			org, err = s.autoProvisionIframeOrg(ctx, req.CID, derived)
+			org, err = s.autoProvisionIframeOrg(ctx, req.CID, req.CName, derived)
 			if err != nil {
 				logger.Errorf(ctx, "iframe_login auto-provision failed: %v", err)
 				return nil, types.NewIframeLoginError(types.IframeErrInternal, "auto-provision failed")
@@ -991,7 +996,7 @@ func (s *userService) IframeLogin(
 	// mutated org.IframeSecret to the encrypted value, and we already verified
 	// against the plaintext derived secret inside the auto-provision branch).
 	if !autoProvisioned {
-		if !VerifyIframeSignature(org.IframeSecret, req.CID, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
+		if !VerifyIframeSignature(org.IframeSecret, req.CID, req.CName, req.Mobile, req.TS, req.Nonce, req.Role, req.Sig) {
 			return nil, types.NewIframeLoginError(types.IframeErrBadSignature, "signature verification failed")
 		}
 	}

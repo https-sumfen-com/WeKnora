@@ -12,12 +12,18 @@ import (
 //
 // The canonical message format is:
 //
-//	"cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}"
+//	"c_name={c_name}&cid={cid}&mobile={mobile}&nonce={nonce}&role={role}&ts={ts}"
 //
-// (fields sorted by key ascending: cid < mobile < nonce < role < ts).
+// Fields are sorted by key ASCII-ascending order: '_' (0x5F) < 'i' (0x69),
+// so `c_name` sorts before `cid`.
 // External integrators produce the same string to generate a URL signature.
-func SignIframeMessage(secret, cid, mobile, ts, nonce, role string) string {
-	msg := "cid=" + cid + "&mobile=" + mobile + "&nonce=" + nonce + "&role=" + role + "&ts=" + ts
+func SignIframeMessage(secret, cid, cName, mobile, ts, nonce, role string) string {
+	msg := "c_name=" + cName +
+		"&cid=" + cid +
+		"&mobile=" + mobile +
+		"&nonce=" + nonce +
+		"&role=" + role +
+		"&ts=" + ts
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(msg))
 	return hex.EncodeToString(m.Sum(nil))
@@ -25,8 +31,8 @@ func SignIframeMessage(secret, cid, mobile, ts, nonce, role string) string {
 
 // VerifyIframeSignature performs constant-time comparison of the expected and provided
 // signatures. Returns false on any decoding error, length mismatch, or hmac mismatch.
-func VerifyIframeSignature(secret, cid, mobile, ts, nonce, role, providedSig string) bool {
-	expected := SignIframeMessage(secret, cid, mobile, ts, nonce, role)
+func VerifyIframeSignature(secret, cid, cName, mobile, ts, nonce, role, providedSig string) bool {
+	expected := SignIframeMessage(secret, cid, cName, mobile, ts, nonce, role)
 	if len(expected) != len(providedSig) {
 		return false
 	}
