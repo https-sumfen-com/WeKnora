@@ -202,6 +202,20 @@ weknora-admin model add-builtin --type Embedding --provider aliyun --name text-e
 weknora-admin model add-builtin --type Rerank --provider aliyun --name qwen3-vl-rerank
 ```
 
+> **关于 Rerank 的 base_url**
+>
+> 阿里云 DashScope 的 OpenAI 兼容接口（`compatible-mode/v1`）**不支持 rerank**——
+> chat / embedding 走 compatible-mode，但 rerank 必须使用原生 DashScope 端点：
+>
+> ```
+> https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+> ```
+>
+> CLI 里 `--type Rerank --provider aliyun` 已自动选用此 URL，无需手动 `--base-url`。
+> 若手动用 SQL INSERT 创建 rerank 模型，**parameters.base_url 必须写完整这条**，
+> 否则模型调用返回 404 → rerank 输出空 → pipeline 触发 search_nothing fallback →
+> agent 回答 "知识库中暂未收录该内容"。
+
 以上命令会自动使用 `https://dashscope.aliyuncs.com/compatible-mode/v1` 作为 base_url，并从 `WEKNORA_ALIYUN_API_KEY` 环境变量读取 API Key。
 
 ### 常用子命令
