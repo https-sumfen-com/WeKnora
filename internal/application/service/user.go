@@ -1142,6 +1142,10 @@ func (s *userService) maybeCreateDefaultSharedKB(
 		StorageProviderConfig: &types.StorageProviderConfig{
 			Provider: "local",
 		},
+		QuestionGenerationConfig: &types.QuestionGenerationConfig{
+			Enabled:       true,
+			QuestionCount: 3,
+		},
 	}
 	created, err := s.knowledgeBaseService.CreateKnowledgeBase(kbCtx, kb)
 	if err != nil {
