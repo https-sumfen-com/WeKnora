@@ -12,7 +12,7 @@ WeKnora 的 iframe 嵌入走 HMAC 签名 URL 免登流程：
 - 同一 org 下用户数据按**个人 tenant** 隔离（不同 mobile 互相看不到对话/知识库）
 - 跨 org（不同 cid）之间数据完全隔离
 - WeKnora 按 `(cid, mobile)` 查找用户，不存在时自动创建个人 tenant + 用户 + OrganizationMember
-- 同一 iframe URL 只能消费一次（nonce 防重放）
+- `nonce` 仍是签名 canonical message 的一部分（不可省略），但**后端不再强制一次性消费**——同一 URL 可被重复加载（父系统刷新/后退/多 tab 场景）
 
 ## 运行模式（两选一）
 
@@ -110,10 +110,10 @@ sig = hex( HMAC-SHA256(secret, message) )
 - `mobile` 必须是中国大陆 11 位手机号，正则 `^1[3-9][0-9]{9}$`
 - `role` 必填，取值 `admin` / `editor` / `viewer`，决定 user 加入 organization 时的权限。父系统为 URL 源头，每次登录 WeKnora 会同步更新用户在该 org 的角色
 - `ts` 必须是整数字符串（Unix 秒时间戳）
-- `nonce` 任意字符串，建议 16-32 字符 hex 或 base62 随机值
+- `nonce` 任意字符串，建议 16-32 字符 hex 或 base62 随机值。**WeKnora 不校验 nonce 一次性**：同一 URL 可被重复加载（父系统刷新/后退/多 tab）；nonce 的作用是让同一组 `(cid, c_name, mobile, ts, role)` 能产生不同签名，便于外部系统自行做回放审计
 - `sig` 必须是 hex 编码的 64 字符（对应 32 字节 HMAC-SHA256 输出）
 
-注意：**ts 不做新鲜度校验**——WeKnora 不拒绝"旧时间戳"的 URL。防重放完全依赖 nonce 一次性消费。
+注意：**ts 与 nonce 都不做后端强校验**——WeKnora 不拒绝"旧时间戳"或"重复 nonce"的 URL，防护完全依赖 HMAC 签名的有效性 + secret 保密性。若父系统有会话生命周期控制需求，应由父系统侧在发 URL 前做时效/单次限制。
 
 ## 3. 参考实现
 
@@ -266,7 +266,6 @@ func BuildIframeURL(baseURL, cid, cName, mobile, role, secret string) string {
 | 400 | `IFRAME_MOBILE_INVALID` | 手机号须为中国大陆 11 位，正则 `^1[3-9][0-9]{9}$` |
 | 400 | `IFRAME_ROLE_INVALID` | role 必须是 admin / editor / viewer |
 | 401 | `IFRAME_BAD_SIGNATURE` | secret 不对、签名拼接顺序错误，或 message 做了 URL 编码 |
-| 401 | `IFRAME_REPLAY` | 同一 URL 不可复用——父系统每次渲染 iframe 都要重新生成 nonce |
 | 403 | `IFRAME_USER_DISABLED` | 用户被管理员禁用，联系 WeKnora 管理员 |
 | 403 | `IFRAME_NOT_ENABLED` | 对应 cid 已 revoke（org 行存在但 secret 清空）。即使配置了 master secret 也不会自动重建，运维需 `iframe rotate` 或删 org |
 | 404 | `IFRAME_TENANT_NOT_FOUND` | cid 未开通。若用模式 A：检查 `WEKNORA_IFRAME_MASTER_SECRET` 是否配置、签名是否用正确的 derived secret。若用模式 B：运维执行 `weknora-admin iframe provision` |
@@ -307,18 +306,17 @@ Content-Security-Policy: frame-ancestors https://parent.example.com https://anot
 
 - **secret 长度固定 64 hex 字符**（32 字节）：`openssl rand -hex 32` 生成
 - 严禁在外部系统前端 JS / HTML 中持有 secret / master——只应在后端服务器上签 URL
-- 父系统应**每次渲染 iframe 时生成新的 nonce**，同一 URL 不支持复用
+- 同一 URL 可被重复加载（后端不强制 nonce 一次性）；若业务需要限制链接寿命或单次使用，须在父系统侧控制（比如短 TTL、登录后跳转到无 token 的内部路由）
 - 单 cid 怀疑泄漏：`weknora-admin iframe rotate --cid X`——无需重启 WeKnora
 - **Master secret 泄漏 = 所有 cid 失守**，是模式 A 的固有风险。缓解：强随机生成、严格限制只部署机 .env + 外部系统 secret manager 持有；定期轮换（轮换需协调所有外部系统同步更新）
 - 数据库里 `organizations.iframe_secret` 是 AES-256-GCM 加密存储的，即使 DB 泄漏 secret 也不会裸露（前提是 `SYSTEM_AES_KEY` 未泄漏）
-- iframe URL 会出现在浏览器历史、访问日志、Referer 里——风险靠 "nonce 一次性" 缓解，不靠 URL 机密性
+- iframe URL 会出现在浏览器历史、访问日志、Referer 里——由于后端不做 nonce 一次性，任何拿到完整 URL 的人都能以该 mobile 身份免登。**父系统发 URL 后应尽快跳转到无敏感参数的内部路由，避免 URL 被记录/转发**
 
 ## 9. 故障排查
 
 | 现象 | 排查点 |
 |---|---|
 | 401 IFRAME_BAD_SIGNATURE，但 secret 确认没错 | 检查签名消息字典序是否正确（`cid < mobile < nonce < role < ts`）；检查字段值是否做了 URL 编码后再签（应该原样） |
-| 401 IFRAME_REPLAY，第一次就失败 | 父系统是否把同一 URL 复用（模板缓存、iframe reload 等）；给每次渲染都生成新 nonce |
 | 403 IFRAME_NOT_ENABLED | org 已 revoke；运维 `iframe rotate` 恢复，或从数据库删除该 org 行以允许自动重建 |
 | 404 IFRAME_TENANT_NOT_FOUND | **模式 A**：master env 未设置或 master 值不一致；检查外部系统派生公式 `HMAC(master, cid)` 是否和后端同一把 master。**模式 B**：cid 未 provision 或拼错（大小写敏感） |
 | iframe 里完全白屏 | 打开浏览器 devtools → Console 看有无 CSP `frame-ancestors` 阻塞信息；Network 看 `/api/v1/auth/iframe-login` 响应是什么 |

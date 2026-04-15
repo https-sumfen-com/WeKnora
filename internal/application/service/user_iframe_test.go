@@ -117,7 +117,11 @@ func TestIframeLogin_HappyPath_CreatesUser(t *testing.T) {
 	}
 }
 
-func TestIframeLogin_Replay(t *testing.T) {
+// Nonce single-use enforcement was removed on purpose: the parent frame may
+// reload the iframe (refresh, back button, multi-tab) and we don't want to
+// force regenerating the URL each time. Signature + HMAC still authenticate
+// the request. This test pins that the same nonce may be replayed.
+func TestIframeLogin_NonceReplayAllowed(t *testing.T) {
 	svc, db := newIframeTestService(t)
 	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
@@ -130,15 +134,11 @@ func TestIframeLogin_Replay(t *testing.T) {
 	}
 	req.Sig = SignIframeMessage("secret1", req.CID, req.CName, req.Mobile, req.TS, req.Nonce, req.Role)
 
-	// First call succeeds.
 	if _, err := svc.IframeLogin(context.Background(), req); err != nil {
 		t.Fatalf("first call should succeed, got: %v", err)
 	}
-	// Second call with same nonce → replay error.
-	_, err := svc.IframeLogin(context.Background(), req)
-	ilErr, ok := err.(*types.IframeLoginError)
-	if !ok || ilErr.Code != types.IframeErrReplay {
-		t.Fatalf("expected IFRAME_REPLAY, got %v", err)
+	if _, err := svc.IframeLogin(context.Background(), req); err != nil {
+		t.Fatalf("second call with same nonce should succeed (replay disabled), got: %v", err)
 	}
 }
 

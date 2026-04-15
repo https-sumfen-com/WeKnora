@@ -953,8 +953,7 @@ func (s *userService) IframeLogin(
 	if !iframeMobileRegexp.MatchString(req.Mobile) {
 		return nil, types.NewIframeLoginError(types.IframeErrMobileInvalid, "invalid mobile format")
 	}
-	tsInt, err := strconv.ParseInt(req.TS, 10, 64)
-	if err != nil {
+	if _, err := strconv.ParseInt(req.TS, 10, 64); err != nil {
 		return nil, types.NewIframeLoginError(types.IframeErrParamsMissing, "ts must be an integer unix timestamp")
 	}
 	role, ok := normalizeIframeRole(req.Role)
@@ -1007,20 +1006,11 @@ func (s *userService) IframeLogin(
 		}
 	}
 
-	// 4. Nonce consume (scoped to organization)
-	inserted, err := s.iframeNonceRepo.Consume(ctx, &types.IframeNonce{
-		OrganizationID: org.ID,
-		Nonce:          req.Nonce,
-		TS:             tsInt,
-		ConsumedAt:     time.Now(),
-	})
-	if err != nil {
-		logger.Errorf(ctx, "iframe_login nonce consume failed: %v", err)
-		return nil, types.NewIframeLoginError(types.IframeErrInternal, "nonce persistence failed")
-	}
-	if !inserted {
-		return nil, types.NewIframeLoginError(types.IframeErrReplay, "nonce already consumed")
-	}
+	// 4. Nonce replay check intentionally disabled — the same iframe URL may be
+	// loaded multiple times (e.g. parent-frame refresh / browser back / multi-tab)
+	// and we don't want to force the parent system to regenerate the URL every
+	// time. Signature + HMAC still authenticates the request; the nonce value
+	// remains part of the signed canonical message but is no longer consumed.
 
 	// 5. Find user via OrganizationMember JOIN
 	user, member, err := s.findIframeUser(ctx, org.ID, req.Mobile)
