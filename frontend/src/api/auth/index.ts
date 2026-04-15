@@ -82,6 +82,7 @@ export interface UserInfo {
   id: string
   username: string
   email: string
+  mobile?: string
   avatar?: string
   tenant_id: string
   can_access_all_tenants?: boolean

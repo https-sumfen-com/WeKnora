@@ -118,6 +118,7 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, logout as logoutApi } from '@/api/auth'
 import { useI18n } from 'vue-i18n'
 import { useEmbedded } from '@/composables/useEmbedded'
+import { displayUsername } from '@/utils/displayUsername'
 
 const { t } = useI18n()
 const { embedded } = useEmbedded()
@@ -136,7 +137,15 @@ const userInfo = ref({
   avatar: ''
 })
 
-const userName = computed(() => userInfo.value.username)
+// iframe-auto-provisioned users have machine-generated usernames like
+// `iframe_<orgUUID>_<mobile>`. Render them as `<cName>_<mobile>` using the
+// tenant name as the source of c_name. Regular users pass through unchanged.
+const userName = computed(() =>
+  displayUsername(
+    { username: userInfo.value.username, mobile: authStore.user?.mobile },
+    { name: authStore.tenant?.name },
+  ) || userInfo.value.username,
+)
 const userEmail = computed(() => userInfo.value.email)
 const userAvatar = computed(() => userInfo.value.avatar)
 
