@@ -180,12 +180,12 @@
           <p class="desc">{{ $t('tenant.api.usernameDescription') }}</p>
         </div>
         <div class="setting-control">
-          <span class="info-value">{{ userInfo?.username || '-' }}</span>
+          <span class="info-value">{{ displayUsername(userInfo, { tenant: tenantInfo }) || '-' }}</span>
         </div>
       </div>
 
-      <!-- Email -->
-      <div class="setting-row">
+      <!-- Email (hidden for iframe-auto-provisioned users since their email is a synthetic placeholder) -->
+      <div v-if="!userInfo?.email?.endsWith('@iframe.invalid')" class="setting-row">
         <div class="setting-info">
           <label>{{ $t('tenant.api.emailLabel') }}</label>
           <p class="desc">{{ $t('tenant.api.emailDescription') }}</p>
@@ -217,6 +217,7 @@ import { getApiBaseUrl } from '@/utils/api-base'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useEmbedded } from '@/composables/useEmbedded'
+import { displayUsername } from '@/utils/displayUsername'
 
 const { t, locale } = useI18n()
 const { embedded } = useEmbedded()

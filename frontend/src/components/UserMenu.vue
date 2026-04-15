@@ -143,7 +143,7 @@ const userInfo = ref({
 const userName = computed(() =>
   displayUsername(
     { username: userInfo.value.username, mobile: authStore.user?.mobile },
-    { name: authStore.tenant?.name },
+    { tenant: { name: authStore.tenant?.name } },
   ) || userInfo.value.username,
 )
 const userEmail = computed(() => userInfo.value.email)

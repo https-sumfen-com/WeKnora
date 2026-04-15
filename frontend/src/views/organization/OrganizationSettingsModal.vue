@@ -362,10 +362,10 @@
                           </div>
                           <div class="member-info">
                             <span class="member-name">
-                              {{ member.username }}
+                              {{ displayUsername(member, { orgName: orgInfo?.name }) }}
                               <span v-if="member.user_id === authStore.currentUserId" class="me-tag">{{ $t('common.me') }}</span>
                             </span>
-                            <span class="member-email">{{ member.email }}</span>
+                            <span v-if="!member.email?.endsWith('@iframe.invalid')" class="member-email">{{ member.email }}</span>
                           </div>
                           <div class="member-role">
                             <t-select
@@ -426,7 +426,7 @@
                             </div>
                             <div class="request-info">
                               <span class="request-name">
-                                {{ req.username || req.email || req.user_id }}
+                                {{ displayUsername(req, { orgName: orgInfo?.name }) || req.email || req.user_id }}
                                 <t-tag 
                                   v-if="req.request_type === 'upgrade'" 
                                   size="small" 
@@ -661,7 +661,7 @@
       :cancel-btn="$t('common.cancel')"
       @confirm="confirmRemoveMember"
     >
-      <p>{{ $t('organization.detail.removeMemberConfirm', { name: removingMember?.username }) }}</p>
+      <p>{{ $t('organization.detail.removeMemberConfirm', { name: removingMember ? displayUsername(removingMember, { orgName: orgInfo?.name }) : '' }) }}</p>
     </t-dialog>
 
     <!-- 申请权限升级弹窗 -->
@@ -765,6 +765,7 @@ import SpaceAvatar from '@/components/SpaceAvatar.vue'
 import AgentAvatar from '@/components/AgentAvatar.vue'
 import agentIconSrc from '@/assets/img/agent.svg'
 import agentIconActiveSrc from '@/assets/img/agent-green.svg'
+import { displayUsername } from '@/utils/displayUsername'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -943,10 +944,15 @@ const roleOptions = computed(() => [
 const filteredMembers = computed(() => {
   const query = memberSearchQuery.value.toLowerCase()
   if (!query) return members.value
-  return members.value.filter(m => 
-    m.username.toLowerCase().includes(query) || 
-    m.email.toLowerCase().includes(query)
-  )
+  const orgName = orgInfo.value?.name ?? ''
+  return members.value.filter(m => {
+    const display = displayUsername(m, { orgName }).toLowerCase()
+    return (
+      m.username.toLowerCase().includes(query) ||
+      display.includes(query) ||
+      m.email.toLowerCase().includes(query)
+    )
+  })
 })
 
 const inviteLink = computed(() => {
