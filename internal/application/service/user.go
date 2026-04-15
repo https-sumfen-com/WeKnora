@@ -62,13 +62,15 @@ func getJwtSecret() string {
 
 // userService implements the UserService interface
 type userService struct {
-	userRepo        interfaces.UserRepository
-	tokenRepo       interfaces.AuthTokenRepository
-	tenantService   interfaces.TenantService
-	config          *config.Config
-	tenantRepo      interfaces.TenantRepository
-	iframeNonceRepo interfaces.IframeNonceRepository
-	organizationRepo interfaces.OrganizationRepository
+	userRepo             interfaces.UserRepository
+	tokenRepo            interfaces.AuthTokenRepository
+	tenantService        interfaces.TenantService
+	config               *config.Config
+	tenantRepo           interfaces.TenantRepository
+	iframeNonceRepo      interfaces.IframeNonceRepository
+	organizationRepo     interfaces.OrganizationRepository
+	knowledgeBaseService interfaces.KnowledgeBaseService
+	kbShareService       interfaces.KBShareService
 }
 
 // NewUserService creates a new user service instance
@@ -80,15 +82,19 @@ func NewUserService(
 	tenantRepo interfaces.TenantRepository,
 	iframeNonceRepo interfaces.IframeNonceRepository,
 	organizationRepo interfaces.OrganizationRepository,
+	knowledgeBaseService interfaces.KnowledgeBaseService,
+	kbShareService interfaces.KBShareService,
 ) interfaces.UserService {
 	return &userService{
-		userRepo:         userRepo,
-		tokenRepo:        tokenRepo,
-		tenantService:    tenantService,
-		config:           configInfo,
-		tenantRepo:       tenantRepo,
-		iframeNonceRepo:  iframeNonceRepo,
-		organizationRepo: organizationRepo,
+		userRepo:             userRepo,
+		tokenRepo:            tokenRepo,
+		tenantService:        tenantService,
+		config:               configInfo,
+		tenantRepo:           tenantRepo,
+		iframeNonceRepo:      iframeNonceRepo,
+		organizationRepo:     organizationRepo,
+		knowledgeBaseService: knowledgeBaseService,
+		kbShareService:       kbShareService,
 	}
 }
 
@@ -1030,6 +1036,11 @@ func (s *userService) IframeLogin(
 			logger.Errorf(ctx, "iframe_login user creation failed: %v", err)
 			return nil, types.NewIframeLoginError(types.IframeErrInternal, "user creation failed")
 		}
+		// 6.1 Provision a default shared KB on the org's very first member login.
+		// Failure here must not block login — caller can still create KBs manually later.
+		if count, cntErr := s.organizationRepo.CountMembers(ctx, org.ID); cntErr == nil && count == 1 {
+			s.maybeCreateDefaultSharedKB(ctx, org, user)
+		}
 	} else {
 		if !user.IsActive {
 			return nil, types.NewIframeLoginError(types.IframeErrUserDisabled, "user disabled")
@@ -1102,6 +1113,43 @@ func (s *userService) findIframeUser(
 		}
 	}
 	return user, nil, nil
+}
+
+// maybeCreateDefaultSharedKB creates a `{org.Name}共享知识库` in the first member's
+// personal tenant and shares it to the organization. Intended to run exactly once
+// per org on the first member's first login. Failures are logged and swallowed
+// because this is a convenience feature, not part of the login contract.
+func (s *userService) maybeCreateDefaultSharedKB(
+	ctx context.Context, org *types.Organization, user *types.User,
+) {
+	if s.knowledgeBaseService == nil || s.kbShareService == nil {
+		logger.Warnf(ctx, "iframe_login default KB skipped: services not wired")
+		return
+	}
+	// CreateKnowledgeBase pulls tenant from context — inject the first user's
+	// personal tenant so the KB is owned there.
+	kbCtx := context.WithValue(ctx, types.TenantIDContextKey, user.TenantID)
+	kb := &types.KnowledgeBase{
+		Name:             org.Name + "共享知识库",
+		Type:             "document",
+		Description:      "共享知识库",
+		EmbeddingModelID: "builtin-embedding-default",
+	}
+	created, err := s.knowledgeBaseService.CreateKnowledgeBase(kbCtx, kb)
+	if err != nil {
+		logger.Warnf(ctx, "iframe_login default KB create failed org_id=%s: %v", org.ID, err)
+		return
+	}
+	if _, err := s.kbShareService.ShareKnowledgeBase(
+		ctx, created.ID, org.ID, user.ID, user.TenantID, types.OrgRoleEditor,
+	); err != nil {
+		logger.Warnf(ctx, "iframe_login default KB share failed kb_id=%s org_id=%s: %v",
+			created.ID, org.ID, err)
+		// Leave the KB in place; operator can share manually later.
+		return
+	}
+	logger.Infof(ctx, "iframe_login default shared KB created org_id=%s kb_id=%s name=%q",
+		org.ID, created.ID, kb.Name)
 }
 
 // createIframeUserInOrg provisions (personal tenant, user, org member) as one atomic iframe flow.
