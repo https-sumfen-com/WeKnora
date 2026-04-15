@@ -83,11 +83,12 @@ func TestIframeLogin_HappyPath_CreatesUser(t *testing.T) {
 	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
+		CName:  "ACME Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n1",
 		Role:   "editor",
-		Sig:    SignIframeMessage("secret1", "ACME", "13812345678", "1000", "n1", "editor"),
+		Sig:    SignIframeMessage("secret1", "ACME", "ACME Org", "13812345678", "1000", "n1", "editor"),
 	}
 	resp, err := svc.IframeLogin(context.Background(), req)
 	if err != nil {
@@ -121,12 +122,13 @@ func TestIframeLogin_Replay(t *testing.T) {
 	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
+		CName:  "ACME Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n1",
 		Role:   "editor",
 	}
-	req.Sig = SignIframeMessage("secret1", req.CID, req.Mobile, req.TS, req.Nonce, req.Role)
+	req.Sig = SignIframeMessage("secret1", req.CID, req.CName, req.Mobile, req.TS, req.Nonce, req.Role)
 
 	// First call succeeds.
 	if _, err := svc.IframeLogin(context.Background(), req); err != nil {
@@ -145,6 +147,7 @@ func TestIframeLogin_BadSignature(t *testing.T) {
 	seedOrganization(t, db, "ACME", "secret1")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
+		CName:  "ACME Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n2",
@@ -163,11 +166,12 @@ func TestIframeLogin_UnknownTenant(t *testing.T) {
 	svc, _ := newIframeTestService(t)
 	req := &types.IframeLoginRequest{
 		CID:    "UNKNOWN",
+		CName:  "UNKNOWN Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n3",
 		Role:   "viewer",
-		Sig:    SignIframeMessage("any", "UNKNOWN", "13812345678", "1000", "n3", "viewer"),
+		Sig:    SignIframeMessage("any", "UNKNOWN", "UNKNOWN Org", "13812345678", "1000", "n3", "viewer"),
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
@@ -181,6 +185,7 @@ func TestIframeLogin_NotEnabled(t *testing.T) {
 	seedOrganization(t, db, "ACME2", "") // empty secret means iframe not enabled
 	req := &types.IframeLoginRequest{
 		CID:    "ACME2",
+		CName:  "ACME2 Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n4",
@@ -199,11 +204,12 @@ func TestIframeLogin_InvalidMobile(t *testing.T) {
 	seedOrganization(t, db, "ACME3", "secret")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME3",
+		CName:  "ACME3 Org",
 		Mobile: "not-a-number",
 		TS:     "1000",
 		Nonce:  "n5",
 		Role:   "editor",
-		Sig:    SignIframeMessage("secret", "ACME3", "not-a-number", "1000", "n5", "editor"),
+		Sig:    SignIframeMessage("secret", "ACME3", "ACME3 Org", "not-a-number", "1000", "n5", "editor"),
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
@@ -217,6 +223,7 @@ func TestIframeLogin_MissingParams(t *testing.T) {
 	// Missing CID
 	req := &types.IframeLoginRequest{
 		CID:    "",
+		CName:  "",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n6",
@@ -235,6 +242,7 @@ func TestIframeLogin_MissingRole(t *testing.T) {
 	// Missing Role — must fail before DB lookup
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
+		CName:  "ACME Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n6b",
@@ -252,6 +260,7 @@ func TestIframeLogin_NonIntegerTS(t *testing.T) {
 	svc, _ := newIframeTestService(t)
 	req := &types.IframeLoginRequest{
 		CID:    "ACME",
+		CName:  "ACME Org",
 		Mobile: "13812345678",
 		TS:     "abc",
 		Nonce:  "n7",
@@ -270,11 +279,12 @@ func TestIframeLogin_InvalidRole(t *testing.T) {
 	seedOrganization(t, db, "ACME5", "secret5")
 	req := &types.IframeLoginRequest{
 		CID:    "ACME5",
+		CName:  "ACME5 Org",
 		Mobile: "13812345678",
 		TS:     "1000",
 		Nonce:  "n_role",
 		Role:   "banana",
-		Sig:    SignIframeMessage("secret5", "ACME5", "13812345678", "1000", "n_role", "banana"),
+		Sig:    SignIframeMessage("secret5", "ACME5", "ACME5 Org", "13812345678", "1000", "n_role", "banana"),
 	}
 	_, err := svc.IframeLogin(context.Background(), req)
 	ilErr, ok := err.(*types.IframeLoginError)
@@ -290,11 +300,12 @@ func TestIframeLogin_ExistingUserReturned(t *testing.T) {
 	// First login creates the user.
 	req := &types.IframeLoginRequest{
 		CID:    "ACME4",
+		CName:  "ACME4 Org",
 		Mobile: "13800000001",
 		TS:     "2000",
 		Nonce:  "n8",
 		Role:   "editor",
-		Sig:    SignIframeMessage("secret4", "ACME4", "13800000001", "2000", "n8", "editor"),
+		Sig:    SignIframeMessage("secret4", "ACME4", "ACME4 Org", "13800000001", "2000", "n8", "editor"),
 	}
 	resp1, err := svc.IframeLogin(context.Background(), req)
 	if err != nil {
@@ -305,12 +316,13 @@ func TestIframeLogin_ExistingUserReturned(t *testing.T) {
 	// Second login with different nonce → same user returned.
 	req2 := &types.IframeLoginRequest{
 		CID:    "ACME4",
+		CName:  "ACME4 Org",
 		Mobile: "13800000001",
 		TS:     "3000",
 		Nonce:  "n9",
 		Role:   "editor",
 	}
-	req2.Sig = SignIframeMessage("secret4", req2.CID, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
+	req2.Sig = SignIframeMessage("secret4", req2.CID, req2.CName, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
 	resp2, err := svc.IframeLogin(context.Background(), req2)
 	if err != nil {
 		t.Fatalf("second login error: %v", err)
@@ -327,11 +339,12 @@ func TestIframeLogin_RoleSync(t *testing.T) {
 	// First login creates user as editor.
 	req := &types.IframeLoginRequest{
 		CID:    "ACME6",
+		CName:  "ACME6 Org",
 		Mobile: "13900000002",
 		TS:     "4000",
 		Nonce:  "n10",
 		Role:   "editor",
-		Sig:    SignIframeMessage("secret6", "ACME6", "13900000002", "4000", "n10", "editor"),
+		Sig:    SignIframeMessage("secret6", "ACME6", "ACME6 Org", "13900000002", "4000", "n10", "editor"),
 	}
 	resp1, err := svc.IframeLogin(context.Background(), req)
 	if err != nil {
@@ -341,12 +354,13 @@ func TestIframeLogin_RoleSync(t *testing.T) {
 	// Second login with role=admin → member role should be updated.
 	req2 := &types.IframeLoginRequest{
 		CID:    "ACME6",
+		CName:  "ACME6 Org",
 		Mobile: "13900000002",
 		TS:     "5000",
 		Nonce:  "n11",
 		Role:   "admin",
 	}
-	req2.Sig = SignIframeMessage("secret6", req2.CID, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
+	req2.Sig = SignIframeMessage("secret6", req2.CID, req2.CName, req2.Mobile, req2.TS, req2.Nonce, req2.Role)
 	if _, err := svc.IframeLogin(context.Background(), req2); err != nil {
 		t.Fatalf("second login error: %v", err)
 	}
