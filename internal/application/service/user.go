@@ -1139,6 +1139,9 @@ func (s *userService) maybeCreateDefaultSharedKB(
 			Enabled: true,
 			ModelID: "builtin-vlm-default",
 		},
+		StorageProviderConfig: &types.StorageProviderConfig{
+			Provider: "local",
+		},
 	}
 	created, err := s.knowledgeBaseService.CreateKnowledgeBase(kbCtx, kb)
 	if err != nil {
