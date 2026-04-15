@@ -55,6 +55,20 @@ log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
+# 加载 .env（若存在），让 APK_MIRROR_ARG / APT_MIRROR / GOPROXY 等构建参数自动生效。
+# 不覆盖已经导出的环境变量（shell env 优先于 .env）。
+load_env_file() {
+    local env_file="$PROJECT_ROOT/.env"
+    if [ ! -f "$env_file" ]; then
+        return 0
+    fi
+    log_info "加载 .env 构建参数 ($env_file)"
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+}
+
 # 检查Docker是否已安装
 check_docker() {
     log_info "检查Docker环境..."
@@ -138,6 +152,7 @@ build_app_image() {
         --build-arg GOPRIVATE_ARG=${GOPRIVATE:-""} \
         --build-arg GOPROXY_ARG=${GOPROXY:-"https://goproxy.cn,direct"} \
         --build-arg GOSUMDB_ARG=${GOSUMDB:-"off"} \
+        --build-arg APK_MIRROR_ARG=${APK_MIRROR_ARG:-} \
         --build-arg VERSION_ARG="$VERSION" \
         --build-arg COMMIT_ID_ARG="$COMMIT_ID" \
         --build-arg BUILD_TIME_ARG="$BUILD_TIME" \
@@ -348,6 +363,9 @@ while [ "$1" != "" ]; do
     esac
     shift
 done
+
+# 加载 .env（APT/APK 镜像、GOPROXY 等）
+load_env_file
 
 # 检查Docker环境
 check_docker
