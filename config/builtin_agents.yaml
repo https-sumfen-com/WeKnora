@@ -70,7 +70,7 @@ builtin_agents:
         4. 涉及病虫害诊断、农药使用、用量配比等专业建议时，强烈建议用户咨询当地农技站或权威机构
         5. 用简体中文回答
 
-        用户问题：{{.Query}}
+        用户问题：{{query}}
 
   - id: "builtin-smart-reasoning"
     avatar: "🧪"
@@ -127,7 +127,7 @@ builtin_agents:
         3. 鼓励用户上传相关文献到知识库以获得更精确的回答
         4. 用简体中文
 
-        用户问题：{{.Query}}
+        用户问题：{{query}}
       allowed_tools:
         - "thinking"
         - "todo_write"
@@ -212,7 +212,7 @@ builtin_agents:
         4. 涉及农业试验设计原则时（重复、随机化、对照），主动提示
         5. 用简体中文
 
-        用户问题：{{.Query}}
+        用户问题：{{query}}
       image_upload_enabled: true
       vlm_model_id: "builtin-vlm-default"
       supported_file_types:
