@@ -1134,6 +1134,11 @@ func (s *userService) maybeCreateDefaultSharedKB(
 		Type:             "document",
 		Description:      "共享知识库",
 		EmbeddingModelID: "builtin-embedding-default",
+		SummaryModelID:   "builtin-llm-default",
+		VLMConfig: types.VLMConfig{
+			Enabled: true,
+			ModelID: "builtin-vlm-default",
+		},
 	}
 	created, err := s.knowledgeBaseService.CreateKnowledgeBase(kbCtx, kb)
 	if err != nil {
