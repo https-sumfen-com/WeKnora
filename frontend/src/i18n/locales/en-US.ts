@@ -2327,6 +2327,7 @@ export default {
   general: {
     title: 'General Settings',
     allSettings: 'All Settings',
+    settingsCenter: 'Settings Center',
     description: 'Configure language, appearance and other basic options',
     settings: 'Settings',
     close: 'Close Settings'

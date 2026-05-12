@@ -1,15 +1,13 @@
 <template>
   <div class="user-menu" :class="{ 'user-menu--collapsed': uiStore.sidebarCollapsed }" ref="menuRef">
-    <!-- 用户按钮 -->
+    <!-- 设置中心入口（点击展开下方菜单） -->
     <div class="user-button" @click="toggleMenu">
-      <div class="user-avatar">
-        <img v-if="userAvatar" :src="userAvatar" :alt="$t('common.avatar')" />
-        <span v-else class="avatar-placeholder">{{ userInitial }}</span>
+      <div class="settings-icon-wrap">
+        <t-icon name="setting" class="settings-icon" />
       </div>
       <template v-if="!uiStore.sidebarCollapsed">
         <div class="user-info">
-          <div class="user-name">{{ userName }}</div>
-          <div class="user-email">{{ userEmail }}</div>
+          <div class="entry-label">{{ $t('general.settingsCenter') }}</div>
         </div>
         <t-icon :name="menuVisible ? 'chevron-up' : 'chevron-down'" class="dropdown-icon" />
       </template>
@@ -110,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
@@ -118,7 +116,6 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, logout as logoutApi } from '@/api/auth'
 import { useI18n } from 'vue-i18n'
 import { useEmbedded } from '@/composables/useEmbedded'
-import { displayUsername } from '@/utils/displayUsername'
 
 const { t } = useI18n()
 const { embedded } = useEmbedded()
@@ -129,30 +126,6 @@ const authStore = useAuthStore()
 
 const menuRef = ref<HTMLElement>()
 const menuVisible = ref(false)
-
-// 用户信息
-const userInfo = ref({
-  username: t('common.defaultUser'),
-  email: 'user@example.com',
-  avatar: ''
-})
-
-// iframe-auto-provisioned users have machine-generated usernames like
-// `iframe_<orgUUID>_<mobile>`. Render them as `<cName>_<mobile>` using the
-// tenant name as the source of c_name. Regular users pass through unchanged.
-const userName = computed(() =>
-  displayUsername(
-    { username: userInfo.value.username, mobile: authStore.user?.mobile },
-    { tenant: { name: authStore.tenant?.name } },
-  ) || userInfo.value.username,
-)
-const userEmail = computed(() => userInfo.value.email)
-const userAvatar = computed(() => userInfo.value.avatar)
-
-// 用户名首字母（用于无头像时显示）
-const userInitial = computed(() => {
-  return userName.value.charAt(0).toUpperCase()
-})
 
 // 切换菜单显示
 const toggleMenu = () => {
@@ -223,18 +196,12 @@ const handleLogout = async () => {
   router.push('/login')
 }
 
-// 加载用户信息
+// 加载用户信息（同步到 authStore，供 ApiInfo 等其它页面使用）
 const loadUserInfo = async () => {
   try {
     const response = await getCurrentUser()
     if (response.success && response.data && response.data.user) {
       const user = response.data.user
-      userInfo.value = {
-        username: user.username || t('common.info'),
-        email: user.email || 'user@example.com',
-        avatar: user.avatar || ''
-      }
-      // 同时更新 authStore 中的用户信息，确保包含 can_access_all_tenants 字段
       authStore.setUser({
         id: user.id,
         username: user.username,
@@ -291,12 +258,12 @@ onUnmounted(() => {
       gap: 0;
     }
 
-    .user-avatar {
+    .settings-icon-wrap {
       width: 32px;
       height: 32px;
 
-      .avatar-placeholder {
-        font-size: 13px;
+      .settings-icon {
+        font-size: 18px;
       }
     }
 
@@ -328,29 +295,26 @@ onUnmounted(() => {
   }
 }
 
-.user-avatar {
+.settings-icon-wrap {
   width: 40px;
   height: 40px;
-  border-radius: 50%;
+  border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;
-  background: linear-gradient(135deg, var(--td-brand-color) 0%, var(--td-brand-color-active) 100%);
+  background: var(--td-bg-color-component);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: width 0.2s ease, height 0.2s ease;
+  transition: width 0.2s ease, height 0.2s ease, background 0.2s ease;
 
-  img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+  .settings-icon {
+    font-size: 20px;
+    color: var(--td-text-color-primary);
   }
+}
 
-  .avatar-placeholder {
-    color: var(--td-text-color-anti);
-    font-size: 16px;
-    font-weight: 600;
-  }
+.user-button:hover .settings-icon-wrap {
+  background: var(--td-bg-color-container);
 }
 
 .user-info {
@@ -358,18 +322,10 @@ onUnmounted(() => {
   min-width: 0;
   text-align: left;
 
-  .user-name {
+  .entry-label {
     font-size: 14px;
     font-weight: 500;
     color: var(--td-text-color-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .user-email {
-    font-size: 12px;
-    color: var(--td-text-color-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

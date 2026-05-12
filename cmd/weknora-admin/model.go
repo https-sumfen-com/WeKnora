@@ -317,13 +317,13 @@ func modelDelete(args []string) error {
 	if err != nil {
 		return err
 	}
-	res := db.Where("id = ?", *id).Delete(&types.Model{})
+	res := db.Unscoped().Where("id = ?", *id).Delete(&types.Model{})
 	if res.Error != nil {
 		return res.Error
 	}
 	if res.RowsAffected == 0 {
 		return fmt.Errorf("model id=%s not found", *id)
 	}
-	fmt.Printf("Model %s soft-deleted\n", *id)
+	fmt.Printf("Model %s deleted\n", *id)
 	return nil
 }

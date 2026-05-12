@@ -1778,6 +1778,7 @@ export default {
   general: {
     title: "일반 설정",
     allSettings: "모든 설정",
+    settingsCenter: "설정 센터",
     description: "언어, 외관 등 기본 옵션 설정",
     settings: "설정",
     close: "설정 닫기",

@@ -2127,6 +2127,7 @@ export default {
   general: {
     title: 'Общие настройки',
     allSettings: 'Все настройки',
+    settingsCenter: 'Центр настроек',
     description: 'Настройка языка, внешнего вида и других базовых параметров',
     settings: 'Настройки',
     close: 'Закрыть настройки'

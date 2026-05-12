@@ -241,7 +241,7 @@ build-prod:
 build-admin:
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="-Wno-deprecated-declarations" \
-	go build -ldflags="-X 'google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn'" -o weknora-admin ./cmd/weknora-admin
+	go build --tags=dict -ldflags="-X 'google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn'" -o weknora-admin ./cmd/weknora-admin
 
 # Build Lite version (single binary, SQLite + in-memory queue)
 # 会先构建前端到 web/，再构建 Go 二进制；SKIP_FRONTEND=1 可跳过前端
