@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/config"
+	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
@@ -15,31 +16,37 @@ import (
 	"github.com/google/uuid"
 
 	chatpipeline "github.com/Tencent/WeKnora/internal/application/service/chat_pipeline"
-	llmcontext "github.com/Tencent/WeKnora/internal/application/service/llmcontext"
 )
+
+func sessionUserIDFromContext(ctx context.Context) string {
+	userID, _ := types.UserIDFromContext(ctx)
+	return userID
+}
 
 // generateEventID generates a unique event ID with type suffix for better traceability
 func generateEventID(suffix string) string {
 	return fmt.Sprintf("%s-%s", uuid.New().String()[:8], suffix)
 }
 
-// sessionService implements the SessionService interface for managing conversation sessions
+// sessionService implements the SessionService interface for managing conversation sessions.
+// History for multi-turn conversations is rebuilt from the messages table on demand
+// (see service.LoadAgentHistory and chat_pipeline history loading) — there is no
+// separate cross-turn cache layer.
 type sessionService struct {
-	cfg                  *config.Config                   // Application configuration
-	sessionRepo          interfaces.SessionRepository     // Repository for session data
-	messageRepo          interfaces.MessageRepository     // Repository for message data
-	knowledgeBaseService interfaces.KnowledgeBaseService  // Service for knowledge base operations
-	modelService         interfaces.ModelService          // Service for model operations
-	tenantService        interfaces.TenantService         // Service for tenant operations
-	eventManager         *chatpipeline.EventManager        // Event manager for chat pipeline
-	agentService         interfaces.AgentService          // Service for agent operations
-	sessionStorage       llmcontext.ContextStorage        // Session storage
-	knowledgeService     interfaces.KnowledgeService      // Service for knowledge operations
-	chunkService         interfaces.ChunkService          // Service for chunk operations
-	webSearchStateRepo    interfaces.WebSearchStateService          // Service for web search state
-	webSearchProviderRepo interfaces.WebSearchProviderRepository   // Repository for web search provider entities
-	kbShareService        interfaces.KBShareService                // Service for KB sharing operations
-	memoryService         interfaces.MemoryService                 // Service for memory operations
+	cfg                   *config.Config                         // Application configuration
+	sessionRepo           interfaces.SessionRepository           // Repository for session data
+	messageRepo           interfaces.MessageRepository           // Repository for message data
+	knowledgeBaseService  interfaces.KnowledgeBaseService        // Service for knowledge base operations
+	modelService          interfaces.ModelService                // Service for model operations
+	tenantService         interfaces.TenantService               // Service for tenant operations
+	eventManager          *chatpipeline.EventManager             // Event manager for chat pipeline
+	agentService          interfaces.AgentService                // Service for agent operations
+	knowledgeService      interfaces.KnowledgeService            // Service for knowledge operations
+	chunkService          interfaces.ChunkService                // Service for chunk operations
+	webSearchStateRepo    interfaces.WebSearchStateService       // Service for web search state
+	webSearchProviderRepo interfaces.WebSearchProviderRepository // Repository for web search provider entities
+	kbShareService        interfaces.KBShareService              // Service for KB sharing operations
+	memoryService         interfaces.MemoryService               // Service for memory operations
 }
 
 // NewSessionService creates a new session service instance with all required dependencies
@@ -53,7 +60,6 @@ func NewSessionService(cfg *config.Config,
 	tenantService interfaces.TenantService,
 	eventManager *chatpipeline.EventManager,
 	agentService interfaces.AgentService,
-	sessionStorage llmcontext.ContextStorage,
 	webSearchStateRepo interfaces.WebSearchStateService,
 	webSearchProviderRepo interfaces.WebSearchProviderRepository,
 	kbShareService interfaces.KBShareService,
@@ -70,7 +76,6 @@ func NewSessionService(cfg *config.Config,
 		tenantService:         tenantService,
 		eventManager:          eventManager,
 		agentService:          agentService,
-		sessionStorage:        sessionStorage,
 		webSearchStateRepo:    webSearchStateRepo,
 		webSearchProviderRepo: webSearchProviderRepo,
 		kbShareService:        kbShareService,
@@ -85,7 +90,7 @@ func (s *sessionService) CreateSession(ctx context.Context, session *types.Sessi
 	// Validate tenant ID
 	if session.TenantID == 0 {
 		logger.Error(ctx, "Failed to create session: tenant ID cannot be empty")
-		return nil, errors.New("tenant ID is required")
+		return nil, stderrors.New("tenant ID is required")
 	}
 
 	logger.Infof(ctx, "Creating session, tenant ID: %d", session.TenantID)
@@ -107,15 +112,16 @@ func (s *sessionService) GetSession(ctx context.Context, id string) (*types.Sess
 	// Validate session ID
 	if id == "" {
 		logger.Error(ctx, "Failed to get session: session ID cannot be empty")
-		return nil, errors.New("session id is required")
+		return nil, stderrors.New("session id is required")
 	}
 
 	// Get tenant ID from context
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
 	logger.Infof(ctx, "Retrieving session, ID: %s, tenant ID: %d", id, tenantID)
 
 	// Get session from repository
-	session, err := s.sessionRepo.Get(ctx, tenantID, id)
+	session, err := s.sessionRepo.Get(ctx, tenantID, userID, id)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"session_id": id,
@@ -132,10 +138,11 @@ func (s *sessionService) GetSession(ctx context.Context, id string) (*types.Sess
 func (s *sessionService) GetSessionsByTenant(ctx context.Context) ([]*types.Session, error) {
 	// Get tenant ID from context
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
 	logger.Infof(ctx, "Retrieving all sessions for tenant, tenant ID: %d", tenantID)
 
 	// Get sessions from repository
-	sessions, err := s.sessionRepo.GetByTenantID(ctx, tenantID)
+	sessions, err := s.sessionRepo.GetByTenantID(ctx, tenantID, userID)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"tenant_id": tenantID,
@@ -155,8 +162,9 @@ func (s *sessionService) GetPagedSessionsByTenant(ctx context.Context,
 ) (*types.PageResult, error) {
 	// Get tenant ID from context
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
 	// Get paged sessions from repository
-	sessions, total, err := s.sessionRepo.GetPagedByTenantID(ctx, tenantID, pagination)
+	sessions, total, err := s.sessionRepo.GetPagedByTenantID(ctx, tenantID, userID, pagination)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"tenant_id": tenantID,
@@ -169,16 +177,64 @@ func (s *sessionService) GetPagedSessionsByTenant(ctx context.Context,
 	return types.NewPageResult(total, pagination, sessions), nil
 }
 
+// ListSessions returns a page of sessions with search/source filters, scoped to
+// the current tenant (and user when the caller is an authenticated user).
+func (s *sessionService) ListSessions(
+	ctx context.Context, query *types.SessionListQuery,
+) (*types.PageResult, error) {
+	if query == nil {
+		query = &types.SessionListQuery{}
+	}
+	query.TenantID = types.MustTenantIDFromContext(ctx)
+	if uid, ok := types.UserIDFromContext(ctx); ok {
+		query.UserID = uid
+	}
+
+	items, total, err := s.sessionRepo.QueryPaged(ctx, query)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"tenant_id": query.TenantID,
+			"user_id":   query.UserID,
+			"keyword":   query.Keyword,
+			"source":    query.Source,
+			"agent_id":  query.AgentID,
+		})
+		return nil, err
+	}
+
+	pagination := &types.Pagination{Page: query.Page, PageSize: query.PageSize}
+	return types.NewPageResult(total, pagination, items), nil
+}
+
+// SetSessionPinned pins or unpins a session for the current user scope.
+// Returns the number of rows affected; 0 means the session doesn't exist
+// or is not owned by the caller so the handler can respond 404.
+func (s *sessionService) SetSessionPinned(
+	ctx context.Context, sessionID string, pinned bool,
+) (int64, error) {
+	if sessionID == "" {
+		return 0, stderrors.New("session id is required")
+	}
+	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
+	return s.sessionRepo.SetPinned(ctx, tenantID, userID, sessionID, pinned)
+}
+
 // UpdateSession updates an existing session's properties
 func (s *sessionService) UpdateSession(ctx context.Context, session *types.Session) error {
 	// Validate session ID
 	if session.ID == "" {
 		logger.Error(ctx, "Failed to update session: session ID cannot be empty")
-		return errors.New("session id is required")
+		return stderrors.New("session id is required")
 	}
 
 	// Update session in repository
-	err := s.sessionRepo.Update(ctx, session)
+	userID := sessionUserIDFromContext(ctx)
+	if _, err := s.sessionRepo.Get(ctx, session.TenantID, userID, session.ID); err != nil {
+		return err
+	}
+
+	_, err := s.sessionRepo.Update(ctx, session, userID)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"session_id": session.ID,
@@ -191,16 +247,48 @@ func (s *sessionService) UpdateSession(ctx context.Context, session *types.Sessi
 	return nil
 }
 
+// UpdateSessionLastRequestState persists the input-bar state used by the most
+// recent QA request on this session. Called from the QA handler after a
+// request is accepted so the UI can rehydrate the same settings on reopen.
+// Best-effort: scope mismatches are logged and swallowed — failing to record
+// the UI memo should never fail the user's chat request.
+func (s *sessionService) UpdateSessionLastRequestState(
+	ctx context.Context, sessionID string, state *types.SessionLastRequestState,
+) error {
+	if sessionID == "" {
+		return stderrors.New("session id is required")
+	}
+	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
+	affected, err := s.sessionRepo.UpdateLastRequestState(ctx, tenantID, userID, sessionID, state)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"session_id": sessionID,
+			"tenant_id":  tenantID,
+		})
+		return err
+	}
+	if affected == 0 {
+		logger.Warnf(ctx, "UpdateSessionLastRequestState: no rows affected for session %s", sessionID)
+	}
+	return nil
+}
+
 // DeleteSession removes a session by its ID
 func (s *sessionService) DeleteSession(ctx context.Context, id string) error {
 	// Validate session ID
 	if id == "" {
 		logger.Error(ctx, "Failed to delete session: session ID cannot be empty")
-		return errors.New("session id is required")
+		return stderrors.New("session id is required")
 	}
 
 	// Get tenant ID from context
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
+
+	if _, err := s.sessionRepo.Get(ctx, tenantID, userID, id); err != nil {
+		return err
+	}
 
 	// Cleanup chat history knowledge entries for this session (async, best-effort).
 	// Use WithoutCancel so the goroutine survives after the HTTP request context is done.
@@ -223,19 +311,17 @@ func (s *sessionService) DeleteSession(ctx context.Context, id string) error {
 		logger.Warnf(ctx, "Failed to cleanup temporary KB for session %s: %v", id, err)
 	}
 
-	// Cleanup conversation context stored in Redis for this session
-	if err := s.sessionStorage.Delete(ctx, id); err != nil {
-		logger.Warnf(ctx, "Failed to cleanup conversation context for session %s: %v", id, err)
-	}
-
 	// Delete session from repository
-	err := s.sessionRepo.Delete(ctx, tenantID, id)
+	rows, err := s.sessionRepo.Delete(ctx, tenantID, userID, id)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"session_id": id,
 			"tenant_id":  tenantID,
 		})
 		return err
+	}
+	if rows == 0 {
+		return apperrors.ErrSessionNotFound
 	}
 
 	return nil
@@ -245,15 +331,28 @@ func (s *sessionService) DeleteSession(ctx context.Context, id string) error {
 func (s *sessionService) BatchDeleteSessions(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		logger.Error(ctx, "Failed to batch delete sessions: IDs list is empty")
-		return errors.New("session ids are required")
+		return stderrors.New("session ids are required")
 	}
 
 	// Get tenant ID from context
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
+
+	visibleIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, err := s.sessionRepo.Get(ctx, tenantID, userID, id); err == nil {
+			visibleIDs = append(visibleIDs, id)
+		} else if !stderrors.Is(err, apperrors.ErrSessionNotFound) {
+			return err
+		}
+	}
+	if len(visibleIDs) == 0 {
+		return apperrors.ErrSessionNotFound
+	}
 
 	// Cleanup associated resources for each session
 	bgCtx := context.WithoutCancel(ctx)
-	for _, id := range ids {
+	for _, id := range visibleIDs {
 		// Cleanup chat history knowledge entries (async, best-effort)
 		go func(sessionID string) {
 			knowledgeIDs, err := s.messageRepo.GetKnowledgeIDsBySessionID(bgCtx, sessionID)
@@ -271,15 +370,12 @@ func (s *sessionService) BatchDeleteSessions(ctx context.Context, ids []string) 
 		if err := s.webSearchStateRepo.DeleteWebSearchTempKBState(ctx, id); err != nil {
 			logger.Warnf(ctx, "Failed to cleanup temporary KB for session %s: %v", id, err)
 		}
-		if err := s.sessionStorage.Delete(ctx, id); err != nil {
-			logger.Warnf(ctx, "Failed to cleanup conversation context for session %s: %v", id, err)
-		}
 	}
 
 	// Batch delete sessions from repository
-	if err := s.sessionRepo.BatchDelete(ctx, tenantID, ids); err != nil {
+	if _, err := s.sessionRepo.BatchDelete(ctx, tenantID, userID, visibleIDs); err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
-			"session_ids": ids,
+			"session_ids": visibleIDs,
 			"tenant_id":   tenantID,
 		})
 		return err
@@ -291,9 +387,10 @@ func (s *sessionService) BatchDeleteSessions(ctx context.Context, ids []string) 
 // DeleteAllSessions deletes all sessions for the current tenant
 func (s *sessionService) DeleteAllSessions(ctx context.Context) error {
 	tenantID := types.MustTenantIDFromContext(ctx)
+	userID := sessionUserIDFromContext(ctx)
 	logger.Infof(ctx, "Deleting all sessions for tenant %d", tenantID)
 
-	sessions, err := s.sessionRepo.GetByTenantID(ctx, tenantID)
+	sessions, err := s.sessionRepo.GetByTenantID(ctx, tenantID, userID)
 	if err != nil {
 		logger.Warnf(ctx, "Failed to list sessions for cleanup: %v", err)
 	} else {
@@ -316,13 +413,10 @@ func (s *sessionService) DeleteAllSessions(ctx context.Context) error {
 			if err := s.webSearchStateRepo.DeleteWebSearchTempKBState(ctx, session.ID); err != nil {
 				logger.Warnf(ctx, "Failed to cleanup temporary KB for session %s: %v", session.ID, err)
 			}
-			if err := s.sessionStorage.Delete(ctx, session.ID); err != nil {
-				logger.Warnf(ctx, "Failed to cleanup conversation context for session %s: %v", session.ID, err)
-			}
 		}
 	}
 
-	if err := s.sessionRepo.DeleteAllByTenantID(ctx, tenantID); err != nil {
+	if _, err := s.sessionRepo.DeleteAllByTenantID(ctx, tenantID, userID); err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"tenant_id": tenantID,
 		})
@@ -340,7 +434,7 @@ func (s *sessionService) GenerateTitle(ctx context.Context,
 ) (string, error) {
 	if session == nil {
 		logger.Error(ctx, "Failed to generate title: session cannot be empty")
-		return "", errors.New("session cannot be empty")
+		return "", stderrors.New("session cannot be empty")
 	}
 
 	// Skip if title already exists
@@ -370,7 +464,7 @@ func (s *sessionService) GenerateTitle(ctx context.Context,
 	// Ensure a user message was found
 	if message == nil {
 		logger.Error(ctx, "No user message found, cannot generate title")
-		return "", errors.New("no user message found")
+		return "", stderrors.New("no user message found")
 	}
 
 	// Use provided modelID, or fallback to first available KnowledgeQA model
@@ -392,7 +486,7 @@ func (s *sessionService) GenerateTitle(ctx context.Context,
 		}
 		if modelID == "" {
 			logger.Error(ctx, "No KnowledgeQA model found")
-			return "", errors.New("no KnowledgeQA model available for title generation")
+			return "", stderrors.New("no KnowledgeQA model available for title generation")
 		}
 	} else {
 		logger.Infof(ctx, "Using specified model for title generation: %s", modelID)
@@ -433,7 +527,7 @@ func (s *sessionService) GenerateTitle(ctx context.Context,
 	session.Title = strings.TrimPrefix(response.Content, "<think>\n\n</think>")
 
 	// Update session with new title
-	err = s.sessionRepo.Update(ctx, session)
+	_, err = s.sessionRepo.Update(ctx, session, session.UserID)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		return "", err
@@ -454,10 +548,13 @@ func (s *sessionService) GenerateTitleAsync(
 	eventBus *event.EventBus,
 ) {
 	// Use context tenant (effective tenant when using shared agent) so ListModels/GetChatModel find the agent's model.
-	// sessionRepo.Update uses session.TenantID in WHERE, so the session row is updated correctly regardless of ctx.
+	// The session row itself is still updated by its persisted tenant/user owner scope.
 	tenantID := ctx.Value(types.TenantIDContextKey)
 	requestID := ctx.Value(types.RequestIDContextKey)
 	language := ctx.Value(types.LanguageContextKey)
+	// Keep the Langfuse trace handle so the async title generation shows up
+	// as a child of the same trace as the originating chat request.
+	langfuseTrace := ctx.Value(types.LangfuseTraceContextKey)
 	go func() {
 		bgCtx := context.Background()
 		if tenantID != nil {
@@ -468,6 +565,9 @@ func (s *sessionService) GenerateTitleAsync(
 		}
 		if language != nil {
 			bgCtx = context.WithValue(bgCtx, types.LanguageContextKey, language)
+		}
+		if langfuseTrace != nil {
+			bgCtx = context.WithValue(bgCtx, types.LangfuseTraceContextKey, langfuseTrace)
 		}
 
 		// Skip if title already exists
@@ -510,11 +610,4 @@ func (s *sessionService) GenerateTitleAsync(
 			}
 		}
 	}()
-}
-
-// ClearContext clears the LLM context for a session
-// This is useful when switching knowledge bases or agent modes to prevent context contamination
-func (s *sessionService) ClearContext(ctx context.Context, sessionID string) error {
-	logger.Infof(ctx, "Clearing context for session: %s", sessionID)
-	return s.sessionStorage.Delete(ctx, sessionID)
 }

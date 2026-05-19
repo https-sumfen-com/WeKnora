@@ -8,6 +8,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/asr"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
+	"github.com/Tencent/WeKnora/internal/models/provider"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
 	"github.com/Tencent/WeKnora/internal/models/vlm"
@@ -24,17 +25,20 @@ type modelService struct {
 	repo          interfaces.ModelRepository
 	ollamaService *ollama.OllamaService
 	pooler        embedding.EmbedderPooler
+	tenantService interfaces.TenantService
 }
 
 // NewModelService creates a new model service instance
 func NewModelService(repo interfaces.ModelRepository,
 	ollamaService *ollama.OllamaService,
 	pooler embedding.EmbedderPooler,
+	tenantService interfaces.TenantService,
 ) interfaces.ModelService {
 	return &modelService{
 		repo:          repo,
 		ollamaService: ollamaService,
 		pooler:        pooler,
+		tenantService: tenantService,
 	}
 }
 
@@ -49,6 +53,35 @@ func (s *modelService) decryptAppSecret(encrypted string) string {
 		}
 	}
 	return encrypted
+}
+
+// resolveWeKnoraCloudCredentials 为 WeKnoraCloud 厂商模型补全 AppID/AppSecret。
+// 当模型自身参数中未存储凭证时，自动从租户配置中获取（SaveCredentials 保存的凭证）。
+func (s *modelService) resolveWeKnoraCloudCredentials(ctx context.Context, params *types.ModelParameters) (appID, appSecret string) {
+	appID = params.AppID
+	appSecret = s.decryptAppSecret(params.AppSecret)
+
+	if provider.ProviderName(params.Provider) != provider.ProviderWeKnoraCloud {
+		return
+	}
+	if appID != "" && appSecret != "" {
+		return
+	}
+
+	if s.tenantService == nil {
+		return
+	}
+	creds := s.tenantService.GetWeKnoraCloudCredentials(ctx)
+	if creds == nil {
+		return
+	}
+	if appID == "" {
+		appID = creds.AppID
+	}
+	if appSecret == "" {
+		appSecret = creds.AppSecret
+	}
+	return
 }
 
 // CreateModel creates a new model in the repository
@@ -214,6 +247,84 @@ func (s *modelService) UpdateModel(ctx context.Context, model *types.Model) erro
 	return nil
 }
 
+// UpdateModelCredentials writes one or more credential fields on the model's
+// Parameters jsonb. Models are not pooled per-instance the way MCP clients
+// are (each call to GetEmbeddingModel/GetChatModel rebuilds the client from
+// the current Parameters), so no explicit cache invalidation is required —
+// the next call will pick up the new credential automatically.
+func (s *modelService) UpdateModelCredentials(
+	ctx context.Context, id string, apiKey, appSecret *string,
+) (*types.Model, error) {
+	tenantID := types.MustTenantIDFromContext(ctx)
+	existing, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrModelNotFound
+	}
+	if existing.IsBuiltin {
+		return nil, errors.New("builtin models cannot have credentials modified")
+	}
+
+	changed := false
+	if apiKey != nil && *apiKey != "" && *apiKey != existing.Parameters.APIKey {
+		existing.Parameters.APIKey = *apiKey
+		changed = true
+	}
+	if appSecret != nil && *appSecret != "" && *appSecret != existing.Parameters.AppSecret {
+		existing.Parameters.AppSecret = *appSecret
+		changed = true
+	}
+	if !changed {
+		return existing, nil
+	}
+	if err := s.repo.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	logger.Infof(ctx, "Model credentials updated: id=%s", id)
+	return existing, nil
+}
+
+// ClearModelCredential removes a single credential field. Idempotent.
+func (s *modelService) ClearModelCredential(ctx context.Context, id, field string) error {
+	tenantID := types.MustTenantIDFromContext(ctx)
+	existing, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return ErrModelNotFound
+	}
+	if existing.IsBuiltin {
+		return errors.New("builtin models cannot have credentials modified")
+	}
+
+	changed := false
+	switch field {
+	case "api_key":
+		if existing.Parameters.APIKey != "" {
+			existing.Parameters.APIKey = ""
+			changed = true
+		}
+	case "app_secret":
+		if existing.Parameters.AppSecret != "" {
+			existing.Parameters.AppSecret = ""
+			changed = true
+		}
+	default:
+		return errors.New("unknown credential field: " + field)
+	}
+	if !changed {
+		return nil
+	}
+	if err := s.repo.Update(ctx, existing); err != nil {
+		return err
+	}
+	logger.Infof(ctx, "Model credential cleared by user: id=%s field=%s", id, field)
+	return nil
+}
+
 // DeleteModel removes a model from the repository
 func (s *modelService) DeleteModel(ctx context.Context, id string) error {
 	logger.Info(ctx, "Start deleting model")
@@ -263,20 +374,9 @@ func (s *modelService) GetEmbeddingModel(ctx context.Context, modelId string) (e
 
 	logger.Infof(ctx, "Getting embedding model: %s, source: %s", model.Name, model.Source)
 
-	// Initialize the embedder with model configuration
-	embedder, err := embedding.NewEmbedder(embedding.Config{
-		Source:               model.Source,
-		BaseURL:              model.Parameters.BaseURL,
-		APIKey:               model.Parameters.APIKey,
-		ModelID:              model.ID,
-		ModelName:            model.Name,
-		Dimensions:           model.Parameters.EmbeddingParameters.Dimension,
-		TruncatePromptTokens: model.Parameters.EmbeddingParameters.TruncatePromptTokens,
-		Provider:             model.Parameters.Provider,
-		ExtraConfig:          model.Parameters.ExtraConfig,
-		AppID:                model.Parameters.AppID,
-		AppSecret:            s.decryptAppSecret(model.Parameters.AppSecret),
-	}, s.pooler, s.ollamaService)
+	appID, appSecret := s.resolveWeKnoraCloudCredentials(ctx, &model.Parameters)
+
+	embedder, err := embedding.NewEmbedder(embedding.ConfigFromModel(model, appID, appSecret), s.pooler, s.ollamaService)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -321,20 +421,9 @@ func (s *modelService) GetEmbeddingModelForTenant(ctx context.Context, modelId s
 
 	logger.Infof(ctx, "Getting cross-tenant embedding model: %s, source: %s, tenant: %d", model.Name, model.Source, tenantID)
 
-	// Initialize the embedder with model configuration
-	embedder, err := embedding.NewEmbedder(embedding.Config{
-		Source:               model.Source,
-		BaseURL:              model.Parameters.BaseURL,
-		APIKey:               model.Parameters.APIKey,
-		ModelID:              model.ID,
-		ModelName:            model.Name,
-		Dimensions:           model.Parameters.EmbeddingParameters.Dimension,
-		TruncatePromptTokens: model.Parameters.EmbeddingParameters.TruncatePromptTokens,
-		Provider:             model.Parameters.Provider,
-		ExtraConfig:          model.Parameters.ExtraConfig,
-		AppID:                model.Parameters.AppID,
-		AppSecret:            s.decryptAppSecret(model.Parameters.AppSecret),
-	}, s.pooler, s.ollamaService)
+	appID, appSecret := s.resolveWeKnoraCloudCredentials(ctx, &model.Parameters)
+
+	embedder, err := embedding.NewEmbedder(embedding.ConfigFromModel(model, appID, appSecret), s.pooler, s.ollamaService)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -362,18 +451,9 @@ func (s *modelService) GetRerankModel(ctx context.Context, modelId string) (rera
 
 	logger.Infof(ctx, "Getting rerank model: %s, source: %s", model.Name, model.Source)
 
-	// Initialize the reranker with model configuration
-	reranker, err := rerank.NewReranker(&rerank.RerankerConfig{
-		ModelID:     model.ID,
-		APIKey:      model.Parameters.APIKey,
-		BaseURL:     model.Parameters.BaseURL,
-		ModelName:   model.Name,
-		Source:      model.Source,
-		Provider:    model.Parameters.Provider,
-		ExtraConfig: model.Parameters.ExtraConfig,
-		AppID:       model.Parameters.AppID,
-		AppSecret:   s.decryptAppSecret(model.Parameters.AppSecret),
-	})
+	appID, appSecret := s.resolveWeKnoraCloudCredentials(ctx, &model.Parameters)
+
+	reranker, err := rerank.NewReranker(rerank.ConfigFromModel(model, appID, appSecret))
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -414,18 +494,9 @@ func (s *modelService) GetChatModel(ctx context.Context, modelId string) (chat.C
 
 	logger.Infof(ctx, "Getting chat model: %s, source: %s", model.Name, model.Source)
 
-	// Initialize the chat model with model configuration
-	chatModel, err := chat.NewChat(&chat.ChatConfig{
-		ModelID:     model.ID,
-		APIKey:      model.Parameters.APIKey,
-		BaseURL:     model.Parameters.BaseURL,
-		ModelName:   model.Name,
-		Source:      model.Source,
-		Provider:    model.Parameters.Provider,
-		ExtraConfig: model.Parameters.ExtraConfig,
-		AppID:       model.Parameters.AppID,
-		AppSecret:   s.decryptAppSecret(model.Parameters.AppSecret),
-	}, s.ollamaService)
+	appID, appSecret := s.resolveWeKnoraCloudCredentials(ctx, &model.Parameters)
+
+	chatModel, err := chat.NewChat(chat.ConfigFromModel(model, appID, appSecret), s.ollamaService)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -460,25 +531,9 @@ func (s *modelService) GetVLMModel(ctx context.Context, modelId string) (vlm.VLM
 
 	logger.Infof(ctx, "Getting VLM model: %s, source: %s", model.Name, model.Source)
 
-	ifType := model.Parameters.InterfaceType
-	if ifType == "" {
-		if model.Source == types.ModelSourceLocal {
-			ifType = "ollama"
-		} else {
-			ifType = "openai"
-		}
-	}
+	appID, appSecret := s.resolveWeKnoraCloudCredentials(ctx, &model.Parameters)
 
-	vlmModel, err := vlm.NewVLM(&vlm.Config{
-		ModelID:       model.ID,
-		APIKey:        model.Parameters.APIKey,
-		BaseURL:       model.Parameters.BaseURL,
-		ModelName:     model.Name,
-		Source:        model.Source,
-		InterfaceType: ifType,
-		Provider:      model.Parameters.Provider,
-		Extra:         stringMapToAnyMap(model.Parameters.ExtraConfig),
-	}, s.ollamaService)
+	vlmModel, err := vlm.NewVLM(vlm.ConfigFromModel(model, appID, appSecret), s.ollamaService)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -516,13 +571,7 @@ func (s *modelService) GetASRModel(ctx context.Context, modelId string) (asr.ASR
 
 	logger.Infof(ctx, "Getting ASR model: %s, source: %s", model.Name, model.Source)
 
-	sttModel, err := asr.NewASR(&asr.Config{
-		ModelID:   model.ID,
-		APIKey:    model.Parameters.APIKey,
-		BaseURL:   model.Parameters.BaseURL,
-		ModelName: model.Name,
-		Source:    model.Source,
-	})
+	sttModel, err := asr.NewASR(asr.ConfigFromModel(model))
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"model_id":   model.ID,
@@ -532,15 +581,4 @@ func (s *modelService) GetASRModel(ctx context.Context, modelId string) (asr.ASR
 	}
 
 	return sttModel, nil
-}
-
-func stringMapToAnyMap(m map[string]string) map[string]any {
-	if m == nil {
-		return nil
-	}
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
-	return result
 }

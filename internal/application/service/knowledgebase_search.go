@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"errors"
 
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
+	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
@@ -94,15 +94,12 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 
 	logger.Infof(ctx, "Hybrid search parameters, knowledge base IDs: %v, query text: %s", searchKBIDs, params.QueryText)
 
+	// tenantInfo is consumed below for retrieval config (post-fusion step).
 	tenantInfo, _ := types.TenantInfoFromContext(ctx)
 
-	// Create a composite retrieval engine with tenant's configured retrievers
-	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
-	if err != nil {
-		logger.Errorf(ctx, "Failed to create retrieval engine: %v", err)
-		return nil, err
-	}
-
+	// Resolve the primary KB first so the factory can route to the bound
+	// VectorStore (if any). When the KB has no binding the factory falls
+	// back to the tenant's effective engines.
 	kb, err := s.repo.GetKnowledgeBaseByID(ctx, id)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
@@ -111,11 +108,23 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 		return nil, err
 	}
 
+	tenantID := types.MustTenantIDFromContext(ctx)
+
+	// Create a composite retrieval engine. When the KB is bound to a store,
+	// the factory verifies tenant ownership and returns that store's engine;
+	// otherwise it falls back to the tenant's configured retrievers.
+	retrieveEngine, err := retriever.CreateRetrieveEngineForKB(
+		ctx, s.retrieveEngine, s.ownership, tenantID, kb.VectorStoreID)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to create retrieval engine: %v", err)
+		return nil, err
+	}
+
 	// Use 5x over-retrieval to ensure sufficient candidates for RRF fusion and reranking.
 	// Scale proportionally when searching multiple KBs to maintain per-KB recall quality.
 	matchCount := max(params.MatchCount*5, 50) * len(searchKBIDs)
-	if matchCount > 1000 {
-		matchCount = 1000
+	if matchCount > 500 {
+		matchCount = 500
 	}
 
 	// Build retrieval parameters for vector and keyword engines
@@ -124,13 +133,40 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 		return nil, err
 	}
 	if len(retrieveParams) == 0 {
-		logger.Error(ctx, "No retrieval parameters available")
-		return nil, errors.New("no retrieve params")
+		// No retrievable pipelines for this KB (e.g. a wiki-only or graph-only
+		// KB that has neither vector nor keyword indexing). Return empty
+		// results rather than erroring so callers that combine multiple KB
+		// scopes (agent knowledge_search tool, chat pipeline, etc.) degrade
+		// gracefully when one of the scopes is non-searchable.
+		logger.Infof(ctx, "No retrievable indexing pipelines for KB %s (vector=%v, keyword=%v), returning empty results",
+			kb.ID, kb.IsVectorEnabled(), kb.IsKeywordEnabled())
+		return nil, nil
 	}
 
-	// Execute retrieval using the configured engines
+	// Execute retrieval using the configured engines.
+	// A dedicated span captures the actual vector/keyword DB round-trip
+	// — this is the time previously visible in Langfuse only as the gap
+	// between embedding generations and the rerank call.
 	logger.Infof(ctx, "Starting retrieval, parameter count: %d", len(retrieveParams))
-	retrieveResults, err := retrieveEngine.Retrieve(ctx, retrieveParams)
+	retrieverTypes := make([]string, 0, len(retrieveParams))
+	for _, rp := range retrieveParams {
+		retrieverTypes = append(retrieverTypes, string(rp.RetrieverType))
+	}
+	retrieveCtx, retrieveSpan := langfuse.GetManager().StartSpan(ctx, langfuse.SpanOptions{
+		Name: "retrieve",
+		Input: map[string]interface{}{
+			"kb_ids":      searchKBIDs,
+			"match_count": matchCount,
+			"retrievers":  retrieverTypes,
+		},
+		Metadata: map[string]interface{}{
+			"param_count": len(retrieveParams),
+		},
+	})
+	retrieveResults, err := retrieveEngine.Retrieve(retrieveCtx, retrieveParams)
+	retrieveSpan.Finish(map[string]interface{}{
+		"result_count": len(retrieveResults),
+	}, nil, err)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"knowledge_base_ids": searchKBIDs,
@@ -147,7 +183,11 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 	}
 	logger.Infof(ctx, "Result count before fusion: vector=%d, keyword=%d", len(vectorResults), len(keywordResults))
 
-	deduplicatedChunks := fuseOrDeduplicate(ctx, vectorResults, keywordResults)
+	var retrievalCfg *types.RetrievalConfig
+	if tenantInfo != nil {
+		retrievalCfg = tenantInfo.RetrievalConfig
+	}
+	deduplicatedChunks := fuseOrDeduplicate(ctx, vectorResults, keywordResults, retrievalCfg)
 
 	kb.EnsureDefaults()
 
@@ -175,8 +215,17 @@ func (s *knowledgeBaseService) buildRetrievalParams(
 	currentTenantID := types.MustTenantIDFromContext(ctx)
 	var retrieveParams []types.RetrieveParams
 
+	// Respect the KB's IndexingStrategy: a KB that does not have vector
+	// indexing enabled (e.g. wiki-only or graph-only KBs) has no embeddings
+	// to retrieve from, and typically has no EmbeddingModelID configured
+	// either. Skipping vector retrieval for such KBs avoids spurious
+	// "model ID cannot be empty" errors when an agent's retrieval scope
+	// happens to include them (e.g. KBSelectionMode=all picking up a
+	// wiki-only KB).
+	vectorIndexed := kb.IsVectorEnabled() && kb.EmbeddingModelID != ""
+
 	// Add vector retrieval params if supported
-	if retrieveEngine.SupportRetriever(types.VectorRetrieverType) && !params.DisableVectorMatch {
+	if retrieveEngine.SupportRetriever(types.VectorRetrieverType) && !params.DisableVectorMatch && vectorIndexed {
 		logger.Info(ctx, "Vector retrieval supported, preparing vector retrieval parameters")
 
 		var queryEmbedding []float32
@@ -233,9 +282,9 @@ func (s *knowledgeBaseService) buildRetrievalParams(
 		logger.Info(ctx, "Vector retrieval parameters setup completed")
 	}
 
-	// Add keyword retrieval params if supported and not FAQ
+	// Add keyword retrieval params if supported, KB has keyword indexing, and not FAQ
 	if retrieveEngine.SupportRetriever(types.KeywordsRetrieverType) && !params.DisableKeywordsMatch &&
-		kb.Type != types.KnowledgeBaseTypeFAQ {
+		kb.IsKeywordEnabled() && kb.Type != types.KnowledgeBaseTypeFAQ {
 		logger.Info(ctx, "Keyword retrieval supported, preparing keyword retrieval parameters")
 		retrieveParams = append(retrieveParams, types.RetrieveParams{
 			Query:            params.QueryText,

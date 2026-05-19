@@ -22,6 +22,42 @@ type WebSearchConfig struct {
 	EmbeddingDimension int    `json:"embedding_dimension,omitempty"` // 嵌入维度（用于RAG压缩）
 	RerankModelID      string `json:"rerank_model_id,omitempty"`     // 重排模型ID（用于RAG压缩）
 	DocumentFragments  int    `json:"document_fragments,omitempty"`  // 文档片段数量（用于RAG压缩）
+	ProxyURL           string `json:"proxy_url,omitempty"`           // Optional per-request proxy override; normally empty — use WebSearchProviderEntity.Parameters.proxy_url. Merged at call time when set.
+}
+
+const (
+	DefaultWebSearchMaxResults        = 10
+	DefaultWebSearchCompressionMethod = "none"
+)
+
+// DefaultWebSearchConfig returns the shared default tenant-level web search configuration.
+func DefaultWebSearchConfig() *WebSearchConfig {
+	return &WebSearchConfig{
+		MaxResults:        DefaultWebSearchMaxResults,
+		IncludeDate:       false,
+		CompressionMethod: DefaultWebSearchCompressionMethod,
+		Blacklist:         []string{},
+	}
+}
+
+// EffectiveWebSearchConfig normalizes a possibly empty config to the effective runtime config.
+func EffectiveWebSearchConfig(cfg *WebSearchConfig) *WebSearchConfig {
+	if cfg == nil {
+		return DefaultWebSearchConfig()
+	}
+
+	normalized := *cfg
+	if normalized.MaxResults <= 0 {
+		normalized.MaxResults = DefaultWebSearchMaxResults
+	}
+	if normalized.CompressionMethod == "" {
+		normalized.CompressionMethod = DefaultWebSearchCompressionMethod
+	}
+	if normalized.Blacklist == nil {
+		normalized.Blacklist = []string{}
+	}
+
+	return &normalized
 }
 
 // Value implements driver.Valuer interface for WebSearchConfig

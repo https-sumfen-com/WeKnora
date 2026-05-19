@@ -14,6 +14,220 @@ All notable changes to this project will be documented in this file.
 - 新增迁移 `000035_iframe_login`（users.mobile / tenants.external_id+iframe_secret / iframe_nonces 表）
 - 新增迁移 `000036_iframe_organization`（Organization/OrganizationMember 表，iframe 从 tenant 迁移至 organization）
 - 修复 `scripts/dev.sh` 中 `make dev-app` 使用 `go run cmd/server/main.go` 导致同包其他文件未被编译的问题，改为 `go run ./cmd/server`
+## [0.5.2] - 2026-05-13
+
+### 🚀 New Features
+- **NEW**: `weknora` CLI v0.2 — the official command-line client lives under `cli/`. Mirrors the `gh` CLI `<noun> <verb>` convention with 10 top-level commands (`api`, `auth`, `chat`, `context`, `doc`, `doctor`, `kb`, `link`, `search`, `version`). Highlights:
+  - Hybrid search and streaming RAG chat against any knowledge base.
+  - Project-level binding via `weknora link` writing `.weknora/project.yaml` (vercel/netlify pattern); subcommands auto-resolve `--kb` from the link.
+  - Stable JSON envelope (`{ok, data, error, _meta, dry_run, risk}`) on every `--json` invocation; closed error-code registry enforced by an AST scanner test.
+  - Agent affordance: `--dry-run` for write commands, exit-code 10 + `input.confirmation_required` for non-interactive destructive writes, per-command "AI agents:" guidance auto-shown when CLAUDECODE / CURSOR_AGENT is set. Operational contract in `cli/AGENTS.md`.
+  - Multi-context auth (`login` / `logout` / `list` / `status`), OS keyring + 0600 file fallback for credentials, both API-key and password (JWT) modes.
+  - Health check via `weknora doctor` (4 statuses: ok / warn / fail / skip).
+  - See `cli/README.md` for install + 5-minute quickstart.
+- **NEW**: Adaptive 3-tier chunking — documents are now profiled before splitting and routed to one of three strategies: heading-aware (Markdown structure), heuristic (form-feeds, multilingual chapter markers DE/EN/ZH, all-caps titles, visual separators), or recursive (the modernized legacy splitter as a fallback). Auto-strategy is the new default for fresh KBs; existing KBs keep their previous behavior until the user opts in. See `docs/CHUNKING.md`.
+- **NEW**: Human-in-the-loop approval for MCP tool calls (#1173) — when an MCP tool is marked sensitive, the agent now pauses and surfaces a `ToolApprovalCard` in the chat UI. Approval state is persisted (so refreshing the page does not lose context), enforced per user, and hardened for concurrent multi-instance deployments. See `docs/zh/mcp-approval.md`.
+- **NEW**: Anthropic chat provider — first-class support for Claude models, including streaming through the Anthropic gateway and `reasoning_content` round-tripping for thinking-mode providers.
+- **NEW**: Apache Doris 4.1 retriever backend — Doris joins pgvector / Elasticsearch / Milvus / Weaviate / Qdrant / Tencent VectorDB as a supported vector store, with native stream-load ingest and hybrid query.
+- **NEW**: Tencent VectorDB retriever — full-text / keyword retrieval against Tencent Cloud VectorDB.
+- **NEW**: KS3 (Kingsoft Cloud) object storage — joins Local / MinIO / AWS S3 / Volcengine TOS / Alibaba Cloud OSS as a supported storage backend.
+- **NEW**: SearXNG web search provider (#1166) — self-hosted, federated metasearch as a first-class web search option, with zero-config defaults and hardened secret handling.
+- **NEW**: Global Command Palette — replaces the standalone search page with a global ⌘K palette that fuzzy-searches knowledge bases / chats / commands and can directly start a new chat from a result.
+- **NEW**: Cloud-image packaging scripts — `scripts/cloud-image/` ships `prepare.sh`, `firstboot.sh`, `cleanup.sh`, and systemd units for producing reproducible self-hosted images (validated on Tencent Lighthouse; cloud-agnostic). Includes apt-based Docker install for restricted-egress hosts and idempotent firstboot with pinned image versions. See `docs/cloud-image/`.
+- **NEW**: KB editor — chunking settings panel surfaces the new strategy selector (Automatic / Markdown-optimized / Smart structure detection / Classic) plus advanced options for token limit per chunk and language hints. Sharper inline help text on every setting explains when defaults apply and when to tune.
+- **NEW**: Chunking debug panel — embedded "Test with sample text" panel under the chunking settings. Paste a snippet, hit Run preview, see selected tier, rejected tiers + reasons, document profile, size distribution stats over the full chunk set, and per-chunk cards with breadcrumb + content preview. Read-only, no DB or embedding side effects, 5-second server-side timeout.
+- **NEW**: `POST /api/v1/chunker/preview` endpoint backing the debug panel. Returns `selected_tier`, `tier_chain`, `rejected[]`, `profile`, `chunks[]`, and `stats`. Capped at 64k input runes / 500 chunks per response.
+- **NEW**: Per-tenant RRF (Reciprocal Rank Fusion) tuning — `RRFK`, `RRFVectorWeight`, `RRFKeywordWeight` are now configurable on the tenant `RetrievalConfig`. Defaults preserve the previous hardcoded behavior (k=60, weights 0.7/0.3).
+- **NEW**: Dedicated query-understanding model — agents can now route the query-rewrite / understanding step to a cheaper, faster model than the main reasoning model.
+- **NEW**: Document-level KB list filters with explicit batch-management UX (multi-select, batch delete, pinned-group section).
+- **NEW**: Frontend font picker + per-user UI preferences (font family, font size, theme) with a migration latch so legacy settings carry over safely.
+- **NEW**: OpenMaiC Classroom skill — generate micro-classroom content from knowledge-graph concepts, with an updated requirement-builder template.
+
+### ⚡ Improvements
+- **IMPROVED**: Agent multi-turn history is now rebuilt from the database on every turn — the dedicated `llmcontext` storage layer (in-memory / Redis) has been removed entirely. Eliminates cache invalidation bugs, avoids attachments being dropped between turns (`fix: propagate user attachments to agent query in AgentQA`), and simplifies deployment (no extra Redis namespace required).
+- **IMPROVED**: Wiki ingest scaled to 40k-document KBs — operations move through a generic task queue with dead-letter handling, conflict retries are bounded, requeue counts are capped, and the wiki ingest log is moved off the request path to a dedicated `wiki_log_entries` table with an on-demand API.
+- **IMPROVED**: Wiki page-link graph performance — new subgraph API + interactive exploration UI so large graphs no longer hang the browser; documentation clarifies the distinction between the wiki page-link graph and the entity-relation knowledge graph.
+- **IMPROVED**: Wiki sidebar lazy-loads page list with virtual-scroll tabs; image / graph overview now shows operation help entry and refined legend visuals.
+- **IMPROVED**: Langfuse observability — spans expanded across the chat pipeline (retrieval, rerank, agent step), end-to-end TTFB is logged on both ends of the chat stream, and natural-stop candidates are recorded when the model returns no tool call.
+- **IMPROVED**: LLM call timeout hardening — non-stream / stream LLM calls now have a defensive fallback timeout (300s chat / 600s stream by default, configurable up to 3600s on the agent editor), only applied when no upstream deadline is present. Prevents worker pools from being permanently blocked by hung provider requests, and stops `cancel` leaks on the raw-HTTP streaming path.
+- **IMPROVED**: GPT-5 / o-series compatibility — `MaxTokens` is now mapped to `MaxCompletionTokens` for models that require the new field.
+- **IMPROVED**: Chunker recursive priority — `splitBySeparators` now genuinely walks separators by priority and recursively re-splits oversize sub-pieces with the next-priority separator. Mirrors the Python reference. Without this fix, a "one paragraph break followed by a long run of newline-separated lines" pattern could emit ~1900-rune chunks at chunkSize=300.
+- **IMPROVED**: ChunkOverlap default consolidated to 80 (~15% of ChunkSize). Previously the Go DefaultConfig used 64, the knowledge service used 50, the Python docreader used 100, and the frontend form initialised to 100. All paths now align.
+- **IMPROVED**: ContextHeader (Markdown breadcrumb) lives on `Chunk.ContextHeader`, separate from `Chunk.Content`. Restores the `End-Start == len(Content)` invariant that the document-reconstruction path in `knowledge.go` relies on for summary generation and UI highlighting. Eliminates a duplicate-heading regression where the section heading appeared twice in a chunk's body.
+- **IMPROVED**: Embedding pipeline — exponential backoff (200/400/800/1600/3200 ms) replaces the previous fixed 100ms × 5 retry loop, with context-cancellation between attempts. `sanitizeForEmbedding` caps single embedding inputs at 20k runes with a warning log on overflow.
+- **IMPROVED**: SplitParentChild forces children onto the recursive tier, skipping per-parent profile passes (previously paid N extra O(N) document scans).
+- **IMPROVED**: Heuristic splitter snaps overlap start to the nearest semantic boundary or newline instead of slicing mid-line / mid-word.
+- **IMPROVED**: Validator flow — when every tier is rejected, the chain returns the legacy tier's output directly instead of running SplitText a second time.
+- **IMPROVED**: Token limit per chunk — when set, ChunkSize is auto-clamped to a per-language character budget (with a 10% safety factor). Prevents overshooting embedding model token caps on CJK content where 1 char ≈ 0.6 tokens.
+- **IMPROVED**: KB-config API — `strategy`, `tokenLimit`, `languages` use pointer DTOs server-side so a payload omitting a field means "no change" while an explicit empty / 0 / [] resets to default. Previously these were write-once fields.
+- **IMPROVED**: Wiki prompts enforce strict citation tracing and ontology reuse, with dedicated handling for contradictions and per-rule conflict policy.
+- **IMPROVED**: Chunker recognises CN chapter titles and multi-level numeric headings; surrounding whitespace is trimmed before embedding; protected spans are honoured during heuristic splitting; tiny adjacent chunks are coalesced in the heading splitter.
+- **IMPROVED**: Frontend nginx serves static resources with gzip + correct `Cache-Control` headers.
+- **IMPROVED**: Feishu connector tolerates partial wiki-node listing failures instead of aborting the whole sync.
+- **IMPROVED**: KB list — pinned KBs are now grouped under a dedicated section; the type column is replaced with a richer source + description subtitle.
+- **IMPROVED**: Frontend — SPA respects `BASE_URL` and now works correctly behind a path-prefix reverse proxy.
+- **IMPROVED**: GitHub issue / PR templates translated to English and rewritten; Dependabot grouping + monthly cadence applied across all ecosystems.
+
+### 🐛 Bug Fixes
+- **FIXED**: Mimo / DeepSeek-class providers — `reasoning_content` is now passed back to providers that require it for multi-turn thinking, and historical agent steps in the frontend correctly re-render `reasoning_content` instead of dropping it.
+- **FIXED**: Embedding pipeline — `OpenAIEmbedder.doRequestWithRetry` no longer shadows `err` and returns `(nil, nil)` on connection failure, which previously caused callers to SIGSEGV.
+- **FIXED**: Agent — quick-answer (RAG) mode excludes wiki-only KBs; rerank model requirement relaxed for custom agents; `data_analysis` toggle moved to the retrieval section and the stage is now opt-in per agent (#1244); attachments replayed correctly across multi-turn history; trailing thinking events that duplicate the final answer are suppressed; whitespace-only thinking events dropped; unified rendering when the model skips the `final_answer` tool; stream answer no longer mixes `think` and `answer` content; conversation end marker now reliably shown.
+- **FIXED**: Wiki ingest — concurrent lock conflict no longer exhausts retry budget; summary links and feed log reconciled when reduce LLM fails; JSON recovered from malformed / truncated fences in `extract_entity`; cap on `requeueFailedOps` retry count prevents queue pile-up.
+- **FIXED**: Storage — `tos` / `s3` / `oss` / `ks3` tenant configs are merged in `buildStorageConfig` (#1117); fall back to the global file service when tenant storage config is unavailable; sanitized document HTML now forbids `<style>` blocks.
+- **FIXED**: Data-analysis tool captures `LOCAL_STORAGE_BASE_DIR` at init time (#1040); shared knowledge included in knowledge search; graph config reporting corrected; multimodal pipeline unblocks when a `provider://` image read fails.
+- **FIXED**: FAQ — PostgreSQL cast precedence in FAQ search; ingest no longer hallucinates summaries from filenames on empty PDFs; OCR text preserved on ingest QA follow-up; insufficient-content gate covered by tests.
+- **FIXED**: Middleware — camelCase secret fields are masked in request logs.
+- **FIXED**: Chat — model fallback now includes history; pipeline data-analysis stage no longer runs for agents that did not opt in.
+- **FIXED**: Memory — episode write deduped on duplicate streaming Done.
+- **FIXED**: IM — `wecom` reconnect backoff clamped to avoid int64 overflow → busy loop; OIDC auth login fixed.
+- **FIXED**: Frontend — markdown tables render in chat wiki drawer; radio button theme + disabled selection unified; external doc-link style and outline add-button styling unified; model-settings UI polished (disabled brand color); pnpm v11 build approvals configured for Docker build; `npm` used in production build to match the committed lockfile; LaTeX formula loading restored in the rare-case markdown path; KB-editor i18n: `chunkOverlap` initial value aligned with backend default (80, not 100); description texts updated.
+- **FIXED**: Chunker — `Chunk.Start` / `End` rune-offset invariant restored; heuristic `applyOverlap` aligned to boundaries; preview endpoint stats computed over the FULL chunk set; empty / whitespace-only sample returns friendly 400; recursive split fixed by QA audit (pointer DTOs, profile reuse, stats correctness).
+- **FIXED**: Docreader — heavy parser concurrency now throttled.
+- **FIXED**: Frontend i18n — duplicate `liveIndicator` key removed from `ko-KR`; preference fallback no longer infectious.
+- **FIXED**: Client SDK — `GetChunkByIDOnly` endpoint corrected; SDK stdout logging silenced via opt-in `slog`.
+
+### 🔧 Refactoring
+- **REFACTOR**: `internal/application/service/knowledge.go` (9.8k lines) split by responsibility into focused files (`knowledge_create.go`, `knowledge_delete.go`, `knowledge_clone_move.go`, `knowledge_faq.go`, `knowledge_faq_import.go`, `knowledge_post_process.go`, `knowledge_process.go`, `knowledge_util.go`).
+- **REFACTOR**: Agent — dedicated `internal/agent/approval/` package for the MCP human-in-the-loop gate; tools gain a shared `exec_context.go`.
+- **REFACTOR**: Web-search — dropped dead `api_key` path in the SearXNG provider; SSRF whitelist tests reformatted.
+- **REFACTOR**: CLI — command surface aligned with mainstream `gh`-style conventions across releases; unused v0.0 scaffolding removed.
+
+### 🧱 Infrastructure & Build
+- **BUILD**: Go bumped to 1.26; docreader Python dependencies slimmed (removed legacy `ocr/` package, retired `storage.py`, retired `download_deps.py`).
+- **BUILD**: Major dependency bumps across server-deps and frontend-deps groups (Dependabot grouped, monthly cadence): `gorm`, `pgx/v5`, `aws-sdk-go-v2`, `weaviate`, `volcengine-tos`, `alibabacloud-oss`, `milvus`, `ollama`, `chromedp`, `duckdb-go/v2`, `minio-go/v7`, `sashabaranov/go-openai`, `volcengine-tos`, `aliyun-oss`, `vue 3.5.34`, `dompurify`, `papaparse`, `less`/`less-loader`, plus GitHub Actions (`checkout@6`, `upload-artifact@7`, `setup-go@6`, `setup-node@6`, `docker/*`).
+- **BUILD**: Migrations — `000040_wiki_log_entries`, `000041_task_queue_and_wiki_indexes`, `000042_mcp_tool_approval`; SQLite init migration updated to match.
+
+### 📚 Documentation
+- **DOC**: New `docs/CHUNKING.md` — strategy explanations, settings reference with use-case presets, token-limit guide per embedding model, debugging workflow, and known trade-offs.
+- **DOC**: New `docs/zh/mcp-approval.md` describing the MCP human-in-the-loop approval flow.
+- **DOC**: New `docs/cloud-image/README.md` and `docs/cloud-image/tencent-lighthouse.md` covering cloud-image packaging.
+- **DOC**: API documentation — Swagger annotations restored across handlers, Swagger regenerated via `make docs`, and the hand-written `docs/api/*.md` rewritten to match current routes. Includes a new `docs/api/auth.md`.
+- **DOC**: New `cli/README.md`, `cli/AGENTS.md`, top-level CLI mention added to main README, plus a CHANGELOG and ADR section under `cli/`.
+
+## [0.5.1] - 2026-04-30
+
+### 🚀 New Features
+- **NEW**: WeChat Mini Program — added a lightweight mobile client (`miniprogram/`) for configuring WeKnora API access, selecting knowledge bases, importing URLs, and chatting from inside WeChat, extending WeKnora from desktop to mobile.
+- **NEW**: Knowledge Base — document list view with multi-select, floating batch action bar, and batch delete to streamline managing large knowledge bases.
+- **NEW**: IM — tenant-wide IM Channels Overview entry under the user menu so administrators can inspect every IM channel of the tenant from a single page.
+- **NEW**: Sessions — keyword search across the conversation list, user-scoped pinning of important sessions, and clear IM-source visibility for chats originating from IM channels.
+- **NEW**: Frontend — unified Model / Web Search / MCP settings pages onto a shared card + drawer pattern with consistent layouts and reusable confirm-delete behavior.
+- **NEW**: IM channel form — switched from dialog to drawer UX, channel list moved from vertical layout to responsive grid cards with dropdown action menu, platform radio replaced with a select dropdown.
+- **NEW**: Tenant — exposed API Key reset from the API Info page; create/reset returns plaintext key once.
+- **NEW**: Storage — `STORAGE_ALLOW_LIST` env var to whitelist external storage hosts during URL rewriting / serving.
+- **NEW**: Agent — configurable per-agent LLM call timeout from the agent editor frontend.
+- **NEW**: Desktop client — added tenant switching support.
+- **NEW**: Frontend — markdown test page under dev tools for previewing rendering behavior.
+
+### ⚡ Improvements
+- **IMPROVED**: Agent — `data_analysis` tool gained SQL validation and stricter type processing.
+- **IMPROVED**: Agent — broad queries fall back to a knowledge-base document listing for better coverage (#959).
+- **IMPROVED**: Wiki ingest — failed operations are now requeued, and sync task retry behavior is aligned across regular and Lite modes.
+- **IMPROVED**: Wiki ingest (Lite) — added ingest lock to prevent concurrent execution issues.
+- **IMPROVED**: Search — `RetrieverEngines.Scan` enhanced to support both legacy and current data formats.
+- **IMPROVED**: i18n — aligned `en-US`, `ko-KR`, `ru-RU` locales with `zh-CN` as the source of truth.
+- **IMPROVED**: Helm — preserve `SYSTEM_AES_KEY` / `TENANT_AES_KEY` across upgrades to avoid breaking existing encrypted data.
+- **IMPROVED**: IM — secure private storage URL handling with HTTP rewriting in IM replies, presigned URL TTL shortening, and tenant ID preference from context.
+- **IMPROVED**: Docs — README tracing references updated from Jaeger to Langfuse across all language variants; Agent Mode and Observability sections were polished.
+
+### 🐛 Bug Fixes
+- **FIXED**: Frontend — LaTeX formulas flashing and disappearing during streaming responses (#1056).
+- **FIXED**: Docreader — removed default 100-page DOCX parsing limit.
+- **FIXED**: IM — removed pipeline-level timeout that killed multi-round agent reasoning.
+- **FIXED**: IM — sessions now isolated per agent and recover gracefully from deleted sessions.
+- **FIXED**: Search — aligned rerank priority between `Execute` and `rerankResults`.
+- **FIXED**: Container — aggregated registration errors in connector registry initialization for clearer startup diagnostics.
+- **FIXED**: Crypto — fail loudly when encrypted DB fields cannot be decrypted instead of returning empty data.
+- **FIXED**: Web search — normalized default tenant web search config at runtime.
+- **FIXED**: Wiki ingest — silent data loss caused by malformed JSON in the Redis queue.
+- **FIXED**: Tenant — return plaintext API key after create/reset for safe distribution.
+- **FIXED**: Frontend — chat drag-and-drop uploads routed correctly to the right pipeline.
+- **FIXED**: Frontend — hidden card checkbox when not in selection mode.
+- **FIXED**: Frontend — knowledge list sticky header and floating batch bar polish.
+- **FIXED**: Frontend — knowledge document list layout, batch bar, and selection behavior.
+- **FIXED**: Frontend — restored hover feedback on selected list rows.
+- **FIXED**: Frontend — keep chat input visible when conversation overflows the viewport.
+- **FIXED**: Mini program — improved knowledge base selection flow.
+- **FIXED**: Document parser — preserve standalone image uploads from the icon filter.
+- **FIXED**: Knowledge — fixed attachment document failure handling.
+
+### 🔧 Refactoring
+- **REFACTOR**: IM — moved adapter factories into per-platform subpackages (`feishu/`, `wechat/`, `wecom/`, `slack/`, `telegram/`, `dingtalk/`, `mattermost/`) for cleaner package boundaries.
+
+## [0.5.0] - 2026-04-27
+
+### 🚀 New Features
+- **NEW**: Wiki Mode — a brand-new agent-driven Wiki knowledge system that automatically distills raw documents into interlinked markdown pages. It ships with a dedicated WikiBrowser, an interactive knowledge graph visualizing references and relationships between pages, and specialized agent tools, empowering teams to grow a structured, continuously evolving knowledge base from their own materials.
+- **NEW**: Observability — integrated Langfuse for agent ReAct loop, LLM token tracking, tool calls, and asynq pipeline tracing, providing deep visibility into agent reasoning, tool execution, and system performance.
+- **NEW**: Customizable Indexing Strategy — users can now independently toggle Vector Search, Keyword Search, Wiki, and Knowledge Graph indexing on a per-knowledge-base level.
+- **NEW**: Vector Store UI & Per-KB Binding — full frontend management interface for Vector Stores, allowing users to configure connections, test connectivity, and assign specific vector stores to different knowledge bases.
+- **NEW**: Yuque Connector — Yuque data source integration with API client, full and incremental fetch, and resource mapping, enabling seamless synchronization of Yuque documents into the knowledge base.
+- **NEW**: Built-in Agent Skills — added a preloaded `OpenMAIC Classroom` agent skill.
+- **NEW**: Agent Tools — added `json_repair` tool for agents to automatically fix and parse malformed JSON outputs.
+- **NEW**: Frontend — added copy action for model cards in settings.
+- **NEW**: Agent — added support to load all sheets from Excel files for DuckDB data analysis.
+
+### ⚡ Improvements
+- **IMPROVED**: Agent — improved tenant context handling and error reporting.
+- **IMPROVED**: Agent — updated synthesis and issue flagging instructions in system prompt.
+- **IMPROVED**: Debugging — enhanced LLM request logging and debug output (`llm_debug`) across all model providers.
+
+### 🐛 Bug Fixes
+- **FIXED**: Agent — materialized knowledge files to temp path for DuckDB to fix access issues
+- **FIXED**: Agent — removed rerank model requirement for wiki-only agents
+- **FIXED**: Docreader — whitelisted offline protoc zip packages in dockerignore
+- **FIXED**: System — changed hardcoded version to `*` comparison for new Linux version compatibility
+- **FIXED**: Setup — added output if offline protoc install package already exists
+
+## [0.4.0] - 2026-04-14
+
+### 🚀 New Features
+- **NEW**: Cloud Knowledge Assistant — [WeKnora Platform](https://weknora.weixin.qq.com/platform), a cloud-hosted knowledge assistant service for quick onboarding without local deployment
+- **NEW**: WeKnora Cloud — WeKnora Cloud provider integration, providing hosted LLM models and document parsing capabilities, with credential management, status checks, and UI feedback
+- **NEW**: Chrome Extension — browser extension support with menu entry and quick access integration for seamless knowledge capture from web pages
+- **NEW**: WeChat IM Integration — WeChat channel adapter with QR code login and long-polling message support
+- **NEW**: ClawHub Skill — WeKnora Skill published on ClawHub platform, enabling document import, hybrid search, and knowledge management via the WeKnora REST API
+- **NEW**: Attachment Processing — file attachment support in chat pipeline with enhanced error handling, content formatting, and image/attachment metadata injection in queries
+- **NEW**: Azure OpenAI Provider — full Azure OpenAI support for chat, VLM, and embedding models with deployment name preservation, configurable dimensions parameter, provider registration with metadata, URL auto-detection, and frontend provider integration with i18n
+- **NEW**: Alibaba Cloud OSS Storage — object storage support via S3-compatible mode with configuration UI, connectivity test, status reporting, OSS TypeScript types, docreader OssStorage class, factory and container registration, and multi-language i18n (Korean, Russian)
+- **NEW**: Notion Connector — Notion data source integration with API client, type definitions, Connector interface, markdown renderer, and dependency injection registration
+- **NEW**: Baidu Web Search Provider — added Baidu as a web search provider option (#907)
+- **NEW**: Ollama Web Search Provider — added Ollama as a web search provider option (#907)
+- **NEW**: VectorStore Management — VectorStore entity, repository, database migrations, service layer with connection testing, and full CRUD API endpoints with Swagger documentation
+
+### ⚡ Improvements
+- Data source resource selector upgraded to tree view with parent-child indentation and cascading check/uncheck
+- Customizable LLM call timeout for agents with docker-compose environment mapping
+- Enhanced document summary with expandable/collapsible functionality and overflow detection for improved user interaction
+- Improved chat UI with hover effects, database schema updates for chat history and retrieval configurations
+- Enhanced chat pipeline query handling with image and attachment metadata
+- Support custom endpoints for private WeCom deployments in IM channels
+- Integrated Lumberjack for log file management with rotation and compression
+- New document analysis prompt template and enhanced rewrite template descriptions
+- Integrated ChatBot provider and docreader for unified chat service
+
+### 🐛 Bug Fixes
+- Fixed hardcoded TruncatePromptTokens in BatchEmbed causing unintended embedding truncation
+- Fixed `<kb>` and `<web>` citation tags not being stripped before sending to IM platforms, causing raw tags in user-visible messages
+- Fixed tool name duplication in streaming tool calls
+- Fixed MINIO_ENDPOINT not configurable via environment variable
+- Fixed Azure OpenAI dimensions support not gated properly for non-supporting models
+- Fixed Azure OpenAI ModelMapperFunc overriding deployment names instead of preserving them as-is
+- Fixed Azure OpenAI connection test not passing provider, causing incorrect endpoint usage
+- Fixed 400 errors incorrectly treated as connection failures in model connectivity check (parameter mismatch is not a connectivity issue)
+- Fixed Dockerfile build error with duplicate libsqlite3-0 and ffmpeg installation
+- Fixed OSS S3-compatible API signature mismatch by disabling automatic checksum calculation and adjusting path-style settings
+- Fixed missing closing brace in checkOSS function
+- Fixed neo4j driver compatibility with Go 1.24 on Windows: reverted to v6 with -p=1 compiler workaround
+
+### 🔧 Refactoring
+- Replaced CryptoService with lightweight utils AES helpers, simplifying encryption logic across the codebase
+- Optimized OSS storage initialization, URL formatting, and security handling for improved S3 compatibility
+- Enhanced WeKnora Cloud internationalization and UI feedback for credential management operations
+
+### 📚 Documentation
+- Added VectorStore CRUD API endpoint documentation with Swagger annotations
+- Added Alibaba Cloud OSS support documentation and API descriptions
 
 ## [0.3.6] - 2026-04-03
 
@@ -860,6 +1074,8 @@ All notable changes to this project will be documented in this file.
 - Docker Compose for quick startup and service orchestration.
 - MCP server support for integrating with MCP-compatible clients.
 
+[0.5.0]: https://github.com/Tencent/WeKnora/tree/v0.5.0
+[0.4.0]: https://github.com/Tencent/WeKnora/tree/v0.4.0
 [0.3.6]: https://github.com/Tencent/WeKnora/tree/v0.3.6
 [0.3.5]: https://github.com/Tencent/WeKnora/tree/v0.3.5
 [0.3.4]: https://github.com/Tencent/WeKnora/tree/v0.3.4

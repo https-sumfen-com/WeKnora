@@ -1,16 +1,28 @@
 import { get, post, put, del, postUpload, getDown } from "../../utils/request";
 
 // 知识库管理 API（列表、创建、获取、更新、删除、复制）
-export function listKnowledgeBases(params?: { agent_id?: string }) {
+export function listKnowledgeBases(params?: {
+  agent_id?: string;
+  /**
+   * Optional creator filter. Server-side semantics:
+   *   - "mine"   → only KBs whose creator_id matches the caller
+   *   - "others" → only KBs created by someone else in this tenant
+   *   - omitted/"all" → no filter
+   * KBs predating the RBAC backfill (creator_id="") never match
+   * mine/others — they fall out of both views by design.
+   */
+  creator?: 'all' | 'mine' | 'others';
+}) {
   const query = new URLSearchParams();
   if (params?.agent_id) query.set('agent_id', params.agent_id);
+  if (params?.creator && params.creator !== 'all') query.set('creator', params.creator);
   const qs = query.toString();
   return get(qs ? `/api/v1/knowledge-bases?${qs}` : '/api/v1/knowledge-bases');
 }
 
-export function createKnowledgeBase(data: { 
-  name: string; 
-  description?: string; 
+export function createKnowledgeBase(data: {
+  name: string;
+  description?: string;
   type?: 'document' | 'faq';
   chunking_config?: any;
   embedding_model_id?: string;
@@ -28,6 +40,17 @@ export function createKnowledgeBase(data: {
   };
   extract_config?: any;
   faq_config?: { index_mode: string; question_index_mode?: string };
+  wiki_config?: {
+    synthesis_model_id?: string;
+    max_pages_per_ingest?: number;
+    extraction_granularity?: 'focused' | 'standard' | 'exhaustive';
+  };
+  indexing_strategy?: {
+    vector_enabled: boolean;
+    keyword_enabled: boolean;
+    wiki_enabled: boolean;
+    graph_enabled: boolean;
+  };
 }) {
   return post(`/api/v1/knowledge-bases`, data);
 }
@@ -39,8 +62,31 @@ export function getKnowledgeBaseById(id: string, options?: { agent_id?: string }
   return get(qs ? `/api/v1/knowledge-bases/${id}?${qs}` : `/api/v1/knowledge-bases/${id}`);
 }
 
-export function updateKnowledgeBase(id: string, data: { name: string; description?: string; config: any }) {
+export function updateKnowledgeBase(id: string, data: {
+  name: string;
+  description?: string;
+  config?: {
+    chunking_config?: any;
+    image_processing_config?: any;
+    faq_config?: any;
+    wiki_config?: {
+      synthesis_model_id?: string;
+      max_pages_per_ingest?: number;
+      extraction_granularity?: 'focused' | 'standard' | 'exhaustive';
+    };
+    indexing_strategy?: {
+      vector_enabled: boolean;
+      keyword_enabled: boolean;
+      wiki_enabled: boolean;
+      graph_enabled: boolean;
+    };
+  }
+}) {
   return put(`/api/v1/knowledge-bases/${id}` , data);
+}
+
+export function rebuildKBIndex(kbId: string) {
+  return post(`/api/v1/knowledge-bases/${kbId}/rebuild-index`, {});
 }
 
 export function deleteKnowledgeBase(id: string) {
@@ -99,20 +145,28 @@ export function createManualKnowledge(kbId: string, data: { title: string; conte
 
 export function listKnowledgeFiles(
   kbId: string,
-  params: { page: number; page_size: number; tag_id?: string; keyword?: string; file_type?: string },
+  params: {
+    page: number;
+    page_size: number;
+    tag_id?: string;
+    keyword?: string;
+    file_type?: string;
+    parse_status?: string;
+    source?: string;
+    start_time?: string;
+    end_time?: string;
+  },
 ) {
   const query = new URLSearchParams();
   query.append('page', String(params.page));
   query.append('page_size', String(params.page_size));
-  if (params.tag_id) {
-    query.append('tag_id', params.tag_id);
-  }
-  if (params.keyword) {
-    query.append('keyword', params.keyword);
-  }
-  if (params.file_type) {
-    query.append('file_type', params.file_type);
-  }
+  if (params.tag_id) query.append('tag_id', params.tag_id);
+  if (params.keyword) query.append('keyword', params.keyword);
+  if (params.file_type) query.append('file_type', params.file_type);
+  if (params.parse_status) query.append('parse_status', params.parse_status);
+  if (params.source) query.append('source', params.source);
+  if (params.start_time) query.append('start_time', params.start_time);
+  if (params.end_time) query.append('end_time', params.end_time);
   const qs = query.toString();
   return get(`/api/v1/knowledge-bases/${kbId}/knowledge?${qs}`);
 }
@@ -134,6 +188,11 @@ export function reparseKnowledge(id: string) {
 
 export function delKnowledgeDetails(id: string) {
   return del(`/api/v1/knowledge/${id}`);
+}
+
+// 批量删除（同一知识库内）。后端会校验所有 id 隶属于 kb_id 且具有编辑权限。
+export function batchDeleteKnowledge(kbId: string, ids: string[]) {
+  return post(`/api/v1/knowledge/batch-delete`, { kb_id: kbId, ids });
 }
 
 export function downKnowledgeDetails(id: string) {

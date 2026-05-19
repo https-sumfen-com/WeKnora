@@ -18,11 +18,17 @@
     <a href="https://chatbot.weixin.qq.com" target="_blank">
         <img alt="微信对话开放平台" src="https://img.shields.io/badge/微信对话开放平台-5ac725">
     </a>
+    <a href="https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd" target="_blank">
+        <img alt="Chrome 插件" src="https://img.shields.io/badge/Chrome 插件-WeKnora-4285F4">
+    </a>
+    <a href="https://clawhub.ai/lyingbug/weknora" target="_blank">
+        <img alt="ClawHub Skill" src="https://img.shields.io/badge/ClawHub Skill-WeKnora-ff6b35">
+    </a>
     <a href="https://github.com/Tencent/WeKnora/blob/main/LICENSE">
         <img src="https://img.shields.io/badge/License-MIT-ffffff?labelColor=d4eaf7&color=2e6cc4" alt="License">
     </a>
     <a href="./CHANGELOG.md">
-        <img alt="版本" src="https://img.shields.io/badge/version-0.3.6-2e6cc4?labelColor=d4eaf7">
+        <img alt="版本" src="https://img.shields.io/badge/version-0.5.2-2e6cc4?labelColor=d4eaf7">
     </a>
 </p>
 
@@ -38,19 +44,49 @@
   </h4>
 </p>
 
-# 💡 WeKnora - 基于大模型的文档理解检索框架
+# 💡 WeKnora — 让文档活起来：RAG、Agent 推理与自动 Wiki 一体化的知识框架
 
 ## 📌 项目介绍
 
-**[WeKnora（维娜拉）](https://weknora.weixin.qq.com)** 是一款基于大语言模型（LLM）的智能知识管理与问答框架，专为企业级文档理解与语义检索场景打造。
+**[WeKnora（维娜拉）](https://weknora.weixin.qq.com)** 是一款开源的、基于大语言模型（LLM）的知识管理框架，专为企业级文档理解、语义检索与智能推理场景打造。
 
-WeKnora 提供**快速问答**与**智能推理**两种问答模式。快速问答基于 **RAG（Retrieval-Augmented Generation）** 流水线，快速召回相关片段并生成回答，适合日常知识查询。智能推理基于 **ReACT Agent** 引擎，采用**渐进式策略**自主编排知识检索、MCP 工具和网络搜索，经过多轮迭代与反思逐步推导最终结论，适合多源信息整合与复杂任务。同时支持自定义智能体，灵活配置专属的知识库、工具集与系统提示词。两种模式按需选用，兼顾响应速度与推理深度。
+框架围绕三大核心能力构建：**RAG 快速问答**适合日常知识查询，**ReAct Agent 智能推理**自主编排知识检索、MCP 工具与网络搜索完成复杂多步任务，全新的 **Wiki 模式**则让 Agent 从原始文档中自治生成相互链接的 Markdown 知识库与可视化知识图谱。结合多源数据接入（飞书 / Notion / 语雀，更多持续接入中）、二十余家主流模型厂商集成、Langfuse 全链路可观测性，以及完全可私有化部署的模块化架构，WeKnora 帮助团队把分散文档沉淀为可查询、可推理、可持续演进的专属知识资产。
 
-框架支持从飞书等外部平台自动同步知识（更多数据源持续接入中），覆盖 PDF、Word、图片、Excel 等十余种文档格式，并可通过企业微信、飞书、Slack、Telegram 等 IM 频道直接提供问答服务。模型层面兼容 OpenAI、DeepSeek、Qwen（阿里云）、智谱、混元、Gemini、MiniMax、NVIDIA、Ollama 等主流厂商。全流程模块化设计，大模型、向量数据库、存储等组件均可灵活替换，支持本地与私有云部署，数据完全自主可控。
-
-**官网：** [https://weknora.weixin.qq.com](https://weknora.weixin.qq.com)
+框架支持从飞书、Notion 及语雀等外部平台自动同步知识（更多数据源持续接入中），覆盖 PDF、Word、图片、Excel 等十余种文档格式，并可通过企业微信、飞书、Slack、Telegram 等 IM 频道直接提供问答服务。模型层面兼容 OpenAI、DeepSeek、Qwen（阿里云）、智谱、混元、Gemini、MiniMax、NVIDIA、Ollama 等主流厂商。全流程模块化设计，大模型、向量数据库、存储等组件均可灵活替换，支持本地与私有云部署，数据完全自主可控。WeKnora 还无缝集成了 **Langfuse**，为 Agent 运行、Token 使用及任务流水线提供了全面的可观测性追踪。
 
 ## ✨ 最新更新
+
+**v0.5.2 版本亮点：**
+
+- **Wiki 模式规模化**：Wiki 入库通过通用任务队列 + 死信队列支撑万级文档知识库；页面链接图新增子图 API + 交互式探索 UI。
+- **MCP 工具人机审批（Human-in-the-Loop）**：敏感的 MCP 工具调用会暂停 Agent，并在对话 UI 中等待用户显式审批。
+- **更多模型 / 向量库 / 存储 / 搜索后端**：新增 Anthropic（Claude）、Apache Doris 4.1、腾讯云 VectorDB、金山云 KS3、SearXNG；配合向量数据库管理 UI 与按知识库独立开关的索引策略使用。
+- **观测性深化**：Langfuse Span 扩展至 retrieval / rerank / agent 各阶段；对话流首尾两端记录端到端 TTFB；LLM 调用兜底超时加固，避免 worker 池被卡死请求永久阻塞。
+- **自适应三层分块**：文档自动路由到 标题感知 / 启发式 / 递归 三种策略，知识库编辑器内嵌实时调试面板。详见 [`docs/CHUNKING.md`](./docs/CHUNKING.md)。
+- **全局命令面板**：⌘K 面板取代原独立搜索页，可直接从结果开启新对话。
+- **更多数据源与移动端**：新增语雀连接器（全量 + 增量同步），与飞书 / Notion 并列；附带轻量级微信小程序客户端（位于 `miniprogram/`）。
+- **`weknora` CLI（早期版本）**：位于 `cli/` 的官方命令行客户端早期版本，欢迎反馈。
+- **其他改进**：租户级 RRF 调参；查询理解专用模型；知识库批量管理与置顶分组；用户维度的会话置顶与关键词搜索；租户级 IM 频道总览；按用户保存的字体 / 主题偏好；新增 OpenMaiC 微课堂 Agent 技能；API 文档 / Swagger / Client SDK 全量整改。
+- **重要修复**：修复 Embedder 在连接失败时返回 `(nil, nil)` 导致 SIGSEGV 的问题；Mimo / DeepSeek 类提供商 `reasoning_content` 正确回传；Agent 多轮历史改为从 DB 重建并修复附件跨轮丢失；修复 OIDC 登录；多个 Wiki 入库可靠性问题；空 PDF 不再凭文件名编造摘要。
+
+<details>
+<summary><b>更早版本</b></summary>
+
+**v0.4.0 版本亮点：**
+
+- **[知识助理](https://weknora.weixin.qq.com/platform)**：云端托管的知识助理服务，无需本地部署即可快速体验
+- **WeKnora Cloud**：WeKnora Cloud 模型服务集成，提供托管大模型和文档解析能力，支持凭证管理与状态检查
+- **[Chrome 插件](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)**：浏览器插件支持网页知识快速采集
+- **[ClawHub Skill](https://clawhub.ai/lyingbug/weknora)**：ClawHub Skill 技能市场集成，一键安装 Agent 技能
+- **微信 IM 集成**：微信频道适配器，支持扫码登录和长轮询消息接收
+- **附件处理**：对话流水线支持文件附件，增强错误处理和内容格式化，注入图片/附件元数据
+- **Azure OpenAI 提供商**：全面支持 Azure OpenAI 的 Chat、VLM 和 Embedding 模型，保留部署名称映射，支持 dimensions 参数配置
+- **阿里云 OSS 存储**：通过 S3 兼容模式支持阿里云 OSS 对象存储，提供配置界面、连通性测试和多语言国际化支持
+- **Notion 连接器**：Notion 数据源集成，包含 API 客户端、Markdown 渲染器和 Connector 接口实现
+- **百度 & Ollama 网页搜索**：新增百度和 Ollama 作为网页搜索引擎
+- **VectorStore 管理**：完整的 VectorStore CRUD 功能，包含实体、仓库、服务层、连通性测试和 API 端点
+- **重要修复**：修复 Azure OpenAI 端点处理、Embedding 截断、IM 引用标签清理、neo4j Go 1.24 Windows 兼容性及 OSS 签名问题
+
 
 **v0.3.6 版本亮点：**
 
@@ -76,9 +112,6 @@ WeKnora 提供**快速问答**与**智能推理**两种问答模式。快速问�
 - **MCP工具名称稳定性**：工具名称改为基于service.Name（跨重连保持稳定），新增唯一名称约束和碰撞防护；前端将snake_case工具名格式化为可读形式
 - **来源频道标记**：知识条目和消息新增channel字段，记录来源（web/api/im/browser_extension），便于追溯
 - **重要修复**：修复无知识库时Agent空响应、中文/emoji文档摘要UTF-8截断、租户设置更新时API密钥加密丢失、vLLM流式推理内容缺失、Rerank空段落过滤等问题
-
-<details>
-<summary><b>更早版本</b></summary>
 
 **v0.3.4 版本亮点：**
 
@@ -146,6 +179,25 @@ WeKnora 提供**快速问答**与**智能推理**两种问答模式。快速问�
 </details>
 
 
+## 📱 功能展示
+
+<table>
+  <tr>
+    <td colspan="2" align="center"><b>💬 智能问答对话</b><br/><img src="./docs/images/qa.png" alt="智能问答对话" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>📖 Wiki 浏览器</b><br/><img src="./docs/images/wiki-browser.png" alt="Wiki 浏览器" width="100%"></td>
+    <td width="50%" align="center"><b>🕸️ Wiki 知识图谱</b><br/><img src="./docs/images/wiki-graph.png" alt="Wiki 知识图谱" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>🤖 Agent 模式 · 工具调用过程</b><br/><img src="./docs/images/agent-qa.png" alt="Agent 模式工具调用过程" width="100%"></td>
+    <td width="50%" align="center"><b>⚙️ 对话设置</b><br/><img src="./docs/images/settings.png" alt="对话设置" width="100%"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>🔭 监控可观测性 · Langfuse Tracing</b><br/><img src="./docs/images/langfuse.png" alt="Langfuse Tracing" width="100%"></td>
+  </tr>
+</table>
+
 ## 🏗️ 架构设计
 
 ![weknora-architecture.png](./docs/images/architecture.png)
@@ -154,155 +206,109 @@ WeKnora 提供**快速问答**与**智能推理**两种问答模式。快速问�
 
 ## 🧩 功能概览
 
-**🤖 智能对话**
+**智能对话**
 
 | 能力 | 详情 |
 |------|------|
 | 智能推理 | ReACT 渐进式多步推理，自主编排知识检索、MCP 工具与网络搜索，支持自定义智能体 |
 | 快速问答 | 基于知识库的 RAG 问答，快速准确地回答问题 |
-| 工具调用 | 内置工具、MCP 工具、Skills 支持、网络搜索 |
+| Wiki 模式 | Agent 驱动从原始文档中自动生成并维护结构化、相互链接的 Markdown Wiki 知识页面 |
+| 工具调用 | 内置工具、MCP 工具、网络搜索 |
 | 对话策略 | 在线 Prompt 编辑、检索阈值调节、多轮上下文感知 |
 | 推荐问题 | 基于知识库内容自动生成推荐问题 |
 
-**📚 知识管理**
+**知识管理**
 
 | 能力 | 详情 |
 |------|------|
-| 知识库类型 | FAQ / 文档，支持文件夹导入、URL 导入、标签管理、在线录入 |
-| 数据源导入 | 飞书知识库自动同步（更多数据源开发中），支持增量与全量同步 |
+| 知识库类型 | FAQ / 文档 / Wiki，支持文件夹导入、URL 导入、标签管理、在线录入 |
+| 数据源导入 | 飞书 / Notion / 语雀 知识库自动同步（更多数据源开发中），支持增量与全量同步 |
 | 文档格式 | PDF / Word / Txt / Markdown / HTML / 图片 / CSV / Excel / PPT / JSON |
 | 检索策略 | BM25 稀疏召回 / Dense 稠密召回 / GraphRAG 图谱增强 / 父子分块 / 多维度索引 |
 | 端到端测试 | 检索+生成全链路可视化，评估召回命中率、BLEU / ROUGE 等指标 |
 
-**🔌 集成与扩展**
+**集成与扩展**
 
 | 能力 | 详情 |
 |------|------|
-| 模型厂商 | OpenAI / DeepSeek / Qwen（阿里云）/ 智谱 / 混元 / 豆包（火山引擎）/ Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
-| 向量数据库 | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant |
-| 对象存储 | 本地 / 腾讯云COS / 火山引擎 TOS / MinIO / AWS S3 / 阿里云 OSS |
-| IM 集成 | 企业微信 / 飞书 / Slack / Telegram / 钉钉 / Mattermost |
-| 网络搜索 | DuckDuckGo / Bing / Google / Tavily |
+| 模型厂商 | OpenAI / Azure OpenAI / Anthropic（Claude）/ DeepSeek / Qwen（阿里云）/ 智谱 / 混元 / 豆包（火山引擎）/ Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
+| 向量数据库 | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant / Apache Doris / 腾讯云 VectorDB |
+| 对象存储 | 本地 / 腾讯云COS / 火山引擎 TOS / MinIO / AWS S3 / 阿里云 OSS / 金山云 KS3 |
+| IM 集成 | 企业微信 / 飞书 / Slack / Telegram / 钉钉 / Mattermost / 微信 |
+| 网络搜索 | DuckDuckGo / Bing / Google / Tavily / Baidu / Ollama / SearXNG |
 
 
-**🛡️ 平台能力**
+**平台能力**
 
 | 能力 | 详情 |
 |------|------|
 | 部署 | 本地 / Docker / Kubernetes (Helm)，支持私有化离线部署 |
-| 界面 | Web UI / RESTful API / Chrome Extension|
+| 界面 | Web UI / RESTful API / 命令行（`weknora`）/ Chrome Extension / 微信小程序 |
+| 可观测性 | 集成 Langfuse 以追踪 ReAct 循环、Token 消耗、工具调用和任务流水线 |
 | 任务管理 | MQ 异步任务，版本升级自动数据库迁移 |
-| 模型管理 | 集中配置，知识库级别模型选择，多租户共享内置模型 |
+| 模型管理 | 集中配置，知识库级别模型选择，多租户共享内置模型，WeKnora Cloud 托管模型与文档解析 |
 
+## 🧩 Chrome 插件
+
+[**WeKnora Chrome 插件**](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)支持在浏览器中直接将网页内容采集到 WeKnora 知识库。选中文本、图片或整个页面，一键保存为知识条目，无需复制粘贴或手动上传文件。
+
+
+## 📱 微信小程序
+
+[**WeKnora 微信小程序**](./miniprogram/README.md) 提供轻量移动端客户端，支持配置 WeKnora API、选择知识库、导入 URL，并在微信内向知识库提问。
+
+
+## 🦞 ClawHub Skill
+
+[**WeKnora ClawHub Skill**](https://clawhub.ai/lyingbug/weknora) 是 WeKnora 发布在 ClawHub 平台上的技能。安装后，可通过 WeKnora REST API 上传文档（文件 / URL / Markdown）、执行混合检索（向量 + 关键词）以及管理知识条目。
+
+- **文档导入** — 通过 Agent 上传文件、导入网页或写入 Markdown 知识
+- **混合检索** — 在单个或多个知识库中进行向量 + 关键词混合搜索
+- **知识管理** — 以编程方式浏览、编辑和删除知识条目
 
 ## 🚀 快速开始
 
 ### 🛠 环境要求
 
-确保本地已安装以下工具：
-
-- [Docker](https://www.docker.com/)
-- [Docker Compose](https://docs.docker.com/compose/)
+- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 - [Git](https://git-scm.com/)
 
-### 📦 安装步骤
-
-#### ① 克隆代码仓库
+### 📦 安装与启动
 
 ```bash
-# 克隆主仓库
 git clone https://github.com/Tencent/WeKnora.git
 cd WeKnora
+cp .env.example .env   # 按需编辑 .env，详见文件内注释
+docker compose up -d   # 启动核心服务
 ```
 
-#### ② 配置环境变量
+启动成功后访问 **http://localhost** 即可使用。
 
-```bash
-# 复制示例配置文件
-cp .env.example .env
+> 如需使用本地 Ollama 模型，请先运行 `ollama serve > /dev/null 2>&1 &`
 
-# 编辑 .env，填入对应配置信息
-# 所有变量说明详见 .env.example 注释
-```
+### 🔧 可选服务（Docker Compose Profile）
 
-#### ③ 启动主服务
+按需添加 `--profile` 启动额外组件，多个 profile 可叠加使用：
 
-#### 单独启动 Ollama（可选）
+| Profile | 说明 | 启动命令 |
+|---------|------|----------|
+| _(默认)_ | 核心服务 | `docker compose up -d` |
+| `full` | 全部功能 | `docker compose --profile full up -d` |
+| `neo4j` | 知识图谱 (Neo4j) | `docker compose --profile neo4j up -d` |
+| `minio` | 对象存储 (MinIO) | `docker compose --profile minio up -d` |
+| `langfuse` | 链路追踪 (Langfuse) | `docker compose --profile langfuse up -d` |
 
-如果你在 `.env` 中配置了本地 Ollama 模型，还需要额外启动 Ollama 服务：
+组合示例：`docker compose --profile neo4j --profile minio up -d`
 
-```bash
-ollama serve > /dev/null 2>&1 &
-```
+停止服务：`docker compose down`
 
-#### 激活不同组合的功能
+### 🌐 服务地址
 
-- 启动最小功能
-
-```bash
-docker compose up -d
-```
-
-- 启动全部功能
-
-```bash
-docker compose --profile full up -d
-```
-
-- 需要 tracing 日志
-
-```bash
-docker compose --profile jaeger up -d
-```
-
-- 需要 neo4j 知识图谱
-
-```bash
-docker compose --profile neo4j up -d
-```
-
-- 需要 minio 文件存储服务
-
-```bash
-docker compose --profile minio up -d
-```
-
-- 多选项组合
-
-```bash
-docker compose --profile neo4j --profile minio up -d
-```
-
-#### ④ 停止服务
-
-```bash
-docker compose down
-```
-
-### 🌐 服务访问地址
-
-启动成功后，可访问以下地址：
-
-- Web UI：`http://localhost`
-- 后端 API：`http://localhost:8080`
-- 链路追踪（Jaeger）：`http://localhost:16686`
-
-## 📱 功能展示
-
-<table>
-  <tr>
-    <td colspan="2"><b>智能问答对话</b><br/><img src="./docs/images/qa.png" alt="智能问答对话"></td>
-  </tr>
-  <tr>
-    <td colspan="2"><b>Agent模式工具调用过程</b><br/><img src="./docs/images/agent-qa.png" alt="Agent模式工具调用过程"></td>
-  </tr>
-  <tr>
-    <td><b>知识库管理</b><br/><img src="./docs/images/knowledgebases.png" alt="知识库管理"></td>
-    <td><b>对话设置</b><br/><img src="./docs/images/settings.png" alt="对话设置"></td>
-  </tr>
-</table>
-
-
+| 服务 | 地址 |
+|------|------|
+| Web UI | `http://localhost` |
+| 后端 API | `http://localhost:8080` |
+| 链路追踪 (Langfuse) | `http://localhost:3000` |
 
 ## 文档知识图谱
 
@@ -376,42 +382,11 @@ WeKnora/
 
 ## 🤝 贡献指南
 
-我们欢迎社区用户参与贡献！如有建议、Bug 或新功能需求，请通过 [Issue](https://github.com/Tencent/WeKnora/issues) 提出，或直接提交 Pull Request。
+欢迎通过 [Issue](https://github.com/Tencent/WeKnora/issues) 反馈问题或提交 Pull Request。
 
-### 🎯 贡献方式
+**流程：** Fork → 新建分支 → 提交更改 → 创建 PR
 
-- 🐛 **Bug修复**: 发现并修复系统缺陷
-- ✨ **新功能**: 提出并实现新特性
-- 📚 **文档改进**: 完善项目文档
-- 🧪 **测试用例**: 编写单元测试和集成测试
-- 🎨 **UI/UX优化**: 改进用户界面和体验
-
-### 📋 贡献流程
-
-1. **Fork项目** 到你的GitHub账户
-2. **创建特性分支** `git checkout -b feature/amazing-feature`
-3. **提交更改** `git commit -m 'Add amazing feature'`
-4. **推送分支** `git push origin feature/amazing-feature`
-5. **创建Pull Request** 并详细描述变更内容
-
-### 🎨 代码规范
-
-- 遵循 [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
-- 使用 `gofmt` 格式化代码
-- 添加必要的单元测试
-- 更新相关文档
-
-### 📝 提交规范
-
-使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范：
-
-```
-feat: 添加文档批量上传功能
-fix: 修复向量检索精度问题  
-docs: 更新API文档
-test: 添加检索引擎测试用例
-refactor: 重构文档解析模块
-```
+**规范：** 使用 `gofmt` 格式化代码，遵循 [Conventional Commits](https://www.conventionalcommits.org/) 提交（`feat:` / `fix:` / `docs:` / `test:` / `refactor:`）
 
 ## 🔒 安全声明
 
@@ -442,4 +417,3 @@ refactor: 重构文档解析模块
    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Tencent/WeKnora&type=date&legend=top-left" />
  </picture>
 </a>
-

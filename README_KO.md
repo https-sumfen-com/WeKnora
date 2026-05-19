@@ -18,11 +18,17 @@
     <a href="https://chatbot.weixin.qq.com" target="_blank">
         <img alt="WeChat 대화 오픈 플랫폼" src="https://img.shields.io/badge/WeChat_대화_오픈_플랫폼-5ac725">
     </a>
+    <a href="https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd" target="_blank">
+        <img alt="Chrome 확장 프로그램" src="https://img.shields.io/badge/Chrome_확장_프로그램-WeKnora-4285F4">
+    </a>
+    <a href="https://clawhub.ai/lyingbug/weknora" target="_blank">
+        <img alt="ClawHub Skill" src="https://img.shields.io/badge/ClawHub_Skill-WeKnora-ff6b35">
+    </a>
     <a href="https://github.com/Tencent/WeKnora/blob/main/LICENSE">
         <img src="https://img.shields.io/badge/License-MIT-ffffff?labelColor=d4eaf7&color=2e6cc4" alt="License">
     </a>
     <a href="./CHANGELOG.md">
-        <img alt="버전" src="https://img.shields.io/badge/version-0.3.6-2e6cc4?labelColor=d4eaf7">
+        <img alt="버전" src="https://img.shields.io/badge/version-0.5.2-2e6cc4?labelColor=d4eaf7">
     </a>
 </p>
 
@@ -38,19 +44,49 @@
   </h4>
 </p>
 
-# 💡 WeKnora - LLM 기반 문서 이해 및 검색 프레임워크
+# 💡 WeKnora — 문서를 살아있는 지식으로: RAG · Agent 추론 · 자동 Wiki 통합 LLM 지식 프레임워크
 
 ## 📌 개요
 
-[**WeKnora**](https://weknora.weixin.qq.com)는 엔터프라이즈급 문서 이해와 시맨틱 검색을 위해 설계된, LLM 기반의 지능형 지식 관리 및 Q&A 프레임워크입니다.
+[**WeKnora**](https://weknora.weixin.qq.com)는 엔터프라이즈급 문서 이해, 시맨틱 검색, 자율 추론 시나리오를 위해 설계된 오픈소스 LLM 기반 지식 프레임워크입니다.
 
-WeKnora는 **빠른 Q&A**와 **지능형 추론** 두 가지 Q&A 모드를 제공합니다. 빠른 Q&A는 **RAG(Retrieval-Augmented Generation)** 파이프라인으로 관련 조각을 빠르게 검색하여 답변을 생성하며, 일상적인 지식 검색에 적합합니다. 지능형 추론은 **ReACT Agent** 엔진이 **점진적 전략**으로 지식 검색, MCP 도구, 웹 검색을 자율적으로 오케스트레이션하며, 반복 추론과 리플렉션을 통해 단계적으로 결론을 도출합니다. 다중 소스 통합과 복잡한 작업에 적합합니다. 커스텀 에이전트도 지원하여 전용 지식베이스, 도구 세트, 시스템 프롬프트를 유연하게 구성할 수 있습니다. 용도에 맞게 모드를 선택하여 응답 속도와 추론 깊이를 동시에 달성합니다.
+본 프레임워크는 **세 가지 핵심 역량**을 중심으로 구성됩니다. 일상 검색에 최적화된 **RAG 기반 빠른 Q&A**, 지식 검색·MCP 도구·웹 검색을 자율적으로 오케스트레이션하여 복잡한 다단계 작업을 처리하는 **ReAct Agent 추론**, 그리고 Agent가 원본 문서에서 상호 연결된 마크다운 지식베이스와 인터랙티브 지식 그래프를 스스로 생성·유지하는 완전히 새로운 **Wiki 모드**입니다. 다양한 데이터 소스 연동(Feishu / Notion / Yuque, 지속 확장 중), 20개 이상의 LLM 프로바이더 통합, Langfuse 기반 풀스택 관측 가능성, 완전 셀프호스팅이 가능한 모듈형 아키텍처를 결합하여, WeKnora는 흩어진 문서를 검색·추론 가능하며 지속적으로 진화하는 전용 지식 자산으로 탈바꿈시킵니다.
 
-Feishu 등 외부 플랫폼에서 지식 자동 동기화를 지원하며(추가 데이터 소스 개발 중), PDF, Word, 이미지, Excel 등 10가지 이상의 문서 포맷을 처리합니다. WeChat Work, Feishu, Slack, Telegram 등의 IM 채널을 통해 Q&A 서비스를 직접 제공할 수 있습니다. 모델 레이어에서 OpenAI, DeepSeek, Qwen(Alibaba Cloud), Zhipu, Hunyuan, Gemini, MiniMax, NVIDIA, Ollama 등 주요 프로바이더를 지원합니다. 전체 프로세스가 모듈화 설계되어 LLM, 벡터 DB, 스토리지 등 구성 요소를 유연하게 교체 가능하며, 로컬 및 프라이빗 클라우드 배포를 지원하여 데이터 완전 자체 관리가 가능합니다.
-
-**웹사이트:** https://weknora.weixin.qq.com
+Feishu, Notion, Yuque 등 외부 플랫폼에서 지식 자동 동기화를 지원하며(추가 데이터 소스 개발 중), PDF, Word, 이미지, Excel 등 10가지 이상의 문서 포맷을 처리합니다. WeChat Work, Feishu, Slack, Telegram 등의 IM 채널을 통해 Q&A 서비스를 직접 제공할 수 있습니다. 모델 레이어에서 OpenAI, DeepSeek, Qwen(Alibaba Cloud), Zhipu, Hunyuan, Gemini, MiniMax, NVIDIA, Ollama 등 주요 프로바이더를 지원합니다. 전체 프로세스가 모듈화 설계되어 LLM, 벡터 DB, 스토리지 등 구성 요소를 유연하게 교체 가능하며, 로컬 및 프라이빗 클라우드 배포를 지원하여 데이터 완전 자체 관리가 가능합니다. 또한 WeKnora는 **Langfuse**와 원활하게 통합되어 Agent 추론, 토큰 사용량 및 파이프라인에 대한 포괄적인 관측 가능성(Observability)을 제공합니다.
 
 ## ✨ 최신 업데이트
+
+**v0.5.2 하이라이트:**
+
+- **Wiki 모드 대규모 확장**: Wiki 인제스트가 일반 작업 큐 + 데드레터 큐로 만 건 규모 KB까지 확장; 페이지 링크 그래프에 서브그래프 API + 인터랙티브 탐색 UI 추가.
+- **MCP 도구 Human-in-the-Loop 승인**: 민감한 MCP 도구 호출은 Agent를 일시정지시키고 채팅 UI에서 사용자의 명시 승인을 대기.
+- **새 LLM / 벡터 DB / 스토리지 / 웹 검색**: Anthropic(Claude), Apache Doris 4.1, Tencent VectorDB, Kingsoft Cloud KS3, SearXNG를 새 백엔드로 추가. Vector Store 관리 UI 및 KB별 인덱싱 전략 토글과 함께 사용 가능.
+- **관측 가능성 심화**: Langfuse Span을 retrieval / rerank / agent 단계로 확장; 채팅 스트림 양쪽에서 end-to-end TTFB 기록; LLM 호출 폴백 타임아웃 강화로 worker 풀 영구 차단 방지.
+- **적응형 3단계 청킹**: 헤딩 인식 / 휴리스틱 / 재귀 전략으로 자동 라우팅; KB 에디터에 실시간 미리보기 패널 내장. 자세한 내용은 [`docs/CHUNKING.md`](./docs/CHUNKING.md).
+- **글로벌 명령 팔레트**: ⌘K 팔레트가 독립 검색 페이지를 대체, 결과에서 바로 새 채팅을 시작 가능.
+- **데이터 소스와 모바일**: Yuque 커넥터(전체 + 증분 동기화) 추가, 경량 WeChat 미니프로그램을 `miniprogram/` 에 포함.
+- **`weknora` CLI(프리뷰)**: `cli/` 에 공식 명령줄 클라이언트의 초기 버전 포함, 피드백 환영.
+- **기타 개선**: 테넌트별 RRF 튜닝; 쿼리 이해 전용 모델; KB 일괄 관리; 사용자 단위 세션 고정과 키워드 검색; 테넌트 전체 IM 채널 개요; 사용자별 저장되는 글꼴 / 테마 설정; 새로운 OpenMaiC 마이크로 클래스룸 Agent 스킬; API 문서 / Swagger / Client SDK 전면 정비.
+- **버그 수정**: Embedder가 연결 실패 시 `(nil, nil)` 을 반환해 SIGSEGV를 유발하던 문제 수정; Mimo / DeepSeek 계열 `reasoning_content` 라운드트립 복원; Agent 다중 턴 히스토리를 DB에서 재구성(첨부 replay 포함); OIDC 로그인 수정; Wiki 인제스트 신뢰성 다수 개선; 빈 PDF에서 파일명으로 요약을 환각하지 않도록 수정.
+
+<details>
+<summary><b>이전 릴리스</b></summary>
+
+**v0.4.0 하이라이트:**
+
+- **[지식 어시스턴트](https://weknora.weixin.qq.com/platform)**: 클라우드 호스팅 지식 어시스턴트 서비스, 로컬 배포 없이 빠르게 시작 가능
+- **WeKnora Cloud**: WeKnora Cloud 프로바이더 통합, LLM 모델 및 문서 파싱 서비스, 자격 증명 관리 및 상태 확인
+- **[Chrome 확장 프로그램](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)**: 브라우저 확장으로 웹페이지 지식 캡처
+- **[ClawHub Skill](https://clawhub.ai/lyingbug/weknora)**: ClawHub Skill 마켓플레이스 통합으로 원클릭 스킬 설치
+- **WeChat IM 통합**: WeChat 채널 어댑터. QR 코드 로그인 및 롱폴링 메시지 지원
+- **첨부파일 처리**: 채팅 파이프라인에서 파일 첨부 지원, 콘텐츠 포맷팅 및 이미지/첨부 메타데이터 주입
+- **Azure OpenAI 프로바이더**: Azure OpenAI의 Chat, VLM, Embedding 모델을 완전 지원. 배포 이름 보존 및 dimensions 파라미터 설정 지원
+- **Alibaba Cloud OSS 스토리지**: S3 호환 모드를 통한 알리바바 클라우드 OSS 오브젝트 스토리지 지원. 설정 UI, 연결 테스트, 다국어 i18n 제공
+- **Notion 커넥터**: Notion 데이터 소스 통합. API 클라이언트, Markdown 렌더러, Connector 인터페이스 구현
+- **Baidu & Ollama 웹 검색**: Baidu 및 Ollama를 웹 검색 프로바이더로 추가
+- **VectorStore 관리**: 완전한 VectorStore CRUD 기능. 엔티티, 리포지토리, 서비스 레이어, 연결 테스트, API 엔드포인트
+- **주요 버그 수정**: Azure OpenAI 엔드포인트 처리, Embedding 잘림, IM 인용 태그 제거, neo4j Go 1.24 Windows 호환성, OSS 서명 문제 수정
+
 
 **v0.3.6 하이라이트:**
 
@@ -77,8 +113,6 @@ Feishu 등 외부 플랫폼에서 지식 자동 동기화를 지원하며(추가
 - **채널 추적**: 지식 항목과 메시지에 channel 필드 추가(web/api/im/browser_extension)로 출처 추적 가능
 - **주요 버그 수정**: 지식베이스 미설정 시 Agent 빈 응답, 한국어/이모지 문서 요약의 UTF-8 잘림, 테넌트 설정 업데이트 시 API 키 암호화 손실, vLLM 스트리밍 추론 콘텐츠 누락, Rerank 빈 패시지 오류 수정
 
-<details>
-<summary><b>이전 릴리스</b></summary>
 
 **v0.3.4 하이라이트:**
 
@@ -146,6 +180,25 @@ Feishu 등 외부 플랫폼에서 지식 자동 동기화를 지원하며(추가
 </details>
 
 
+## 📱 기능 데모
+
+<table>
+  <tr>
+    <td colspan="2" align="center"><b>💬 지능형 Q&A 대화</b><br/><img src="./docs/images/qa.png" alt="지능형 Q&A 대화" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>📖 Wiki 브라우저</b><br/><img src="./docs/images/wiki-browser.png" alt="Wiki 브라우저" width="100%"></td>
+    <td width="50%" align="center"><b>🕸️ Wiki 지식 그래프</b><br/><img src="./docs/images/wiki-graph.png" alt="Wiki 지식 그래프" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>🤖 Agent 모드 · 도구 호출 과정</b><br/><img src="./docs/images/agent-qa.png" alt="Agent 모드 도구 호출 과정" width="100%"></td>
+    <td width="50%" align="center"><b>⚙️ 대화 설정</b><br/><img src="./docs/images/settings.png" alt="대화 설정" width="100%"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>🔭 관측 가능성 · Langfuse Tracing</b><br/><img src="./docs/images/langfuse.png" alt="Langfuse Tracing" width="100%"></td>
+  </tr>
+</table>
+
 ## 🏗️ 아키텍처
 
 ![weknora-architecture.png](./docs/images/architecture.png)
@@ -164,147 +217,105 @@ Feishu 등 외부 플랫폼에서 지식 자동 동기화를 지원하며(추가
 
 ## 🧩 기능 개요
 
-**🤖 지능형 대화**
+**지능형 대화**
 
 | 기능 | 상세 |
 |------|------|
 | 지능형 추론 | ReACT 점진적 멀티스텝 추론, 지식 검색·MCP 도구·웹 검색을 자율 오케스트레이션, 커스텀 에이전트 지원 |
 | 빠른 Q&A | 지식베이스 기반 RAG Q&A, 빠르고 정확한 답변 |
+| Wiki 모드 | Agent가 주도하여 원본 문서에서 구조화된 마크다운 Wiki 페이지를 자동 생성 및 유지 관리 |
 | 도구 호출 | 내장 도구, MCP 도구, 웹 검색 |
 | 대화 전략 | 온라인 프롬프트 편집, 검색 임계값 조정, 멀티턴 문맥 인식 |
 | 추천 질문 | 지식베이스 콘텐츠 기반 질문 자동 생성 |
 
-**📚 지식 관리**
+**지식 관리**
 
 | 기능 | 상세 |
 |------|------|
-| 지식베이스 타입 | FAQ / 문서, 폴더 임포트·URL 임포트·태그 관리·온라인 입력 |
-| 데이터 소스 임포트 | Feishu 지식베이스 자동 동기화(추가 데이터 소스 개발 중), 증분·전체 동기화 지원 |
+| 지식베이스 타입 | FAQ / 문서 / Wiki, 폴더 임포트·URL 임포트·태그 관리·온라인 입력 |
+| 데이터 소스 임포트 | Feishu / Notion / Yuque 지식베이스 자동 동기화(추가 데이터 소스 개발 중), 증분·전체 동기화 지원 |
 | 문서 포맷 | PDF / Word / Txt / Markdown / HTML / 이미지 / CSV / Excel / PPT / JSON |
 | 검색 전략 | BM25 희소 / Dense 밀집 / GraphRAG 그래프 강화 / 부모-자식 청킹 / 다차원 인덱싱 |
 | E2E 테스트 | 전체 파이프라인 시각화, 리콜 적중률·BLEU / ROUGE 지표 평가 |
 
-**🔌 연동 및 확장**
+**연동 및 확장**
 
 | 기능 | 상세 |
 |------|------|
-| LLM | OpenAI / DeepSeek / Qwen (Alibaba Cloud) / Zhipu / Hunyuan / Doubao (Volcengine) / Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
+| LLM | OpenAI / Azure OpenAI / Anthropic (Claude) / DeepSeek / Qwen (Alibaba Cloud) / Zhipu / Hunyuan / Doubao (Volcengine) / Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
 | Embedding | Ollama / BGE / GTE / OpenAI 호환 API |
-| 벡터 DB | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant |
-| 오브젝트 스토리지 | 로컬 / MinIO / AWS S3 / Volcengine TOS / Alibaba Cloud OSS |
-| IM 통합 | WeChat Work / Feishu / Slack / Telegram / DingTalk / Mattermost |
-| 웹 검색 | DuckDuckGo / Bing / Google / Tavily |
+| 벡터 DB | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant / Apache Doris / Tencent VectorDB |
+| 오브젝트 스토리지 | 로컬 / MinIO / AWS S3 / Volcengine TOS / Alibaba Cloud OSS / Kingsoft Cloud KS3 |
+| IM 통합 | WeChat Work / Feishu / Slack / Telegram / DingTalk / Mattermost / WeChat |
+| 웹 검색 | DuckDuckGo / Bing / Google / Tavily / Baidu / Ollama / SearXNG |
 
-**🛡️ 플랫폼**
+**플랫폼**
 
 | 기능 | 상세 |
 |------|------|
 | 배포 | 로컬 / Docker / Kubernetes (Helm), 프라이빗/오프라인 배포 지원 |
-| UI | Web UI / RESTful API / Chrome Extension |
+| UI | Web UI / RESTful API / CLI (`weknora`) / Chrome Extension / WeChat 미니 프로그램 |
+| 관측 가능성 | ReAct 루프, 토큰 소비, 도구 호출, 파이프라인 추적을 위한 Langfuse 통합 |
 | 작업 관리 | MQ 비동기 작업, 버전 업그레이드 시 자동 DB 마이그레이션 |
-| 모델 관리 | 중앙 설정, 지식베이스별 모델 선택, 멀티테넌트 내장 모델 공유 |
+| 모델 관리 | 중앙 설정, 지식베이스별 모델 선택, 멀티테넌트 내장 모델 공유, WeKnora Cloud 호스팅 모델 및 문서 파싱 |
+
+## 🧩 Chrome 확장 프로그램
+
+[**WeKnora Chrome 확장 프로그램**](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)을 사용하면 브라우저에서 웹 콘텐츠를 WeKnora 지식베이스에 직접 캡처할 수 있습니다. 텍스트, 이미지 또는 전체 페이지를 선택하고 원클릭으로 지식 항목으로 저장 — 복사/붙여넣기나 파일 업로드 불필요.
+
+
+## 🦞 ClawHub Skill
+
+[**WeKnora ClawHub Skill**](https://clawhub.ai/lyingbug/weknora)은 ClawHub 플랫폼에 게시된 WeKnora 스킬입니다. 설치 후 WeKnora REST API를 통해 문서 업로드(파일 / URL / Markdown), 하이브리드 검색(벡터 + 키워드), 지식 항목 관리가 가능합니다.
+
+- **문서 임포트** — 에이전트를 통한 파일 업로드, 웹페이지 임포트, Markdown 지식 작성
+- **하이브리드 검색** — 단일 또는 다중 지식베이스에서 벡터 + 키워드 통합 검색
+- **지식 관리** — 프로그래밍 방식으로 지식 항목 조회, 편집, 삭제
+
 
 ## 🚀 시작하기
 
 ### 🛠 사전 준비
 
-다음 도구가 시스템에 설치되어 있는지 확인하세요:
+- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
+- [Git](https://git-scm.com/)
 
-* [Docker](https://www.docker.com/)
-* [Docker Compose](https://docs.docker.com/compose/)
-* [Git](https://git-scm.com/)
-
-### 📦 설치
-
-#### ① 저장소 클론
+### 📦 설치 및 실행
 
 ```bash
-# 메인 저장소 클론
 git clone https://github.com/Tencent/WeKnora.git
 cd WeKnora
+cp .env.example .env   # 필요에 따라 .env 편집 (파일 내 주석 참고)
+docker compose up -d   # 코어 서비스 시작
 ```
 
-#### ② 환경 변수 설정
+시작 후 **http://localhost** 에 접속하여 바로 사용 가능합니다.
 
-```bash
-# 예시 환경 파일 복사
-cp .env.example .env
+> 로컬 Ollama 모델을 사용하려면 먼저 `ollama serve > /dev/null 2>&1 &` 를 실행하세요.
 
-# .env 파일을 수정해 필요한 값을 설정
-# 모든 변수는 .env.example 주석에 설명되어 있습니다
-```
+### 🔧 선택 서비스 (Docker Compose Profile)
 
-#### ③ 메인 서비스 시작
+`--profile` 플래그로 추가 컴포넌트를 활성화합니다. 여러 profile 조합 가능:
 
-#### Ollama 별도 시작(선택)
+| Profile | 설명 | 명령어 |
+|---------|------|--------|
+| _(기본)_ | 코어 서비스 | `docker compose up -d` |
+| `full` | 전체 기능 | `docker compose --profile full up -d` |
+| `neo4j` | 지식 그래프 (Neo4j) | `docker compose --profile neo4j up -d` |
+| `minio` | 오브젝트 스토리지 (MinIO) | `docker compose --profile minio up -d` |
+| `langfuse` | 트레이싱 (Langfuse) | `docker compose --profile langfuse up -d` |
 
-`.env` 에 로컬 Ollama 모델을 설정했다면 Ollama 서비스도 별도로 시작해야 합니다.
+조합 예시: `docker compose --profile neo4j --profile minio up -d`
 
-```bash
-ollama serve > /dev/null 2>&1 &
-```
+서비스 중지: `docker compose down`
 
-#### 기능 조합별 실행
+### 🌐 서비스 주소
 
-- 최소 코어 서비스
-```bash
-docker compose up -d
-```
-
-- 전체 기능 활성화
-```bash
-docker compose --profile full up -d
-```
-
-- 트레이싱 로그 필요 시
-```bash
-docker compose --profile jaeger up -d
-```
-
-- Neo4j 지식 그래프 필요 시
-```bash
-docker compose --profile neo4j up -d
-```
-
-- Minio 파일 스토리지 필요 시
-```bash
-docker compose --profile minio up -d
-```
-
-- 여러 옵션 조합
-```bash
-docker compose --profile neo4j --profile minio up -d
-```
-
-#### ④ 서비스 중지
-
-```bash
-docker compose down
-```
-
-### 🌐 서비스 접속 주소
-
-서비스 시작 후 아래 주소로 접속할 수 있습니다:
-
-* Web UI: `http://localhost`
-* 백엔드 API: `http://localhost:8080`
-* Jaeger 트레이싱: `http://localhost:16686`
-
-## 📱 인터페이스 소개
-
-<table>
-  <tr>
-    <td colspan="2"><b>지능형 Q&A 대화</b><br/><img src="./docs/images/qa.png" alt="지능형 Q&A 대화"></td>
-  </tr>
-  <tr>
-    <td colspan="2"><b>Agent 모드 도구 호출 과정</b><br/><img src="./docs/images/agent-qa.png" alt="Agent 모드 도구 호출 과정"></td>
-  </tr>
-  <tr>
-    <td><b>지식베이스 관리</b><br/><img src="./docs/images/knowledgebases.png" alt="지식베이스 관리"></td>
-    <td><b>대화 설정</b><br/><img src="./docs/images/settings.png" alt="대화 설정"></td>
-  </tr>
-</table>
-
+| 서비스 | URL |
+|--------|-----|
+| Web UI | `http://localhost` |
+| 백엔드 API | `http://localhost:8080` |
+| Langfuse 트레이싱 | `http://localhost:3000` |
 
 ## 문서 지식 그래프
 
@@ -377,42 +388,11 @@ WeKnora/
 
 ## 🤝 기여하기
 
-커뮤니티 기여를 환영합니다! 제안, 버그, 기능 요청은 [Issue](https://github.com/Tencent/WeKnora/issues)로 등록하거나 Pull Request를 직접 생성해 주세요.
+[Issue](https://github.com/Tencent/WeKnora/issues) 또는 Pull Request를 환영합니다.
 
-### 🎯 기여 방법
+**절차:** Fork → 브랜치 생성 → 변경사항 커밋 → PR 생성
 
-- 🐛 **버그 수정**: 시스템 결함 발견 및 수정
-- ✨ **새 기능**: 새로운 기능 제안 및 구현
-- 📚 **문서 개선**: 프로젝트 문서 품질 향상
-- 🧪 **테스트 케이스**: 단위/통합 테스트 작성
-- 🎨 **UI/UX 개선**: 사용자 인터페이스와 경험 개선
-
-### 📋 기여 절차
-
-1. **프로젝트를 Fork** 해서 본인 GitHub 계정으로 가져오기
-2. **기능 브랜치 생성** `git checkout -b feature/amazing-feature`
-3. **변경사항 커밋** `git commit -m 'Add amazing feature'`
-4. **브랜치 푸시** `git push origin feature/amazing-feature`
-5. **Pull Request 생성** 후 변경 내용을 자세히 설명
-
-### 🎨 코드 규칙
-
-- [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments) 준수
-- `gofmt`로 코드 포맷팅
-- 필요한 단위 테스트 추가
-- 관련 문서 업데이트
-
-### 📝 커밋 가이드
-
-[Conventional Commits](https://www.conventionalcommits.org/) 규칙 사용:
-
-```
-feat: 문서 일괄 업로드 기능 추가
-fix: 벡터 검색 정확도 문제 수정
-docs: API 문서 업데이트
-test: 검색 엔진 테스트 케이스 추가
-refactor: 문서 파싱 모듈 리팩터링
-```
+**규칙:** `gofmt`로 코드 포맷팅, [Conventional Commits](https://www.conventionalcommits.org/) 준수 (`feat:` / `fix:` / `docs:` / `test:` / `refactor:`)
 
 ## 🔒 보안 공지
 

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -58,6 +57,11 @@ type GetSystemInfoResponse struct {
 	GraphDatabaseEngine string `json:"graph_database_engine,omitempty"`
 	MinioEnabled        bool   `json:"minio_enabled,omitempty"`
 	DBVersion           string `json:"db_version,omitempty"`
+	// DBMigrationError carries the human-readable error message recorded when
+	// the most recent startup migration attempt failed. Empty when migrations
+	// succeeded; non-empty values let the frontend surface a troubleshooting
+	// banner instead of silently hiding the DB version row (see issue #1319).
+	DBMigrationError string `json:"db_migration_error,omitempty"`
 }
 
 // 编译时注入的版本信息
@@ -92,12 +96,21 @@ func (h *SystemHandler) GetSystemInfo(c *gin.Context) {
 	// Get MinIO enabled status
 	minioEnabled := h.isMinioConfigured(c)
 
+	dbMigrationErr := database.CachedMigrationError()
 	var dbVersion string
 	if ver, dirty, ok := database.CachedMigrationVersion(); ok {
 		dbVersion = fmt.Sprintf("%d", ver)
 		if dirty {
 			dbVersion += " (dirty)"
 		}
+		if dbMigrationErr != "" {
+			dbVersion += " (failed)"
+		}
+	} else if dbMigrationErr != "" {
+		// Failure happened before m.Version() could be read (e.g. could not
+		// open the database). Still emit a placeholder so the frontend renders
+		// the row and shows the troubleshooting banner.
+		dbVersion = "unknown"
 	}
 
 	response := GetSystemInfoResponse{
@@ -111,6 +124,7 @@ func (h *SystemHandler) GetSystemInfo(c *gin.Context) {
 		GraphDatabaseEngine: graphDatabaseEngine,
 		MinioEnabled:        minioEnabled,
 		DBVersion:           dbVersion,
+		DBMigrationError:    dbMigrationErr,
 	}
 
 	logger.Info(ctx, "System info retrieved successfully")
@@ -142,8 +156,16 @@ func (h *SystemHandler) getDocReaderConnInfo() (addr, transport string) {
 func (h *SystemHandler) ListParserEngines(c *gin.Context) {
 	var overrides map[string]string
 	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
-		if tenant, ok := v.(*types.Tenant); ok && tenant != nil && tenant.ParserEngineConfig != nil {
-			overrides = tenant.ParserEngineConfig.ToOverridesMap()
+		if tenant, ok := v.(*types.Tenant); ok && tenant != nil {
+			if tenant.ParserEngineConfig != nil {
+				overrides = tenant.ParserEngineConfig.ToOverridesMap()
+			}
+			if creds := tenant.Credentials.GetWeKnoraCloud(); creds != nil {
+				if overrides == nil {
+					overrides = make(map[string]string)
+				}
+				overrides["weknoracloud_app_id"] = creds.AppID
+			}
 		}
 	}
 
@@ -179,7 +201,7 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 	// SSRF validation for docreader address
 	if err := secutils.ValidateURLForSSRF(addr); err != nil {
 		logger.Warnf(c.Request.Context(), "SSRF validation failed for docreader addr: %v", err)
-		c.JSON(400, gin.H{"code": 1, "msg": fmt.Sprintf("地址未通过安全校验: %v", err)})
+		c.JSON(400, gin.H{"code": 1, "msg": secutils.FormatSSRFError("DocReader 地址", addr, err)})
 		return
 	}
 
@@ -196,8 +218,16 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 
 	var overrides map[string]string
 	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
-		if tenant, ok := v.(*types.Tenant); ok && tenant != nil && tenant.ParserEngineConfig != nil {
-			overrides = tenant.ParserEngineConfig.ToOverridesMap()
+		if tenant, ok := v.(*types.Tenant); ok && tenant != nil {
+			if tenant.ParserEngineConfig != nil {
+				overrides = tenant.ParserEngineConfig.ToOverridesMap()
+			}
+			if creds := tenant.Credentials.GetWeKnoraCloud(); creds != nil {
+				if overrides == nil {
+					overrides = make(map[string]string)
+				}
+				overrides["weknoracloud_app_id"] = creds.AppID
+			}
 		}
 	}
 	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), h.documentReader, overrides)
@@ -223,6 +253,16 @@ func (h *SystemHandler) CheckParserEngines(c *gin.Context) {
 		return
 	}
 	overrides := body.ToOverridesMap()
+	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
+		if tenant, ok := v.(*types.Tenant); ok && tenant != nil {
+			if creds := tenant.Credentials.GetWeKnoraCloud(); creds != nil {
+				if overrides == nil {
+					overrides = make(map[string]string)
+				}
+				overrides["weknoracloud_app_id"] = creds.AppID
+			}
+		}
+	}
 	reader, docreaderAddr, docreaderTransport := h.resolveDocReader(c.Request.Context(), overrides)
 	connected := reader != nil && reader.IsConnected()
 	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), reader, overrides)
@@ -407,6 +447,17 @@ func (h *SystemHandler) isOSSConfigured(c *gin.Context) bool {
 	return false
 }
 
+// isKS3Configured checks whether KS3 connection info is available from tenant config.
+func (h *SystemHandler) isKS3Configured(c *gin.Context) bool {
+	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
+		if tenant, ok := v.(*types.Tenant); ok && tenant != nil && tenant.StorageEngineConfig != nil && tenant.StorageEngineConfig.KS3 != nil {
+			ks3Conf := tenant.StorageEngineConfig.KS3
+			return ks3Conf.Endpoint != "" && ks3Conf.Region != "" && ks3Conf.AccessKey != "" && ks3Conf.SecretKey != "" && ks3Conf.BucketName != ""
+		}
+	}
+	return false
+}
+
 // isTOSEnvAvailable checks whether TOS env vars are set.
 func (h *SystemHandler) isTOSEnvAvailable() bool {
 	return os.Getenv("TOS_ENDPOINT") != "" &&
@@ -416,21 +467,10 @@ func (h *SystemHandler) isTOSEnvAvailable() bool {
 		os.Getenv("TOS_BUCKET_NAME") != ""
 }
 
-// MinioBucketInfo represents bucket information with access policy
-type MinioBucketInfo struct {
-	Name      string `json:"name"`
-	Policy    string `json:"policy"` // "public", "private", "custom"
-	CreatedAt string `json:"created_at,omitempty"`
-}
-
-// ListMinioBucketsResponse defines the response structure for listing buckets
-type ListMinioBucketsResponse struct {
-	Buckets []MinioBucketInfo `json:"buckets"`
-}
-
 // StorageEngineStatusItem describes one storage engine's availability and description.
 type StorageEngineStatusItem struct {
-	Name        string `json:"name"`        // "local", "minio", "cos", "tos"
+	Name        string `json:"name"` // "local", "minio", "cos", "tos", "s3", "oss", "ks3"
+	Allowed     bool   `json:"allowed"`
 	Available   bool   `json:"available"`   // whether the engine can be used
 	Description string `json:"description"` // short description for UI
 }
@@ -438,6 +478,7 @@ type StorageEngineStatusItem struct {
 // GetStorageEngineStatusResponse is the response for GET /system/storage-engine-status.
 type GetStorageEngineStatusResponse struct {
 	Engines           []StorageEngineStatusItem `json:"engines"`
+	AllowedProviders  []string                  `json:"allowed_providers"`
 	MinioEnvAvailable bool                      `json:"minio_env_available"`
 }
 
@@ -453,203 +494,33 @@ func (h *SystemHandler) GetStorageEngineStatus(c *gin.Context) {
 	minioEnvAvailable := h.isMinioEnvAvailable()
 	cosConfigured := h.isCOSConfigured(c)
 	tosConfigured := h.isTOSConfigured(c)
+	s3Configured := h.isS3Configured(c)
 	ossConfigured := h.isOSSConfigured(c)
+	ks3Configured := h.isKS3Configured(c)
+	allowed := getAllowedStorageProviders()
+	allowedProviders := make([]string, 0, len(supportedStorageProviders))
+	for _, provider := range getSupportedStorageProviders() {
+		if allowed[provider] {
+			allowedProviders = append(allowedProviders, provider)
+		}
+	}
 	engines := []StorageEngineStatusItem{
-		{Name: "local", Available: true, Description: "本地文件系统存储，仅适合单机部署"},
-		{Name: "minio", Available: minioConfigured || minioEnvAvailable, Description: "S3 兼容的自托管对象存储，适合内网和私有云部署"},
-		{Name: "cos", Available: cosConfigured, Description: "腾讯云对象存储服务，适合公有云部署，支持 CDN 加速"},
-		{Name: "tos", Available: tosConfigured, Description: "火山引擎对象存储服务，适合公有云部署"},
-		{Name: "oss", Available: ossConfigured, Description: "阿里云对象存储服务，适合公有云部署，支持 S3 兼容协议"},
+		{Name: "local", Allowed: allowed["local"], Available: true, Description: "本地文件系统存储，仅适合单机部署"},
+		{Name: "minio", Allowed: allowed["minio"], Available: minioConfigured || minioEnvAvailable, Description: "S3 兼容的自托管对象存储，适合内网和私有云部署"},
+		{Name: "cos", Allowed: allowed["cos"], Available: cosConfigured, Description: "腾讯云对象存储服务，适合公有云部署，支持 CDN 加速"},
+		{Name: "tos", Allowed: allowed["tos"], Available: tosConfigured, Description: "火山引擎对象存储服务，适合公有云部署"},
+		{Name: "s3", Allowed: allowed["s3"], Available: s3Configured, Description: "AWS S3 与兼容对象存储服务，适合公有云与混合云部署"},
+		{Name: "oss", Allowed: allowed["oss"], Available: ossConfigured, Description: "阿里云对象存储服务，适合公有云部署，支持 S3 兼容协议"},
+		{Name: "ks3", Allowed: allowed["ks3"], Available: ks3Configured, Description: "金山云对象存储服务，适合公有云部署"},
 	}
 	c.JSON(200, gin.H{
 		"code": 0,
 		"msg":  "success",
-		"data": GetStorageEngineStatusResponse{Engines: engines, MinioEnvAvailable: minioEnvAvailable},
+		"data": GetStorageEngineStatusResponse{Engines: engines, AllowedProviders: allowedProviders, MinioEnvAvailable: minioEnvAvailable},
 	})
-}
-
-// ListMinioBuckets godoc
-// @Summary      列出 MinIO 存储桶
-// @Description  获取所有 MinIO 存储桶及其访问权限
-// @Tags         系统
-// @Accept       json
-// @Produce      json
-// @Success      200  {object}  ListMinioBucketsResponse  "存储桶列表"
-// @Failure      400  {object}  map[string]interface{}    "MinIO 未启用"
-// @Failure      500  {object}  map[string]interface{}    "服务器错误"
-// @Router       /system/minio/buckets [get]
-func (h *SystemHandler) ListMinioBuckets(c *gin.Context) {
-	ctx := logger.CloneContext(c.Request.Context())
-
-	endpoint, accessKeyID, secretAccessKey := h.getMinioConfig(c)
-	if endpoint == "" || accessKeyID == "" || secretAccessKey == "" {
-		logger.Warn(ctx, "MinIO is not configured")
-		c.JSON(400, gin.H{
-			"code":    400,
-			"msg":     "MinIO is not configured",
-			"success": false,
-		})
-		return
-	}
-
-	useSSL := os.Getenv("MINIO_USE_SSL") == "true"
-	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
-		if tenant, ok := v.(*types.Tenant); ok && tenant != nil && tenant.StorageEngineConfig != nil && tenant.StorageEngineConfig.MinIO != nil {
-			useSSL = tenant.StorageEngineConfig.MinIO.UseSSL
-		}
-	}
-
-	// Create MinIO client
-	minioClient, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKeyID, secretAccessKey, ""),
-		Secure: useSSL,
-	})
-	if err != nil {
-		logger.Error(ctx, "Failed to create MinIO client", "error", err)
-		c.JSON(500, gin.H{
-			"code":    500,
-			"msg":     "Failed to connect to MinIO",
-			"success": false,
-		})
-		return
-	}
-
-	// List all buckets
-	buckets, err := minioClient.ListBuckets(context.Background())
-	if err != nil {
-		logger.Error(ctx, "Failed to list MinIO buckets", "error", err)
-		c.JSON(500, gin.H{
-			"code":    500,
-			"msg":     "Failed to list buckets",
-			"success": false,
-		})
-		return
-	}
-
-	// Get policy for each bucket
-	bucketInfos := make([]MinioBucketInfo, 0, len(buckets))
-	for _, bucket := range buckets {
-		policy := "private" // default: no policy means private
-
-		// Try to get bucket policy
-		policyStr, err := minioClient.GetBucketPolicy(context.Background(), bucket.Name)
-		if err == nil && policyStr != "" {
-			policy = parseBucketPolicy(policyStr)
-		}
-		// If err != nil or policyStr is empty, bucket has no policy (private)
-
-		bucketInfos = append(bucketInfos, MinioBucketInfo{
-			Name:      bucket.Name,
-			Policy:    policy,
-			CreatedAt: bucket.CreationDate.Format("2006-01-02 15:04:05"),
-		})
-	}
-
-	logger.Info(ctx, "Listed MinIO buckets successfully", "count", len(bucketInfos))
-	c.JSON(200, gin.H{
-		"code":    0,
-		"msg":     "success",
-		"success": true,
-		"data":    ListMinioBucketsResponse{Buckets: bucketInfos},
-	})
-}
-
-// BucketPolicy represents the S3 bucket policy structure
-type BucketPolicy struct {
-	Version   string            `json:"Version"`
-	Statement []PolicyStatement `json:"Statement"`
-}
-
-// PolicyStatement represents a single statement in the bucket policy
-type PolicyStatement struct {
-	Effect    string      `json:"Effect"`
-	Principal interface{} `json:"Principal"` // Can be "*" or {"AWS": [...]}
-	Action    interface{} `json:"Action"`    // Can be string or []string
-	Resource  interface{} `json:"Resource"`  // Can be string or []string
-}
-
-// parseBucketPolicy parses the policy JSON and determines the access type
-func parseBucketPolicy(policyStr string) string {
-	var policy BucketPolicy
-	if err := json.Unmarshal([]byte(policyStr), &policy); err != nil {
-		// If we can't parse the policy, treat it as custom
-		return "custom"
-	}
-
-	// Check if any statement grants public read access
-	hasPublicRead := false
-	for _, stmt := range policy.Statement {
-		if stmt.Effect != "Allow" {
-			continue
-		}
-
-		// Check if Principal is "*" (public)
-		if !isPrincipalPublic(stmt.Principal) {
-			continue
-		}
-
-		// Check if Action includes s3:GetObject
-		if !hasGetObjectAction(stmt.Action) {
-			continue
-		}
-
-		hasPublicRead = true
-		break
-	}
-
-	if hasPublicRead {
-		return "public"
-	}
-
-	// Has policy but not public read
-	return "custom"
-}
-
-// isPrincipalPublic checks if the principal allows public access
-func isPrincipalPublic(principal interface{}) bool {
-	switch p := principal.(type) {
-	case string:
-		return p == "*"
-	case map[string]interface{}:
-		// Check for {"AWS": "*"} or {"AWS": ["*"]}
-		if aws, ok := p["AWS"]; ok {
-			switch a := aws.(type) {
-			case string:
-				return a == "*"
-			case []interface{}:
-				for _, v := range a {
-					if s, ok := v.(string); ok && s == "*" {
-						return true
-					}
-				}
-			}
-		}
-	}
-	return false
-}
-
-// hasGetObjectAction checks if the action includes s3:GetObject
-func hasGetObjectAction(action interface{}) bool {
-	checkAction := func(a string) bool {
-		a = strings.ToLower(a)
-		return a == "s3:getobject" || a == "s3:*" || a == "*"
-	}
-
-	switch act := action.(type) {
-	case string:
-		return checkAction(act)
-	case []interface{}:
-		for _, v := range act {
-			if s, ok := v.(string); ok && checkAction(s) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // --- Storage engine helpers ---
-
 // cosFieldPattern validates COS region and bucket name format to prevent URL injection.
 var cosFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 
@@ -743,12 +614,14 @@ func isBlockedStorageEndpoint(endpoint string) (bool, string) {
 
 // StorageCheckRequest is the body for POST /system/storage-engine-check.
 type StorageCheckRequest struct {
-	Provider string                   `json:"provider"` // "minio", "cos", "tos", "s3", "oss"
+	Provider string                   `json:"provider"` // "minio", "cos", "tos", "s3", "oss", "ks3", "obs"
 	MinIO    *types.MinIOEngineConfig `json:"minio,omitempty"`
 	COS      *types.COSEngineConfig   `json:"cos,omitempty"`
 	TOS      *types.TOSEngineConfig   `json:"tos,omitempty"`
 	S3       *types.S3EngineConfig    `json:"s3,omitempty"`
 	OSS      *types.OSSEngineConfig   `json:"oss,omitempty"`
+	KS3      *types.KS3EngineConfig   `json:"ks3,omitempty"`
+	OBS      *types.OBSEngineConfig   `json:"obs,omitempty"`
 }
 
 // StorageCheckResponse is the response for a single-engine connectivity check.
@@ -775,6 +648,10 @@ func (h *SystemHandler) CheckStorageEngine(c *gin.Context) {
 		c.JSON(400, gin.H{"code": 1, "msg": "请求体格式错误"})
 		return
 	}
+	if !isStorageProviderAllowed(req.Provider) {
+		c.JSON(403, gin.H{"code": 1, "msg": "该存储引擎已被禁用"})
+		return
+	}
 
 	switch req.Provider {
 	case "minio":
@@ -787,14 +664,33 @@ func (h *SystemHandler) CheckStorageEngine(c *gin.Context) {
 		h.checkS3(c, ctx, req.S3)
 	case "oss":
 		h.checkOSS(c, ctx, req.OSS)
+	case "ks3":
+		h.checkKS3(c, ctx, req.KS3)
+	case "obs":
+		h.checkOBS(c, ctx, req.OBS)
 	default:
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, Message: "本地存储无需检测"}})
 	}
 }
 
+func (h *SystemHandler) isS3Configured(c *gin.Context) bool {
+	if v, exists := c.Get(types.TenantInfoContextKey.String()); exists {
+		if tenant, ok := v.(*types.Tenant); ok && tenant != nil && tenant.StorageEngineConfig != nil && tenant.StorageEngineConfig.S3 != nil {
+			s3Conf := tenant.StorageEngineConfig.S3
+			return s3Conf.Endpoint != "" && s3Conf.Region != "" && s3Conf.AccessKey != "" && s3Conf.SecretKey != "" && s3Conf.BucketName != ""
+		}
+	}
+	return false
+}
+
 func (h *SystemHandler) checkMinio(c *gin.Context, ctx context.Context, cfg *types.MinIOEngineConfig) {
 	if cfg == nil {
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "未提供 MinIO 配置"}})
+		return
+	}
+
+	if cfg.BucketName != "" && !cosFieldPattern.MatchString(cfg.BucketName) {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Bucket 名称格式不正确，仅允许字母、数字、点、连字符"}})
 		return
 	}
 
@@ -811,7 +707,7 @@ func (h *SystemHandler) checkMinio(c *gin.Context, ctx context.Context, cfg *typ
 
 	if cfg.Mode == "remote" {
 		if blocked, reason := isBlockedStorageEndpoint(endpoint); blocked {
-			logger.Warnf(ctx, "Storage check: MinIO endpoint blocked by SSRF protection endpoint=%s", endpoint)
+			logger.Warnf(ctx, "Storage check: MinIO endpoint blocked by SSRF protection, endpoint: %s", endpoint)
 			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
 			return
 		}
@@ -820,7 +716,7 @@ func (h *SystemHandler) checkMinio(c *gin.Context, ctx context.Context, cfg *typ
 	err := file.CheckMinioConnectivity(ctx, endpoint, accessKeyID, secretAccessKey, cfg.BucketName, cfg.UseSSL)
 	if err != nil {
 		errMsg := err.Error()
-		// If bucket does not exist, auto-create it with public-read policy
+		// If bucket does not exist, auto-create it
 		if strings.Contains(errMsg, "does not exist") && cfg.BucketName != "" {
 			logger.Info(ctx, "Storage check: bucket does not exist, attempting auto-creation", "bucket", cfg.BucketName)
 			minioClient, clientErr := minio.New(endpoint, &minio.Options{
@@ -828,39 +724,16 @@ func (h *SystemHandler) checkMinio(c *gin.Context, ctx context.Context, cfg *typ
 				Secure: cfg.UseSSL,
 			})
 			if clientErr != nil {
-				c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("创建 MinIO 客户端失败: %s", sanitizeStorageCheckError(clientErr))}})
+				c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Failed to create MinIO client: %s", sanitizeStorageCheckError(clientErr))}})
 				return
 			}
 			if mkErr := minioClient.MakeBucket(ctx, cfg.BucketName, minio.MakeBucketOptions{}); mkErr != nil {
 				logger.Error(ctx, "Storage check: failed to create bucket", "bucket", cfg.BucketName, "error", mkErr)
-				c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("自动创建 Bucket「%s」失败: %s", cfg.BucketName, sanitizeStorageCheckError(mkErr))}})
+				c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Failed to auto-create Bucket '%s': %s", cfg.BucketName, sanitizeStorageCheckError(mkErr))}})
 				return
 			}
-			// Set public-read policy
-			publicReadPolicy := fmt.Sprintf(`{
-				"Version": "2012-10-17",
-				"Statement": [
-					{
-						"Effect": "Allow",
-						"Principal": {"AWS": ["*"]},
-						"Action": ["s3:GetBucketLocation", "s3:ListBucket"],
-						"Resource": ["arn:aws:s3:::%s"]
-					},
-					{
-						"Effect": "Allow",
-						"Principal": {"AWS": ["*"]},
-						"Action": ["s3:GetObject"],
-						"Resource": ["arn:aws:s3:::%s/*"]
-					}
-				]
-			}`, cfg.BucketName, cfg.BucketName)
-			if policyErr := minioClient.SetBucketPolicy(ctx, cfg.BucketName, publicReadPolicy); policyErr != nil {
-				logger.Error(ctx, "Storage check: bucket created but failed to set public-read policy", "bucket", cfg.BucketName, "error", policyErr)
-				c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, BucketCreated: true, Message: fmt.Sprintf("Bucket「%s」已自动创建，但设置公有读策略失败，请手动配置权限", cfg.BucketName)}})
-				return
-			}
-			logger.Info(ctx, "Storage check: bucket created with public-read policy", "bucket", cfg.BucketName)
-			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, BucketCreated: true, Message: fmt.Sprintf("Bucket「%s」不存在，已自动创建并设置公有读权限", cfg.BucketName)}})
+			logger.Info(ctx, "Storage check: bucket created", "bucket", cfg.BucketName)
+			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, BucketCreated: true, Message: fmt.Sprintf("Bucket '%s' does not exist, and has been automatically created", cfg.BucketName)}})
 			return
 		}
 		logger.Error(ctx, "Storage check: MinIO connectivity failed", "error", err)
@@ -994,7 +867,7 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 	// Strip URL scheme before SSRF check — OSS endpoint may include http:// or https://
 	ssrfEndpoint := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
 	if blocked, reason := isBlockedStorageEndpoint(ssrfEndpoint); blocked {
-		logger.Warnf(ctx, "Storage check: OSS endpoint blocked by SSRF protection", "endpoint", endpoint)
+		logger.Warnf(ctx, "Storage check: OSS endpoint blocked by SSRF protection, endpoint: %s", endpoint)
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
 		return
 	}
@@ -1011,20 +884,102 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "AccessDenied") {
-			logger.Errorf(ctx, "Storage check: OSS auth failed", "endpoint", endpoint, "bucket", cfg.BucketName)
+			logger.Errorf(ctx, "Storage check: OSS auth failed, endpoint: %s, bucket: %s", endpoint, cfg.BucketName)
 			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "认证失败，请检查 Access Key / Secret Key 是否正确"}})
 			return
 		}
 		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "NoSuchBucket") {
-			logger.Errorf(ctx, "Storage check: OSS bucket not found", "bucket", cfg.BucketName)
+			logger.Errorf(ctx, "Storage check: OSS bucket not found, bucket: %s", cfg.BucketName)
 			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Bucket「%s」不存在", cfg.BucketName)}})
 			return
 		}
-		logger.Errorf(ctx, "Storage check: OSS connectivity failed", "endpoint", endpoint, "bucket", cfg.BucketName, "error", err)
+		logger.Errorf(ctx, "Storage check: OSS connectivity failed, endpoint: %s, bucket: %s, error: %v", endpoint, cfg.BucketName, err)
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("OSS 连通性检测失败: %s", sanitizeStorageCheckError(err))}})
 		return
 	}
 
+	c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, Message: fmt.Sprintf("连接成功，Bucket「%s」已确认存在", cfg.BucketName)}})
+}
+
+func (h *SystemHandler) checkKS3(c *gin.Context, ctx context.Context, cfg *types.KS3EngineConfig) {
+	if cfg == nil {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "未提供 KS3 配置"}})
+		return
+	}
+
+	endpoint, region, accessKey, secretKey := cfg.Endpoint, cfg.Region, cfg.AccessKey, cfg.SecretKey
+	if endpoint == "" || region == "" || accessKey == "" || secretKey == "" || cfg.BucketName == "" {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Endpoint、Region、Access Key、Secret Key、Bucket 名称不能为空"}})
+		return
+	}
+
+	if blocked, reason := isBlockedStorageEndpoint(endpoint); blocked {
+		logger.Warnf(ctx, "Storage check: KS3 endpoint blocked by SSRF protection, endpoint: %s", endpoint)
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
+		return
+	}
+
+	err := file.CheckKS3Connectivity(ctx, endpoint, region, accessKey, secretKey, cfg.BucketName)
+	if err != nil {
+		logger.Errorf(ctx, "Storage check: KS3 connectivity failed, bucket: %s, error: %v", cfg.BucketName, err)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "AccessDenied") {
+			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "认证失败，请检查 Access Key / Secret Key 是否正确"}})
+			return
+		}
+		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "NoSuchBucket") {
+			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Bucket「%s」不存在，请检查名称和 Region", cfg.BucketName)}})
+			return
+		}
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: sanitizeStorageCheckError(err)}})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, Message: fmt.Sprintf("连接成功，Bucket「%s」已确认存在", cfg.BucketName)}})
+}
+
+func (h *SystemHandler) checkOBS(c *gin.Context, ctx context.Context, cfg *types.OBSEngineConfig) {
+	if cfg == nil {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "未提供 OBS 配置"}})
+		return
+	}
+
+	endpoint, region, accessKey, secretKey := cfg.Endpoint, cfg.Region, cfg.AccessKey, cfg.SecretKey
+	if endpoint == "" || region == "" || accessKey == "" || secretKey == "" || cfg.BucketName == "" {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Endpoint、Region、Access Key、Secret Key、Bucket 名称不能为空"}})
+		return
+	}
+
+	ssrfEndpoint := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+	if blocked, reason := isBlockedStorageEndpoint(ssrfEndpoint); blocked {
+		logger.Warnf(ctx, "Storage check: OBS endpoint blocked by SSRF protection, endpoint: %s", endpoint)
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
+		return
+	}
+
+	if !ossFieldPattern.MatchString(cfg.Region) {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Region 格式不正确，仅允许字母、数字、点、连字符"}})
+		return
+	}
+	if !ossFieldPattern.MatchString(cfg.BucketName) {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Bucket 名称格式不正确，仅允许字母、数字、点、连字符"}})
+		return
+	}
+
+	err := file.CheckObsConnectivity(ctx, endpoint, region, accessKey, secretKey, cfg.BucketName)
+	if err != nil {
+		logger.Errorf(ctx, "Storage check: OBS connectivity failed, bucket: %s, error: %v", cfg.BucketName, err)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "AccessDenied") {
+			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "认证失败，请检查 Access Key / Secret Key 是否正确"}})
+			return
+		}
+		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "NoSuchBucket") {
+			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Bucket「%s」不存在，请检查名称和 Region", cfg.BucketName)}})
+			return
+		}
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: sanitizeStorageCheckError(err)}})
+		return
+	}
 	c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, Message: fmt.Sprintf("连接成功，Bucket「%s」已确认存在", cfg.BucketName)}})
 }
 
@@ -1034,11 +989,11 @@ func (h *SystemHandler) ResolveDocumentReader(ctx context.Context, addr string) 
 	}
 
 	if service.IsWeKnoraCloudDocReaderAddr(addr) {
-		creds := h.tenantSvc.GetDocreaderCredentials(ctx)
+		creds := h.tenantSvc.GetWeKnoraCloudCredentials(ctx)
 		if creds == nil {
 			return nil
 		}
-		reader, err := docparser.NewWeKnoraCloudSignedDocumentReader(creds.AppID, creds.APIKey)
+		reader, err := docparser.NewWeKnoraCloudSignedDocumentReader(creds.AppID, creds.AppSecret)
 		if err != nil {
 			return nil
 		}

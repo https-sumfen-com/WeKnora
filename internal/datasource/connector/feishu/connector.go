@@ -3,10 +3,12 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/types"
 )
@@ -84,7 +86,11 @@ func (c *Connector) FetchAll(ctx context.Context, config *types.DataSourceConfig
 		// List all nodes in this wiki space recursively
 		nodes, err := client.ListAllWikiNodesRecursive(ctx, spaceID)
 		if err != nil {
-			return nil, fmt.Errorf("list nodes in space %s: %w", spaceID, err)
+			var partialErr *partialWikiNodeListError
+			if !errors.As(err, &partialErr) {
+				return nil, fmt.Errorf("list nodes in space %s: %w", spaceID, err)
+			}
+			allItems = appendWikiNodeListFailureItems(allItems, spaceID, partialErr.Failures)
 		}
 
 		// Fetch content for each document node
@@ -145,11 +151,22 @@ func (c *Connector) FetchIncremental(ctx context.Context, config *types.DataSour
 	for _, spaceID := range resourceIDs {
 		// List all nodes in this space
 		nodes, err := client.ListAllWikiNodesRecursive(ctx, spaceID)
+		var partialErr *partialWikiNodeListError
 		if err != nil {
-			return nil, nil, fmt.Errorf("list nodes in space %s: %w", spaceID, err)
+			if !errors.As(err, &partialErr) {
+				return nil, nil, fmt.Errorf("list nodes in space %s: %w", spaceID, err)
+			}
+			changedItems = appendWikiNodeListFailureItems(changedItems, spaceID, partialErr.Failures)
 		}
 
 		newCursor.SpaceNodeTimes[spaceID] = make(map[string]string)
+		if partialErr != nil && prevCursor.SpaceNodeTimes != nil {
+			if prevTimes, ok := prevCursor.SpaceNodeTimes[spaceID]; ok {
+				for nodeToken, editTime := range prevTimes {
+					newCursor.SpaceNodeTimes[spaceID][nodeToken] = editTime
+				}
+			}
+		}
 
 		// Build a set of current node tokens for deletion detection
 		currentNodes := make(map[string]bool)
@@ -196,7 +213,7 @@ func (c *Connector) FetchIncremental(ctx context.Context, config *types.DataSour
 		}
 
 		// Detect deleted nodes
-		if prevCursor.SpaceNodeTimes != nil {
+		if partialErr == nil && prevCursor.SpaceNodeTimes != nil {
 			if prevTimes, ok := prevCursor.SpaceNodeTimes[spaceID]; ok {
 				for nodeToken := range prevTimes {
 					if !currentNodes[nodeToken] {
@@ -223,6 +240,29 @@ func (c *Connector) FetchIncremental(ctx context.Context, config *types.DataSour
 	}
 
 	return changedItems, nextSyncCursor, nil
+}
+
+func appendWikiNodeListFailureItems(items []types.FetchedItem, spaceID string, failures []wikiNodeListFailure) []types.FetchedItem {
+	for _, failure := range failures {
+		node := failure.Node
+		title := node.Title
+		if title == "" {
+			title = node.NodeToken
+		}
+		items = append(items, types.FetchedItem{
+			ExternalID:       node.NodeToken,
+			Title:            title,
+			SourceResourceID: spaceID,
+			Metadata: map[string]string{
+				"error":         failure.Err.Error(),
+				"channel":       types.ChannelFeishu,
+				"node_token":    node.NodeToken,
+				"space_id":      spaceID,
+				"failure_stage": "list_children",
+			},
+		})
+	}
+	return items
 }
 
 // fetchNodeContent fetches the content of a single wiki node and converts it to FetchedItem.
@@ -357,20 +397,29 @@ func parseFeishuTimestamp(ts string) time.Time {
 	return time.Unix(sec, 0)
 }
 
-// sanitizeFileName removes characters that are invalid in filenames.
+// sanitizeFileName removes characters that are invalid in filenames and
+// truncates at a UTF-8 rune boundary. Raw byte truncation would split a
+// multi-byte codepoint (Chinese chars are 3 bytes) and produce invalid UTF-8
+// that downstream validation (utf8.ValidString) rejects.
 func sanitizeFileName(name string) string {
 	if name == "" {
 		return "untitled"
 	}
-	// Replace common invalid characters with underscore
 	replacer := strings.NewReplacer(
 		"/", "_", "\\", "_", ":", "_", "*", "_",
 		"?", "_", "\"", "_", "<", "_", ">", "_", "|", "_",
 	)
 	result := replacer.Replace(name)
-	// Limit length
-	if len(result) > 200 {
-		result = result[:200]
+	const maxBytes = 200
+	if len(result) > maxBytes {
+		result = result[:maxBytes]
+		for len(result) > 0 {
+			r, size := utf8.DecodeLastRuneInString(result)
+			if r != utf8.RuneError || size != 1 {
+				break
+			}
+			result = result[:len(result)-1]
+		}
 	}
 	return result
 }

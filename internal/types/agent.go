@@ -37,6 +37,9 @@ type AgentConfig struct {
 	// Whether to retrieve knowledge base only when explicitly mentioned with @ (default: false)
 	RetrieveKBOnlyWhenMentioned bool `json:"retrieve_kb_only_when_mentioned"`
 
+	// Whether to retain retrieval history (like wiki_read_page results) across turns (default: false)
+	RetainRetrievalHistory bool `json:"retain_retrieval_history"`
+
 	// Skills configuration (Progressive Disclosure pattern)
 	SkillsEnabled bool     `json:"skills_enabled"` // Whether skills are enabled (default: false)
 	SkillDirs     []string `json:"skill_dirs"`     // Directories to search for skills
@@ -183,10 +186,15 @@ type ToolCall struct {
 
 // AgentStep represents one iteration of the ReAct loop
 type AgentStep struct {
-	Iteration int        `json:"iteration"`  // Iteration number (0-indexed)
-	Thought   string     `json:"thought"`    // LLM's reasoning/thinking (Think phase)
-	ToolCalls []ToolCall `json:"tool_calls"` // Tools called in this step (Act phase)
-	Timestamp time.Time  `json:"timestamp"`  // When this step occurred
+	Iteration int    `json:"iteration"` // Iteration number (0-indexed)
+	Thought   string `json:"thought"`   // LLM's reasoning/thinking (Think phase)
+	// ReasoningContent stores the OpenAI-protocol reasoning_content emitted by the
+	// model in this round. Persisted on AgentStep so cross-turn replay can put it
+	// back on the assistant message — required by MiMo / DeepSeek V3.2+ thinking
+	// mode, ignored by providers that don't recognize the field.
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls"` // Tools called in this step (Act phase)
+	Timestamp        time.Time  `json:"timestamp"`  // When this step occurred
 }
 
 // GetObservations returns observations from all tool calls in this step

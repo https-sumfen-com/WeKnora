@@ -1,7 +1,7 @@
 <template>
-    <div class="chat">
+    <div class="chat" :class="{ 'is-embedded': embeddedMode, 'is-sidebar-collapsed': uiStore.sidebarCollapsed }">
         <div ref="scrollContainer" class="chat_scroll_box" @scroll="handleScroll">
-            <div class="msg_list">
+            <div class="msg_list" :class="{ 'is-embedded': embeddedMode }">
                 <!-- 消息列表骨架屏 -->
                 <div v-if="historyLoading && messagesList.length === 0" class="msg-skeleton-list">
                     <div class="msg-skeleton msg-skeleton-user">
@@ -47,11 +47,11 @@
                 </div>
                 <div v-for="(session, id) in messagesList" :key='id'>
                     <div v-if="session.role == 'user'">
-                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images" :attachments="session.attachments"></usermsg>
+                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images" :attachments="session.attachments" :embeddedMode="embeddedMode"></usermsg>
                     </div>
                     <div v-if="session.role == 'assistant'">
                         <botmsg :content="session.content" :session="session" :user-query="getUserQuery(id)" @scroll-bottom="scrollToBottom"
-                            :isFirstEnter="isFirstEnter"></botmsg>
+                            :isFirstEnter="isFirstEnter" :embeddedMode="embeddedMode"></botmsg>
                     </div>
                 </div>
                 <div v-if="loading"
@@ -69,7 +69,7 @@
                 <t-icon name="chevron-down" size="20px" />
             </div>
         </transition>
-        <div style="min-height: 115px; margin: 16px auto 4px;width: 100%;max-width: 800px;">
+        <div class="input-container" :class="{ 'is-embedded': embeddedMode }">
             <InputField
                 ref="inputFieldRef"
                 @send-msg="(query, modelId, mentionedItems, imageFiles, attachmentFiles) => sendMsg(query, modelId, mentionedItems, imageFiles, attachmentFiles)"
@@ -77,6 +77,7 @@
                 :isReplying="isReplying"
                 :sessionId="session_id"
                 :assistantMessageId="currentAssistantMessageId"
+                :embeddedMode="embeddedMode"
             ></InputField>
         </div>
     </div>
@@ -91,7 +92,7 @@
 </template>
 <script setup>
 import { storeToRefs } from 'pinia';
-import { ref, onMounted, onUnmounted, nextTick, watch, reactive, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch, reactive, onBeforeUnmount, defineProps } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import InputField from '../../components/Input-field.vue';
 import botmsg from './components/botmsg.vue';
@@ -106,6 +107,14 @@ import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/ui';
 import KnowledgeBaseEditorModal from '@/views/knowledge/KnowledgeBaseEditorModal.vue';
 import { useKnowledgeBaseCreationNavigation } from '@/hooks/useKnowledgeBaseCreationNavigation';
+
+const props = defineProps({
+  session_id: { type: String, default: '' },
+  agentId: { type: String, default: '' },
+  kbIds: { type: Array, default: () => [] },
+  embeddedMode: { type: Boolean, default: false }
+});
+
 const usemenuStore = useMenuStore();
 const useSettingsStoreInstance = useSettingsStore();
 const uiStore = useUIStore();
@@ -115,8 +124,30 @@ const { menuArr, isFirstSession, firstQuery, firstMentionedItems, firstModelId, 
 const { output, onChunk, isStreaming, isLoading, error, startStream, stopStream } = useStream();
 const route = useRoute();
 const router = useRouter();
-const session_id = ref(route.params.chatid);
+const session_id = ref(props.session_id || route.params.chatid);
 const sessionData = ref(null);
+
+// 拉 session 详情，并按其 last_request_state 把输入栏状态恢复到当时的发起态。
+// 嵌入式（embeddedMode）由宿主页面注入 agent/KB，所以跳过整套恢复逻辑，
+// 避免污染宿主的 settings store。
+const loadSessionAndHydrate = async (sid) => {
+    if (!sid || props.embeddedMode) return;
+    try {
+        const sessionRes = await getSession(sid);
+        if (sessionRes?.data) {
+            sessionData.value = sessionRes.data;
+            const lastState = sessionRes.data.last_request_state;
+            if (lastState) {
+                // 先把当前的"全局默认"快照下来，再用 session 状态覆盖；
+                // 离开会话时会从快照还原，避免本会话的状态污染新建对话。
+                useSettingsStoreInstance.snapshotAsDefaultsIfNeeded();
+                useSettingsStoreInstance.applyLastRequestState(lastState);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load session data:', error);
+    }
+};
 const inputFieldRef = ref();
 const created_at = ref('');
 const limit = ref(20);
@@ -155,10 +186,10 @@ const fetchSuggestedQuestions = async () => {
     suggestedQuestionsLoading.value = true;
     // 加载期间保留旧数据，不清空，避免布局抖动
     try {
-        const agentId = useSettingsStoreInstance.selectedAgentId;
+        const agentId = props.embeddedMode ? props.agentId : useSettingsStoreInstance.selectedAgentId;
         if (!agentId) return;
-        const selectedKBs = useSettingsStoreInstance.getSelectedKnowledgeBases();
-        const selectedFiles = useSettingsStoreInstance.getSelectedFiles();
+        const selectedKBs = props.embeddedMode ? props.kbIds : useSettingsStoreInstance.getSelectedKnowledgeBases();
+        const selectedFiles = props.embeddedMode ? [] : useSettingsStoreInstance.getSelectedFiles();
         const res = await getSuggestedQuestions(agentId, {
             knowledge_base_ids: selectedKBs.length > 0 ? selectedKBs : undefined,
             knowledge_ids: selectedFiles.length > 0 ? selectedFiles : undefined,
@@ -243,8 +274,13 @@ watch([() => route.params], (newvalue) => {
         isReplying.value = false;
         currentAssistantMessageId.value = '';
         userHasScrolledUp.value = false;
-        
+
+        // 跨会话切换：先把旧会话覆盖前的全局默认还原，再让新会话重新拍快照
+        // 并应用自己的 last_request_state（在 loadSessionAndHydrate 内部完成）。
+        useSettingsStoreInstance.restoreDefaultsIfSnapshotted();
+
         checkmenuTitle(session_id.value)
+        loadSessionAndHydrate(session_id.value);
         let data = {
             session_id: session_id.value,
             created_at: '',
@@ -313,12 +349,22 @@ const reconstructEventStreamFromSteps = (agentSteps, messageContent, isCompleted
         // Compute step timestamp (milliseconds) from step.timestamp if available
         const stepTimestamp = step.timestamp ? new Date(step.timestamp).getTime() : 0;
 
-        // Add thinking event if thought content exists
-        if (step.thought && step.thought.trim()) {
+        // Add thinking event if thought content exists.
+        // For tool-calling rounds, providers like MiMo / DeepSeek thinking-mode
+        // emit reasoning into the OpenAI-protocol `reasoning_content` field
+        // rather than visible `content`, so step.thought is often empty even
+        // though the model did reason. Fall back to step.reasoning_content so
+        // the historical step card mirrors what the user saw live.
+        const thoughtText = (step.thought && step.thought.trim())
+            ? step.thought
+            : (step.reasoning_content && step.reasoning_content.trim())
+                ? step.reasoning_content
+                : '';
+        if (thoughtText) {
             events.push({
                 type: 'thinking',
                 event_id: `step-${step.iteration}-thought`,
-                content: step.thought,
+                content: thoughtText,
                 done: true,
                 thinking: false,
                 timestamp: stepTimestamp || undefined,
@@ -371,15 +417,14 @@ const reconstructEventStreamFromSteps = (agentSteps, messageContent, isCompleted
         if (isFallback) answerEvent.is_fallback = true;
         events.push(answerEvent);
     } else if (isCompleted) {
-        // 如果消息已完成但 content 为空（Agent 模式常见情况），添加一个空的 answer 事件标记完成
-        // 这样可以确保 isConversationDone 返回 true，不显示 loading-indicator
-        const answerEvent = {
-            type: 'answer',
-            content: '',
-            done: true
-        };
-        if (isFallback) answerEvent.is_fallback = true;
-        events.push(answerEvent);
+        // 消息已完成但 content 为空：说明是"停止时尚未产出最终答案"的场景。
+        // Push 一个 stop 事件，让 AgentStreamDisplay 的 isConversationDone 返回 true，
+        // 但不产生 answer 内容，也就不会渲染最终答案的 toolbar。与实时 stop 分支保持一致。
+        events.push({
+            type: 'stop',
+            timestamp: Date.now(),
+            reason: 'user_requested'
+        });
     }
     
     return events;
@@ -426,11 +471,9 @@ const handleMsgList = async (data, isScrollType = false, newScrollHeight) => {
             }
         }
         
-        // 只给非Agent模式的空内容已完成消息设置默认错误消息
-        // Agent模式的消息内容在agent_steps中，content为空是正常的
-        if (item.is_completed && !item.content && !item.isAgentMode) {
-            item.content = t('chat.cannotAnswer');
-        }
+        // 非 Agent 模式下若 content 为空（例如用户停止时尚未产出任何文字），
+        // 保持为空；botmsg.vue 会因 hasActualContent=false 不渲染内容区和 toolbar。
+        // 此前这里会兜底为 "chat.cannotAnswer"，会让停止场景显示误导性文案并出现复制按钮。
         messagesList.unshift(item);
         if (isFirstEnter.value) {
             scrollToBottom(true);
@@ -530,18 +573,22 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     scrollToBottom(true);
     
     // Get agent mode status from settings store
-    const agentEnabled = useSettingsStoreInstance.isAgentEnabled;
+    const agentEnabled = props.embeddedMode ? (props.agentId && props.agentId !== 'builtin-quick-answer') : useSettingsStoreInstance.isAgentEnabled;
     
     // Get web search status from settings store
-    const webSearchEnabled = useSettingsStoreInstance.isWebSearchEnabled;
+    const webSearchEnabled = props.embeddedMode ? false : useSettingsStoreInstance.isWebSearchEnabled;
     
-    // Get memory status from settings store
-    const enableMemory = useSettingsStoreInstance.isMemoryEnabled;
+    // Memory toggle is now a server-side per-user preference (see PUT
+    // /auth/me/preferences). For the normal logged-in chat we leave the
+    // field unset so the backend reads `user.preferences.enable_memory`;
+    // for embedded widgets we still send an explicit `false` so a user's
+    // personal "memory on" setting doesn't leak into a KB-embed context.
+    const enableMemoryOverride = props.embeddedMode ? false : undefined;
     
     // Get knowledge_base_ids from settings store (selected by user via KnowledgeBaseSelector)
     // Merge @mentioned KB/file IDs so retrieval uses the same targets user @mentioned (including shared KBs)
-    const sidebarKbIds = useSettingsStoreInstance.settings.selectedKnowledgeBases || [];
-    const sidebarFileIds = useSettingsStoreInstance.settings.selectedFiles || [];
+    const sidebarKbIds = props.embeddedMode ? props.kbIds : (useSettingsStoreInstance.settings.selectedKnowledgeBases || []);
+    const sidebarFileIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedFiles || []);
     const kbIdSet = new Set(sidebarKbIds);
     const fileIdSet = new Set(sidebarFileIds);
     for (const item of mentionedItems || []) {
@@ -556,13 +603,13 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     const knowledgeIds = [...fileIdSet];
 
     // Get selected agent ID (backend resolves shared agent and its tenant from share relation)
-    const selectedAgentId = useSettingsStoreInstance.selectedAgentId || '';
+    const selectedAgentId = props.embeddedMode ? props.agentId : (useSettingsStoreInstance.selectedAgentId || '');
 
     // Use agent-chat endpoint when agent is enabled, otherwise use knowledge-chat
     const endpoint = agentEnabled ? '/api/v1/agent-chat' : '/api/v1/knowledge-chat';
     
     // Get selected MCP services from settings store (if available)
-    const mcpServiceIds = useSettingsStoreInstance.settings.selectedMCPServices || [];
+    const mcpServiceIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedMCPServices || []);
     
     await startStream({ 
         session_id: session_id.value, 
@@ -571,7 +618,7 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
         agent_enabled: agentEnabled,
         agent_id: selectedAgentId,
         web_search_enabled: webSearchEnabled,
-        enable_memory: enableMemory,
+        enable_memory: enableMemoryOverride,
         summary_model_id: modelId,
         mcp_service_ids: mcpServiceIds,
         mentioned_items: mentionedItems,
@@ -716,7 +763,25 @@ onChunk((data) => {
     
     // 原有的知识库 QA 处理逻辑（非 Agent 模式）
     // answer 内容中可能包含 <think>...</think> 标签
-    
+
+    // 非 Agent 模式下的 stop 事件：只更新状态，不把后端附带的 "Generation stopped by user"
+    // 文案拼进 content，保留用户点停止时已经流式输出的内容不变。
+    if (data.response_type === 'stop') {
+        console.log('[Stop Event] Non-agent generation stopped');
+        const stoppedMessage = messagesList.findLast((item) => {
+            if (item.request_id === data.id) return true;
+            return item.id === data.id;
+        });
+        if (stoppedMessage) {
+            stoppedMessage.is_completed = true;
+        }
+        loading.value = false;
+        isReplying.value = false;
+        fullContent.value = '';
+        currentAssistantMessageId.value = '';
+        return;
+    }
+
     // 检查消息是否已经完成，如果已完成则忽略后续的完成事件（防止空内容覆盖）
     const existingMessage = messagesList.findLast((item) => {
         if (item.request_id === data.id) {
@@ -801,7 +866,7 @@ const handleAgentChunk = (data) => {
     
     // 确保在继续流式传输时（刷新页面场景），一旦接收到实际内容就关闭 loading
     // 这是一个保护措施，防止任何边缘情况导致 loading 残留
-    if (loading.value && (data.response_type === 'thinking' || data.response_type === 'answer' || data.response_type === 'tool_call')) {
+    if (loading.value && (data.response_type === 'thinking' || data.response_type === 'answer' || data.response_type === 'tool_call' || data.response_type === 'tool_approval_required')) {
         console.log('[Agent Chunk] Closing loading for continued stream');
         loading.value = false;
     }
@@ -867,6 +932,38 @@ const handleAgentChunk = (data) => {
             }
             break;
             
+        case 'tool_approval_required': {
+            if (!message.agentEventStream) message.agentEventStream = [];
+            const d = data.data || {};
+            message.agentEventStream.push({
+                type: 'tool_approval_required',
+                pending_id: d.pending_id,
+                service_name: d.service_name,
+                mcp_tool_name: d.mcp_tool_name,
+                description: d.description,
+                args_json: d.args_json,
+                timeout_seconds: d.timeout_seconds,
+                requested_at: d.requested_at,
+                tool_call_id: d.tool_call_id,
+                resolved: false,
+            });
+            break;
+        }
+        case 'tool_approval_resolved': {
+            const d = data.data || {};
+            const pid = d.pending_id;
+            const ev = message.agentEventStream?.find(
+                (e) => e.type === 'tool_approval_required' && e.pending_id === pid
+            );
+            if (ev) {
+                ev.resolved = true;
+                ev.approved = d.approved;
+                ev.resolve_reason = d.reason;
+                ev.timed_out = d.timed_out;
+                ev.canceled = d.canceled;
+            }
+            break;
+        }
         case 'tool_call':
             // Skip final_answer tool call from event stream - its content appears as answer events
             if (data.data && data.data.tool_name === 'final_answer') {
@@ -1071,12 +1168,15 @@ const handleAgentChunk = (data) => {
             console.log('[Agent] Complete event received');
             loading.value = false;
             isReplying.value = false;
+            message.is_completed = true;
+            fullContent.value = '';
+            currentAssistantMessageId.value = '';
             // 将 total_duration_ms 存入事件流供 AgentStreamDisplay 使用
-            if (data.data?.total_duration_ms && message.agentEventStream) {
+            if (message.agentEventStream) {
                 message.agentEventStream.push({
                     type: 'agent_complete',
-                    total_duration_ms: data.data.total_duration_ms,
-                    total_steps: data.data.total_steps,
+                    total_duration_ms: data.data?.total_duration_ms || 0,
+                    total_steps: data.data?.total_steps || 0,
                 });
             }
             break;
@@ -1140,26 +1240,25 @@ onMounted(async () => {
     messagesList.splice(0);
     
     // 若从智能体列表点击共享智能体进入，URL 带 agent_id 与 source_tenant_id，同步到 store
-    const agentIdFromQuery = route.query.agent_id && String(route.query.agent_id);
+    const agentIdFromQuery = props.embeddedAgentId || (route.query.agent_id && String(route.query.agent_id));
     const sourceTenantIdFromQuery = route.query.source_tenant_id && String(route.query.source_tenant_id);
     if (agentIdFromQuery && sourceTenantIdFromQuery) {
         useSettingsStoreInstance.selectAgent(agentIdFromQuery, sourceTenantIdFromQuery);
+    } else if (agentIdFromQuery) {
+        useSettingsStoreInstance.selectAgent(agentIdFromQuery, null);
+    }
+    
+    if (props.embeddedKbIds && props.embeddedKbIds.length > 0) {
+        useSettingsStoreInstance.selectKnowledgeBases(props.embeddedKbIds);
     }
     
     // 初始化状态：加载历史消息时不应显示loading
     loading.value = false;
     isReplying.value = false;
     
-    // Load session data to get agent_config
-    try {
-        const sessionRes = await getSession(session_id.value);
-        if (sessionRes?.data) {
-            sessionData.value = sessionRes.data;
-        }
-    } catch (error) {
-        console.error('Failed to load session data:', error);
-    }
-    
+    // 拉会话详情；若服务端记录了 last_request_state，则按其恢复输入栏状态。
+    await loadSessionAndHydrate(session_id.value);
+
     checkmenuTitle(session_id.value)
     if (firstQuery.value) {
         scrollLock.value = true;
@@ -1191,10 +1290,14 @@ onUnmounted(() => {
 });
 onBeforeRouteLeave((to, from, next) => {
     clearData()
+    // 离开聊天会话 → 还原"用户全局默认"，避免旧会话的请求态泄漏到新建对话。
+    useSettingsStoreInstance.restoreDefaultsIfSnapshotted();
     next()
 })
 onBeforeRouteUpdate((to, from, next) => {
     clearData()
+    // 仅"会话 → 会话"会落到这里；跨会话覆盖的还原放到 route.params 的 watch 里，
+    // 因为新会话的 getSession 也在那边触发，便于保证 restore→snapshot→apply 顺序。
     next()
 })
 </script>
@@ -1204,12 +1307,36 @@ onBeforeRouteUpdate((to, from, next) => {
     padding: 20px;
     box-sizing: border-box;
     flex: 1;
+    // The parent .platform-route-outlet is a flex column with min-height:0
+    // and overflow:hidden — we also need min-height:0 here so that our
+    // own flex:1 child (.chat_scroll_box) can shrink below its content
+    // height and scroll instead of pushing .input-container out of view.
+    min-height: 0;
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     max-width: calc(100vw - 260px);
     min-width: 400px;
+
+    &.is-sidebar-collapsed {
+        max-width: calc(100vw - 60px);
+    }
+
+    &.is-embedded {
+        max-width: 100%;
+        min-width: 100%;
+        padding: 0;
+        overflow-x: hidden;
+    }
+
+    &.is-embedded :deep(.answers-input) {
+        transform: translateX(0);
+        width: 100%;
+        left: 0;
+        display: flex;
+        justify-content: center;
+    }
 
     :deep(.answers-input) {
         position: static;
@@ -1223,6 +1350,12 @@ onBeforeRouteUpdate((to, from, next) => {
 
 .chat_scroll_box {
     flex: 1;
+    // Without min-height: 0, a flex-column child defaults to min-height: auto
+    // and expands to fit all inner content. When there are many messages,
+    // that pushes .input-container out of the viewport. Clamping min-height
+    // to 0 lets overflow-y: auto take effect so the messages scroll inside
+    // this box instead of stretching it.
+    min-height: 0;
     width: 100%;
     overflow-y: auto;
 
@@ -1319,6 +1452,24 @@ onBeforeRouteUpdate((to, from, next) => {
     flex-direction: column;
     gap: 8px;
     padding-left: 4px;
+}
+
+.input-container {
+    min-height: 115px;
+    // Keep the input visible when messages overflow: without flex-shrink: 0
+    // a tall .chat_scroll_box can squeeze this container down to 0 height.
+    flex-shrink: 0;
+    margin: 16px auto 4px;
+    width: 100%;
+    max-width: 800px;
+    box-sizing: border-box;
+
+    &.is-embedded {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        overflow-x: hidden;
+    }
 }
 
 .msg_list {

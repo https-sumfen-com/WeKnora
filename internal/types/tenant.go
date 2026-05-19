@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -37,9 +38,17 @@ var retrieverEngineMapping = map[string][]RetrieverEngineParams{
 		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: WeaviateRetrieverEngineType},
 		{RetrieverType: VectorRetrieverType, RetrieverEngineType: WeaviateRetrieverEngineType},
 	},
+	"doris": {
+		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: DorisRetrieverEngineType},
+		{RetrieverType: VectorRetrieverType, RetrieverEngineType: DorisRetrieverEngineType},
+	},
 	"sqlite": {
 		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: SQLiteRetrieverEngineType},
 		{RetrieverType: VectorRetrieverType, RetrieverEngineType: SQLiteRetrieverEngineType},
+	},
+	"tencent_vectordb": {
+		{RetrieverType: KeywordsRetrieverType, RetrieverEngineType: TencentVectorDBRetrieverEngineType},
+		{RetrieverType: VectorRetrieverType, RetrieverEngineType: TencentVectorDBRetrieverEngineType},
 	},
 }
 
@@ -89,18 +98,14 @@ type Tenant struct {
 	StorageQuota int64 `yaml:"storage_quota"       json:"storage_quota"       gorm:"default:10737418240"`
 	// Storage used (Bytes)
 	StorageUsed int64 `yaml:"storage_used"        json:"storage_used"        gorm:"default:0"`
-	// Deprecated: AgentConfig is deprecated, use CustomAgent (builtin-smart-reasoning) config instead.
-	// This field is kept for backward compatibility and will be removed in future versions.
-	AgentConfig *AgentConfig `yaml:"agent_config"        json:"agent_config"        gorm:"type:jsonb"`
 	// Global Context configuration for this tenant (default for all sessions)
 	ContextConfig *ContextConfig `yaml:"context_config"      json:"context_config"      gorm:"type:jsonb"`
 	// Global WebSearch configuration for this tenant
 	WebSearchConfig *WebSearchConfig `yaml:"web_search_config"   json:"web_search_config"   gorm:"type:jsonb"`
-	// Deprecated: ConversationConfig is deprecated, use CustomAgent (builtin-quick-answer) config instead.
-	// This field is kept for backward compatibility and will be removed in future versions.
-	ConversationConfig *ConversationConfig `yaml:"conversation_config" json:"conversation_config" gorm:"type:jsonb"`
 	// Parser engine config overrides (MinerU endpoint, API key, etc.). Used when parsing documents; overrides env.
 	ParserEngineConfig *ParserEngineConfig `yaml:"parser_engine_config" json:"parser_engine_config" gorm:"type:jsonb"`
+	// Credentials config: third-party provider credentials (e.g. WeKnoraCloud AppID/AppSecret)
+	Credentials *CredentialsConfig `yaml:"credentials" json:"credentials" gorm:"type:jsonb"`
 	// Storage engine config: parameters for Local, MinIO, COS. Used for document/file storage and docreader.
 	StorageEngineConfig *StorageEngineConfig `yaml:"storage_engine_config" json:"storage_engine_config" gorm:"type:jsonb"`
 	// Chat history config: knowledge base configuration for indexing and searching chat messages via vector search
@@ -151,16 +156,16 @@ func (t *Tenant) BeforeSave(tx *gorm.DB) error {
 }
 
 // AfterFind decrypts APIKey after loading from database.
-// Legacy plaintext (without enc:v1: prefix) is returned as-is.
+// Legacy plaintext (without enc:v1: prefix) is returned as-is. When the value
+// is encrypted but SYSTEM_AES_KEY is missing/rotated and the data cannot be
+// decrypted, the error is propagated so the read fails loudly instead of
+// returning ciphertext to callers.
 func (t *Tenant) AfterFind(tx *gorm.DB) error {
-	key := utils.GetAESKey()
-	if key != nil {
-		if t.APIKey != "" {
-			if decrypted, err := utils.DecryptAESGCM(t.APIKey, key); err == nil {
-				t.APIKey = decrypted
-			}
-		}
+	decrypted, err := utils.DecryptStoredSecret(t.APIKey)
+	if err != nil {
+		return fmt.Errorf("decrypt tenants.api_key (id=%d): %w", t.ID, err)
 	}
+	t.APIKey = decrypted
 	return nil
 }
 
@@ -169,7 +174,9 @@ func (c RetrieverEngines) Value() (driver.Value, error) {
 	return json.Marshal(c)
 }
 
-// Scan implements the sql.Scanner interface, used to convert database value to RetrieverEngines
+// Scan implements the sql.Scanner interface, used to convert database value to RetrieverEngines.
+// It supports both the legacy bare-array format (e.g. [{...}, {...}]) and the current
+// object-wrapped format (e.g. {"engines": [{...}, {...}]}).
 func (c *RetrieverEngines) Scan(value interface{}) error {
 	if value == nil {
 		return nil
@@ -178,54 +185,64 @@ func (c *RetrieverEngines) Scan(value interface{}) error {
 	if !ok {
 		return nil
 	}
-	return json.Unmarshal(b, c)
+
+	// Try the current object format first: {"engines": [...]}
+	if err := json.Unmarshal(b, c); err == nil {
+		return nil
+	}
+
+	// Fallback: legacy bare-array format: [{...}, {...}]
+	var engines []RetrieverEngineParams
+	if err := json.Unmarshal(b, &engines); err != nil {
+		return fmt.Errorf("retriever_engines: cannot unmarshal as object or array: %w", err)
+	}
+	c.Engines = engines
+	return nil
 }
 
-// ConversationConfig represents the conversation configuration for normal mode
-type ConversationConfig struct {
-	// Prompt is the system prompt for normal mode
-	Prompt string `json:"prompt"`
-	// ContextTemplate is the prompt template for summarizing retrieval results
-	ContextTemplate string `json:"context_template"`
-	// Temperature controls the randomness of the model output
-	Temperature float64 `json:"temperature"`
-	// MaxTokens is the maximum number of tokens to generate
-	MaxCompletionTokens int `json:"max_completion_tokens"`
-
-	// Retrieval & strategy parameters
-	MaxRounds            int     `json:"max_rounds"`
-	EmbeddingTopK        int     `json:"embedding_top_k"`
-	KeywordThreshold     float64 `json:"keyword_threshold"`
-	VectorThreshold      float64 `json:"vector_threshold"`
-	RerankTopK           int     `json:"rerank_top_k"`
-	RerankThreshold      float64 `json:"rerank_threshold"`
-	EnableRewrite        bool    `json:"enable_rewrite"`
-	EnableQueryExpansion bool    `json:"enable_query_expansion"`
-
-	// Model configuration
-	SummaryModelID string `json:"summary_model_id"`
-	RerankModelID  string `json:"rerank_model_id"`
-
-	// Fallback strategy
-	FallbackStrategy string `json:"fallback_strategy"`
-	FallbackResponse string `json:"fallback_response"`
-	FallbackPrompt   string `json:"fallback_prompt"`
-
-	// Rewrite prompts
-	RewritePromptSystem string `json:"rewrite_prompt_system"`
-	RewritePromptUser   string `json:"rewrite_prompt_user"`
+// CredentialsConfig holds third-party provider credentials at the tenant level.
+// Stored as a single JSONB column; each provider is a nested object so new
+// providers can be added without schema changes.
+type CredentialsConfig struct {
+	WeKnoraCloud *WeKnoraCloudCredentials `json:"weknoracloud,omitempty"`
 }
 
-// Value implements the driver.Valuer interface, used to convert ConversationConfig to database value
-func (c *ConversationConfig) Value() (driver.Value, error) {
+// WeKnoraCloudCredentials stores WeKnoraCloud AppID and AppSecret.
+// AppSecret is AES-256 encrypted before persisting to database.
+type WeKnoraCloudCredentials struct {
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+}
+
+// GetWeKnoraCloud returns the WeKnoraCloud credentials, or nil if not configured.
+func (c *CredentialsConfig) GetWeKnoraCloud() *WeKnoraCloudCredentials {
+	if c == nil || c.WeKnoraCloud == nil {
+		return nil
+	}
+	if c.WeKnoraCloud.AppID == "" || c.WeKnoraCloud.AppSecret == "" {
+		return nil
+	}
+	return c.WeKnoraCloud
+}
+
+// Value implements the driver.Valuer interface for CredentialsConfig
+func (c *CredentialsConfig) Value() (driver.Value, error) {
 	if c == nil {
 		return nil, nil
 	}
-	return json.Marshal(c)
+	cp := *c
+	if cp.WeKnoraCloud != nil && cp.WeKnoraCloud.AppSecret != "" {
+		if key := utils.GetAESKey(); key != nil {
+			if encrypted, err := utils.EncryptAESGCM(cp.WeKnoraCloud.AppSecret, key); err == nil {
+				cp.WeKnoraCloud = &WeKnoraCloudCredentials{AppID: cp.WeKnoraCloud.AppID, AppSecret: encrypted}
+			}
+		}
+	}
+	return json.Marshal(cp)
 }
 
-// Scan implements the sql.Scanner interface, used to convert database value to ConversationConfig
-func (c *ConversationConfig) Scan(value interface{}) error {
+// Scan implements the sql.Scanner interface for CredentialsConfig
+func (c *CredentialsConfig) Scan(value interface{}) error {
 	if value == nil {
 		return nil
 	}
@@ -233,16 +250,23 @@ func (c *ConversationConfig) Scan(value interface{}) error {
 	if !ok {
 		return nil
 	}
-	return json.Unmarshal(b, c)
+	if err := json.Unmarshal(b, c); err != nil {
+		return err
+	}
+	if c.WeKnoraCloud != nil {
+		if plain, ok := utils.DecryptStoredSecretLenient(c.WeKnoraCloud.AppSecret); ok {
+			c.WeKnoraCloud.AppSecret = plain
+		} else {
+			log.Printf("[crypto] tenant credentials we_knora_cloud.app_secret: decrypt failed (SYSTEM_AES_KEY missing/rotated?), treating as unconfigured")
+			c.WeKnoraCloud.AppSecret = ""
+		}
+	}
+	return nil
 }
 
 // ParserEngineConfig holds tenant-level overrides for document parser engines (e.g. MinerU endpoint, API key).
 // These values take precedence over environment variables when parsing documents.
 type ParserEngineConfig struct {
-	// docreader 凭证
-	DocreaderAppID  string `json:"docreader_app_id,omitempty"`
-	DocreaderAPIKey string `json:"docreader_api_key,omitempty"`
-
 	MinerUEndpoint string `json:"mineru_endpoint"` // MinerU 自建服务端点
 	MinerUAPIKey   string `json:"mineru_api_key"`  // MinerU 云 API Key
 
@@ -268,9 +292,6 @@ func (c *ParserEngineConfig) ToOverridesMap() map[string]string {
 		return nil
 	}
 	m := make(map[string]string)
-	if c.DocreaderAppID != "" {
-		m["docreader_app_id"] = c.DocreaderAppID
-	}
 	if c.MinerUEndpoint != "" {
 		m["mineru_endpoint"] = c.MinerUEndpoint
 	}
@@ -333,16 +354,18 @@ func (c *ParserEngineConfig) Scan(value interface{}) error {
 	return json.Unmarshal(b, c)
 }
 
-// StorageEngineConfig holds tenant-level storage engine parameters for Local, MinIO, COS, TOS, S3, and OSS.
+// StorageEngineConfig holds tenant-level storage engine parameters for Local, MinIO, COS, TOS, S3, OSS, KS3, and OBS.
 // Knowledge bases select which provider to use; parameters are read from here.
 type StorageEngineConfig struct {
-	DefaultProvider string             `json:"default_provider"` // "local", "minio", "cos", "tos", "s3", "oss"
+	DefaultProvider string             `json:"default_provider"` // "local", "minio", "cos", "tos", "s3", "oss", "ks3", "obs"
 	Local           *LocalEngineConfig `json:"local,omitempty"`
 	MinIO           *MinIOEngineConfig `json:"minio,omitempty"`
 	COS             *COSEngineConfig   `json:"cos,omitempty"`
 	TOS             *TOSEngineConfig   `json:"tos,omitempty"`
 	S3              *S3EngineConfig    `json:"s3,omitempty"`
 	OSS             *OSSEngineConfig   `json:"oss,omitempty"`
+	KS3             *KS3EngineConfig   `json:"ks3,omitempty"`
+	OBS             *OBSEngineConfig   `json:"obs,omitempty"`
 }
 
 // LocalEngineConfig is for local file system storage (single-machine deployment only).
@@ -384,12 +407,14 @@ type TOSEngineConfig struct {
 
 // S3EngineConfig is for AWS S3 and S3-compatible object storage.
 type S3EngineConfig struct {
-	Endpoint   string `json:"endpoint"`
-	Region     string `json:"region"`
-	AccessKey  string `json:"access_key"`
-	SecretKey  string `json:"secret_key"`
-	BucketName string `json:"bucket_name"`
-	PathPrefix string `json:"path_prefix"`
+	Endpoint       string `json:"endpoint"`
+	Region         string `json:"region"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	BucketName     string `json:"bucket_name"`
+	PathPrefix     string `json:"path_prefix"`
+	UseSSL         bool   `json:"use_ssl"`
+	ForcePathStyle bool   `json:"force_path_style"`
 }
 
 // OSSEngineConfig is for Alibaba Cloud OSS (对象存储服务).
@@ -403,6 +428,27 @@ type OSSEngineConfig struct {
 	UseTempBucket  bool   `json:"use_temp_bucket"`
 	TempBucketName string `json:"temp_bucket_name"`
 	TempRegion     string `json:"temp_region"`
+}
+
+// KS3EngineConfig is for Kingsoft Cloud KS3 object storage.
+type KS3EngineConfig struct {
+	Endpoint   string `json:"endpoint"`
+	Region     string `json:"region"`
+	AccessKey  string `json:"access_key"`
+	SecretKey  string `json:"secret_key"`
+	BucketName string `json:"bucket_name"`
+	PathPrefix string `json:"path_prefix"`
+}
+
+// OBSEngineConfig is for Huawei Cloud OBS (对象存储服务).
+type OBSEngineConfig struct {
+	Endpoint   string `json:"endpoint"`
+	Region     string `json:"region"`
+	AccessKey  string `json:"access_key"`
+	SecretKey  string `json:"secret_key"`
+	BucketName string `json:"bucket_name"`
+	PathPrefix string `json:"path_prefix"`
+	UseSSL     bool   `json:"use_ssl"`
 }
 
 // Value implements the driver.Valuer interface for StorageEngineConfig

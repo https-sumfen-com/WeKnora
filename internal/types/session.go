@@ -81,6 +81,21 @@ type Session struct {
 	Description string `json:"description"`
 	// Tenant ID
 	TenantID uint64 `json:"tenant_id"   gorm:"index"`
+	// UserID is the owner of the session. Empty for legacy rows (visible at
+	// tenant level) and for IM-created sessions that do not map to a WeKnora user.
+	UserID string `json:"user_id,omitempty" gorm:"type:varchar(36);index"`
+	// IsPinned indicates whether the session is pinned in the list.
+	IsPinned bool `json:"is_pinned" gorm:"default:false"`
+	// PinnedAt records when the session was pinned; nil when not pinned.
+	PinnedAt *time.Time `json:"pinned_at,omitempty"`
+
+	// LastRequestState records the input-bar state used the last time this
+	// session sent a question (agent, model, KB scope, web search, MCPs).
+	// Persisted on every successful POST to /knowledge-chat or /agent-chat so
+	// that reopening the session can restore the original request context to
+	// the chat UI. Stored in the legacy sessions.agent_config JSONB column to
+	// avoid a new migration; the shape used today is `SessionLastRequestState`.
+	LastRequestState *SessionLastRequestState `json:"last_request_state,omitempty" gorm:"column:agent_config;type:jsonb"`
 
 	// // Strategy configuration
 	// KnowledgeBaseID   string              `json:"knowledge_base_id"`                    // 关联的知识库ID
@@ -110,6 +125,34 @@ type Session struct {
 func (s *Session) BeforeCreate(tx *gorm.DB) (err error) {
 	s.ID = uuid.New().String()
 	return nil
+}
+
+// SessionListQuery bundles the parameters for listing sessions.
+// UserID empty means "tenant-wide" (used by API-key callers / legacy rows).
+// Keyword matches title ILIKE '%keyword%'.
+// Source values: "web" (no IM mapping) or an IM platform name (e.g. "feishu", "wechat").
+// AgentID currently only filters sessions that have an IM channel mapping.
+type SessionListQuery struct {
+	TenantID uint64
+	UserID   string
+	Keyword  string
+	Source   string
+	AgentID  string
+	Page     int
+	PageSize int
+}
+
+// SessionListItem is a session row enriched with its IM origin (when any).
+// IM-related fields are populated from the im_channel_sessions table via LEFT JOIN
+// and are empty for Web-created sessions.
+type SessionListItem struct {
+	Session
+	IMPlatform  string `json:"im_platform,omitempty"   gorm:"column:im_platform"`
+	IMChatID    string `json:"im_chat_id,omitempty"    gorm:"column:im_chat_id"`
+	IMThreadID  string `json:"im_thread_id,omitempty"  gorm:"column:im_thread_id"`
+	IMUserID    string `json:"im_user_id,omitempty"    gorm:"column:im_user_id"`
+	IMAgentID   string `json:"im_agent_id,omitempty"   gorm:"column:im_agent_id"`
+	IMChannelID string `json:"im_channel_id,omitempty" gorm:"column:im_channel_id"`
 }
 
 // StringArray represents a list of strings
@@ -147,6 +190,54 @@ func (c *SummaryConfig) Scan(value interface{}) error {
 		return nil
 	}
 	return json.Unmarshal(b, c)
+}
+
+// SessionLastRequestState captures the user-facing input-bar state at the
+// time of the most recent QA request on a session. It is purely a UI memory
+// aid — none of the fields here drive backend behaviour. They are echoed back
+// to the frontend by GetSession so the chat input can restore the same agent,
+// model, KB scope, etc. the user had selected last time.
+type SessionLastRequestState struct {
+	AgentID          string   `json:"agent_id,omitempty"`
+	AgentEnabled     bool     `json:"agent_enabled"`
+	ModelID          string   `json:"model_id,omitempty"`
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs     []string `json:"knowledge_ids,omitempty"`
+	WebSearchEnabled bool     `json:"web_search_enabled"`
+}
+
+// Value implements driver.Valuer for SessionLastRequestState (JSONB).
+func (s *SessionLastRequestState) Value() (driver.Value, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return json.Marshal(s)
+}
+
+// Scan implements sql.Scanner for SessionLastRequestState (JSONB).
+// Tolerates legacy values that may not match the current schema by silently
+// ignoring unmarshal errors — the stored row predates this struct.
+func (s *SessionLastRequestState) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		return nil
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(b, s); err != nil {
+		// Tolerate legacy shapes from before this column was repurposed.
+		return nil
+	}
+	return nil
 }
 
 // Value implements the driver.Valuer interface, used to convert ContextConfig to database value

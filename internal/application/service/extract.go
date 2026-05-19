@@ -9,13 +9,14 @@ import (
 	"strings"
 
 	"github.com/Tencent/WeKnora/internal/agent/tools"
-	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
 	chatpipeline "github.com/Tencent/WeKnora/internal/application/service/chat_pipeline"
+	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
+	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
@@ -91,11 +92,13 @@ func NewChunkExtractTask(
 		logger.Warn(ctx, "NEO4J is not enabled, skip chunk extract task")
 		return nil
 	}
-	payload, err := json.Marshal(types.ExtractChunkPayload{
+	taskPayload := types.ExtractChunkPayload{
 		TenantID: tenantID,
 		ChunkID:  chunkID,
 		ModelID:  modelID,
-	})
+	}
+	langfuse.InjectTracing(ctx, &taskPayload)
+	payload, err := json.Marshal(taskPayload)
 	if err != nil {
 		return err
 	}
@@ -118,12 +121,14 @@ func NewDataTableSummaryTask(
 	summaryModel string,
 	embeddingModel string,
 ) error {
-	payload, err := json.Marshal(DataTableSummaryPayload{
+	taskPayload := DataTableSummaryPayload{
 		TenantID:       tenantID,
 		KnowledgeID:    knowledgeID,
 		SummaryModel:   summaryModel,
 		EmbeddingModel: embeddingModel,
-	})
+	}
+	langfuse.InjectTracing(ctx, &taskPayload)
+	payload, err := json.Marshal(taskPayload)
 	if err != nil {
 		return err
 	}
@@ -238,6 +243,7 @@ func (s *ChunkExtractService) Handle(ctx context.Context, t *asynq.Task) error {
 
 // DataTableExtractPayload represents the table extract task payload
 type DataTableSummaryPayload struct {
+	types.TracingContext
 	TenantID       uint64 `json:"tenant_id"`
 	KnowledgeID    string `json:"knowledge_id"`
 	SummaryModel   string `json:"summary_model"`
@@ -246,33 +252,39 @@ type DataTableSummaryPayload struct {
 
 // DataTableSummaryService is a service for extracting tables
 type DataTableSummaryService struct {
-	modelService     interfaces.ModelService
-	knowledgeService interfaces.KnowledgeService
-	fileService      interfaces.FileService
-	chunkService     interfaces.ChunkService
-	tenantService    interfaces.TenantService
-	retrieveEngine   interfaces.RetrieveEngineRegistry
-	sqlDB            *sql.DB
+	modelService         interfaces.ModelService
+	knowledgeBaseService interfaces.KnowledgeBaseService
+	knowledgeService     interfaces.KnowledgeService
+	fileService          interfaces.FileService
+	chunkService         interfaces.ChunkService
+	tenantService        interfaces.TenantService
+	retrieveEngine       interfaces.RetrieveEngineRegistry
+	ownership            retriever.TenantStoreOwnership
+	sqlDB                *sql.DB
 }
 
 // NewDataTableSummaryService creates a new DataTableSummaryService
 func NewDataTableSummaryService(
 	modelService interfaces.ModelService,
+	knowledgeBaseService interfaces.KnowledgeBaseService,
 	knowledgeService interfaces.KnowledgeService,
 	fileService interfaces.FileService,
 	chunkService interfaces.ChunkService,
 	tenantService interfaces.TenantService,
 	retrieveEngine interfaces.RetrieveEngineRegistry,
+	ownership retriever.TenantStoreOwnership,
 	sqlDB *sql.DB,
 ) interfaces.TaskHandler {
 	return &DataTableSummaryService{
-		modelService:     modelService,
-		knowledgeService: knowledgeService,
-		fileService:      fileService,
-		chunkService:     chunkService,
-		tenantService:    tenantService,
-		retrieveEngine:   retrieveEngine,
-		sqlDB:            sqlDB,
+		modelService:         modelService,
+		knowledgeBaseService: knowledgeBaseService,
+		knowledgeService:     knowledgeService,
+		fileService:          fileService,
+		chunkService:         chunkService,
+		tenantService:        tenantService,
+		retrieveEngine:       retrieveEngine,
+		ownership:            ownership,
+		sqlDB:                sqlDB,
 	}
 }
 
@@ -361,8 +373,25 @@ func (s *DataTableSummaryService) prepareResources(ctx context.Context, payload 
 		return nil, err
 	}
 
-	// 获取检索引擎
-	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
+	// Load the KB to discover its VectorStoreID binding so the factory can
+	// route to the bound store (or fall back to tenant engines if unbound).
+	kb, err := s.knowledgeBaseService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID)
+	if err != nil {
+		logger.Errorf(ctx, "failed to get knowledge base for vector store lookup: %v", err)
+		return nil, err
+	}
+	var vectorStoreID *string
+	if kb != nil {
+		vectorStoreID = kb.VectorStoreID
+	}
+
+	// The factory's unbound path reads TenantInfo from ctx.
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenantInfo)
+
+	// Resolve the engine via the factory using the KB's VectorStore binding
+	// (nil -> tenant effective engines fallback; verified tenant ownership otherwise).
+	retrieveEngine, err := retriever.CreateRetrieveEngineForKB(
+		ctx, s.retrieveEngine, s.ownership, payload.TenantID, vectorStoreID)
 	if err != nil {
 		logger.Errorf(ctx, "failed to get retrieve engine: %v", err)
 		return nil, err
@@ -415,7 +444,7 @@ func (s *DataTableSummaryService) processTableData(ctx context.Context, resource
 	// 创建DuckDB会话并加载数据
 	sessionID := fmt.Sprintf("table_summary_%s", resources.knowledge.ID)
 	fileSvc := s.resolveFileServiceForKnowledge(ctx, resources)
-	duckdbTool := tools.NewDataAnalysisTool(s.knowledgeService, fileSvc, s.sqlDB, sessionID)
+	duckdbTool := tools.NewDataAnalysisTool(s.knowledgeBaseService, s.knowledgeService, s.tenantService, fileSvc, s.sqlDB, sessionID)
 	defer duckdbTool.Cleanup(ctx)
 
 	// 使用knowledge.ID作为表名，根据文件类型自动加载数据

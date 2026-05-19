@@ -99,25 +99,8 @@ builtin_agents:
         description: "농업 연구자를 위한 다단계 추론 도우미: 문헌 검토, 실험 설계, 학제 간 통합"
     config:
       agent_mode: "smart-reasoning"
-      system_prompt: |
-        【系统真实当前时间】{{current_time}} {{current_week}}
-        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"。
-
-        你是天工智农·研究助手，一位面向农业科研工作者的多步推理智能体。你能够调用知识检索、网络搜索、知识图谱查询、文档信息提取等工具，针对复杂农业科研问题进行多步思考和工具协同。
-
-        **能力范围**：
-        - 文献综述：基于知识库 + 网络搜索整合最新研究进展，识别核心争议点和研究空白
-        - 试验设计建议：作物试验、田间布局、对照组设置、统计分析方法选型
-        - 数据分析路径规划：从数据特征出发推荐合适的分析方法（重复测量 / 多元回归 / 时间序列 / 空间统计等）
-        - 跨学科知识整合：农学、生物、化学、气象、经济、政策的协同分析
-        - 图片识别协助：用户上传作物/病害/田间照片时，调用视觉模型识别并给出科研上下文
-
-        **工作原则**：
-        1. 每一步推理明确说明依据（来自知识库 / 网络 / 推理）
-        2. 量化信心度：高/中/低，并指出不确定性来源
-        3. 引用文献时给出来源（作者、年份、期刊或链接）
-        4. 鼓励严谨态度：区分"已验证结论"和"假说"
-        5. 复杂问题先用 thinking 工具拆解，再调用其他工具
+      agent_type: "rag-qa"
+      system_prompt: ""
       model_id: "builtin-llm-default"
       rerank_model_id: "builtin-rerank-default"
       thinking: true
@@ -141,8 +124,6 @@ builtin_agents:
 
         用户问题：{{query}}
       allowed_tools:
-        - "thinking"
-        - "todo_write"
         - "knowledge_search"
         - "grep_chunks"
         - "list_knowledge_chunks"
@@ -183,33 +164,8 @@ builtin_agents:
         description: "농업 실험 데이터 분석 전문가: 표현형 측정, 포장 시험, 수량 통계, 토양·기상 데이터의 SQL 및 통계 분석"
     config:
       agent_mode: "smart-reasoning"
-      system_prompt: |
-        【系统真实当前时间】{{current_time}} {{current_week}}
-        注意：这是系统时钟的真实值，不是训练数据截止时间。请把这个时间视为"现在"。
-
-        你是天工智农·数据分析师，专注于农业科研数据处理。擅长分析农业试验数据（CSV/Excel）。
-
-        **典型数据**：
-        - 作物表型测量（株高、叶面积、千粒重、SPAD 值等）
-        - 田间试验对照数据（处理组 vs 对照组、重复、区组）
-        - 产量与品质统计（单产、蛋白含量、糖度、抗性评分）
-        - 土壤检测（pH、有机质、N/P/K、重金属）
-        - 气象与生态数据（温度、湿度、光照、降水）
-        - 农药/肥料施用记录与效应数据
-
-        **分析方法**：
-        - 描述统计：均值、标准差、变异系数、分布
-        - 推断统计：t 检验、方差分析（ANOVA）、协方差分析
-        - 关系分析：相关、回归、主成分分析
-        - 时空分析：时间序列趋势、空间插值（如田间小区分布）
-
-        **工作规范**：
-        1. 严格遵守农业试验设计原则（随机化、重复、对照）
-        2. 数据异常（离群值、缺失、量纲错误）主动指出并询问处理方式
-        3. 输出结果配合可视化建议（箱线图、散点图、热力图、地理分布图）
-        4. 给出**业务洞见**而不仅是数字（例如："此处理组比对照组增产 12%，但变异系数偏大，建议增加重复次数"）
-        5. 必要时调用 data_schema 工具理解数据结构后再分析
-        6. 用户上传田间照片或仪器读数图像时，调用视觉模型辅助识别
+      agent_type: "data-analysis"
+      system_prompt_id: "data_analyst"
       model_id: "builtin-llm-default"
       rerank_model_id: "builtin-rerank-default"
       thinking: true
@@ -237,8 +193,6 @@ builtin_agents:
         - "csv"
         - "xlsx"
       allowed_tools:
-        - "thinking"
-        - "todo_write"
         - "data_schema"
         - "data_analysis"
       web_search_enabled: false
@@ -251,3 +205,98 @@ builtin_agents:
       vector_threshold: 0.5
       rerank_top_k: 5
       rerank_threshold: 0.3
+
+  - id: "builtin-wiki-researcher"
+    avatar: "📚"
+    is_builtin: true
+    i18n:
+      default:
+        name: "Wiki Questioner"
+        description: "Specialized agent for answering questions based on Wiki knowledge bases"
+      zh-CN:
+        name: "维基问答"
+        description: "专注于在 Wiki 知识库中回答问题的智能体"
+      zh-TW:
+        name: "維基問答"
+        description: "專注於在 Wiki 知識庫中回答問題的智能體"
+      ja-JP:
+        name: "Wiki 問答"
+        description: "Wikiナレッジベースでの回答問題に特化したエージェント"
+      ko-KR:
+        name: "위키 질문"
+        description: "위키 지식 베이스에서 답변하는 데 특화된 에이전트"
+    config:
+      agent_mode: "smart-reasoning"
+      agent_type: "wiki-qa"
+      system_prompt_id: "wiki_researcher"
+      temperature: 0.7
+      max_completion_tokens: 4096
+      max_iterations: 30
+      kb_selection_mode: "all"
+      retrieve_kb_only_when_mentioned: false
+      allowed_tools:
+        - "wiki_search"
+        - "wiki_read_page"
+        - "wiki_read_source_doc"
+        - "wiki_flag_issue"
+      web_search_enabled: false
+      web_search_max_results: 0
+      reflection_enabled: false
+      multi_turn_enabled: true
+      history_turns: 10
+      embedding_top_k: 10
+      keyword_threshold: 0.3
+      vector_threshold: 0.5
+      rerank_top_k: 10
+      rerank_threshold: 0.3
+
+  - id: "builtin-wiki-fixer"
+    avatar: "🔧"
+    is_builtin: true
+    i18n:
+      default:
+        name: "Wiki Fixer"
+        description: "Specialized agent for revising Wiki pages based on inspection issues"
+      zh-CN:
+        name: "维基修订"
+        description: "专门用于根据巡检问题修订 Wiki 页面的智能体"
+      zh-TW:
+        name: "維基修訂"
+        description: "專門用於根據巡檢問題修訂 Wiki 頁面的智能體"
+      ja-JP:
+        name: "Wiki 修訂"
+        description: "検査の問題に基づいてWikiページを修復および最適化するための専用エージェント"
+      ko-KR:
+        name: "위키 수정"
+        description: "검사 문제를 기반으로 Wiki 페이지를 修復하고 最適化하는 전용 에이전트"
+    config:
+      agent_mode: "smart-reasoning"
+      agent_type: "custom"
+      system_prompt_id: "wiki_fixer"
+      temperature: 0.7
+      max_completion_tokens: 4096
+      max_iterations: 30
+      kb_selection_mode: "selected"
+      retrieve_kb_only_when_mentioned: false
+      retain_retrieval_history: true
+      allowed_tools:
+        - "wiki_search"
+        - "wiki_read_page"
+        - "wiki_read_source_doc"
+        - "wiki_write_page"
+        - "wiki_replace_text"
+        - "wiki_rename_page"
+        - "wiki_delete_page"
+        - "wiki_read_issue"
+        - "wiki_update_issue"
+      web_search_enabled: false
+      web_search_max_results: 0
+      reflection_enabled: false
+      multi_turn_enabled: true
+      history_turns: 10
+      embedding_top_k: 10
+      keyword_threshold: 0.3
+      vector_threshold: 0.5
+      rerank_top_k: 10
+      rerank_threshold: 0.3
+

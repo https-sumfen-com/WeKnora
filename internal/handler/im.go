@@ -134,7 +134,42 @@ func (h *IMHandler) ListIMChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": channels})
 }
 
+// ListAllIMChannels lists every IM channel in the current tenant, across
+// agents, for the cross-agent overview page. Credentials are intentionally
+// NOT included in the response — callers that need credentials must use the
+// per-agent endpoint (GET /agents/:id/im-channels).
+func (h *IMHandler) ListAllIMChannels(c *gin.Context) {
+	tenantID, ok := c.Request.Context().Value(types.TenantIDContextKey).(uint64)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	channels, err := h.imService.ListChannelsByTenant(tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list channels"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": channels})
+}
+
 // UpdateIMChannel updates an IM channel.
+//
+// UpdateIMChannel godoc
+// @Summary      更新 IM 渠道
+// @Description  更新指定 IM 渠道的名称、模式、知识库、凭证或启用状态
+// @Tags         IM 渠道
+// @Accept       json
+// @Produce      json
+// @Param        id       path      string                  true  "渠道 ID"
+// @Param        request  body      map[string]interface{}  true  "更新字段（name/mode/output_mode/knowledge_base_id/credentials/enabled）"
+// @Success      200      {object}  map[string]interface{}  "更新后的渠道"
+// @Failure      400      {object}  map[string]interface{}  "请求参数错误"
+// @Failure      404      {object}  map[string]interface{}  "渠道不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /im-channels/{id} [put]
 func (h *IMHandler) UpdateIMChannel(c *gin.Context) {
 	channelID := c.Param("id")
 	if channelID == "" {
@@ -200,6 +235,19 @@ func (h *IMHandler) UpdateIMChannel(c *gin.Context) {
 }
 
 // DeleteIMChannel deletes an IM channel.
+//
+// DeleteIMChannel godoc
+// @Summary      删除 IM 渠道
+// @Description  删除指定 IM 渠道
+// @Tags         IM 渠道
+// @Produce      json
+// @Param        id   path      string                  true  "渠道 ID"
+// @Success      200  {object}  map[string]interface{}  "success: true"
+// @Failure      400  {object}  map[string]interface{}  "请求参数错误"
+// @Failure      404  {object}  map[string]interface{}  "渠道不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /im-channels/{id} [delete]
 func (h *IMHandler) DeleteIMChannel(c *gin.Context) {
 	channelID := c.Param("id")
 	if channelID == "" {
@@ -222,6 +270,19 @@ func (h *IMHandler) DeleteIMChannel(c *gin.Context) {
 }
 
 // ToggleIMChannel toggles the enabled state of an IM channel.
+//
+// ToggleIMChannel godoc
+// @Summary      启用/停用 IM 渠道
+// @Description  切换指定 IM 渠道的启用状态
+// @Tags         IM 渠道
+// @Produce      json
+// @Param        id   path      string                  true  "渠道 ID"
+// @Success      200  {object}  map[string]interface{}  "更新后的渠道"
+// @Failure      400  {object}  map[string]interface{}  "请求参数错误"
+// @Failure      404  {object}  map[string]interface{}  "渠道不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /im-channels/{id}/toggle [post]
 func (h *IMHandler) ToggleIMChannel(c *gin.Context) {
 	channelID := c.Param("id")
 	if channelID == "" {
@@ -248,6 +309,19 @@ func (h *IMHandler) ToggleIMChannel(c *gin.Context) {
 
 // IMCallback handles IM platform callback requests for a specific channel.
 // Route: POST /api/v1/im/callback/:channel_id
+//
+// IMCallback godoc
+// @Summary      IM 平台回调
+// @Description  接收各 IM 平台的事件回调；走平台自身签名校验，不使用 API Key
+// @Tags         IM 回调
+// @Accept       json
+// @Produce      json
+// @Param        channel_id  path      string                  true  "渠道 ID"
+// @Success      200         {object}  map[string]interface{}  "处理结果"
+// @Failure      400         {object}  map[string]interface{}  "请求参数错误"
+// @Failure      401         {object}  map[string]interface{}  "签名校验失败"
+// @Router       /im/callback/{channel_id} [get]
+// @Router       /im/callback/{channel_id} [post]
 func (h *IMHandler) IMCallback(c *gin.Context) {
 	ctx := c.Request.Context()
 	channelID := c.Param("channel_id")

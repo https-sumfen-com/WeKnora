@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,15 +17,23 @@ import (
 
 // CustomAgentHandler defines the HTTP handler for custom agent operations
 type CustomAgentHandler struct {
-	service     interfaces.CustomAgentService
+	service      interfaces.CustomAgentService
 	disabledRepo interfaces.TenantDisabledSharedAgentRepository
+	// userService 仅用于 list 接口批量回填 creator_name，作用见
+	// KnowledgeBaseHandler.userService。
+	userService interfaces.UserService
 }
 
 // NewCustomAgentHandler creates a new custom agent handler instance
-func NewCustomAgentHandler(service interfaces.CustomAgentService, disabledRepo interfaces.TenantDisabledSharedAgentRepository) *CustomAgentHandler {
+func NewCustomAgentHandler(
+	service interfaces.CustomAgentService,
+	disabledRepo interfaces.TenantDisabledSharedAgentRepository,
+	userService interfaces.UserService,
+) *CustomAgentHandler {
 	return &CustomAgentHandler{
-		service:     service,
+		service:      service,
 		disabledRepo: disabledRepo,
+		userService:  userService,
 	}
 }
 
@@ -165,15 +174,103 @@ func (h *CustomAgentHandler) ListAgents(c *gin.Context) {
 		return
 	}
 
+	// Optional creator filter — see the matching block in
+	// KnowledgeBaseHandler.ListKnowledgeBases for rationale. Built-in
+	// agents (IsBuiltin=true, CreatedBy="") are tenant-level fixtures
+	// rather than user creations; we always keep them regardless of the
+	// filter so the conversation dropdown never silently loses
+	// quick-answer / smart-reasoning when a user picks "Created by me".
+	creatorFilter := strings.ToLower(strings.TrimSpace(c.Query("creator")))
+	if creatorFilter == "mine" || creatorFilter == "others" {
+		callerUserID, _ := c.Get(types.UserIDContextKey.String())
+		callerUserIDStr, _ := callerUserID.(string)
+		filtered := make([]*types.CustomAgent, 0, len(agents))
+		for _, ag := range agents {
+			if ag.IsBuiltin {
+				filtered = append(filtered, ag)
+				continue
+			}
+			if ag.CreatedBy == "" {
+				continue
+			}
+			if creatorFilter == "mine" && ag.CreatedBy == callerUserIDStr {
+				filtered = append(filtered, ag)
+			} else if creatorFilter == "others" && ag.CreatedBy != callerUserIDStr {
+				filtered = append(filtered, ag)
+			}
+		}
+		agents = filtered
+	}
+
 	// Per-tenant "disabled by me" for own agents (only affects this tenant's conversation dropdown)
-	tenantID, _ := c.Get(types.TenantIDContextKey.String())
-	disabledOwnIDs, _ := h.disabledRepo.ListDisabledOwnAgentIDs(ctx, tenantID.(uint64))
+	tenantIDVal, exists := c.Get(types.TenantIDContextKey.String())
+	if !exists {
+		logger.Error(ctx, "Tenant ID not found in context")
+		c.Error(errors.NewUnauthorizedError("Missing tenant context"))
+		return
+	}
+	tenantID, ok := tenantIDVal.(uint64)
+	if !ok {
+		logger.Errorf(ctx, "Tenant ID has unexpected type %T in context", tenantIDVal)
+		c.Error(errors.NewInternalServerError("Invalid tenant context type"))
+		return
+	}
+	disabledOwnIDs, err := h.disabledRepo.ListDisabledOwnAgentIDs(ctx, tenantID)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"tenant_id": tenantID,
+		})
+		c.Error(errors.NewInternalServerError("Failed to list disabled agent IDs: " + err.Error()))
+		return
+	}
+
+	// 批量回填 creator_name，作用同 KB 列表：让前端能区分「我创建」与「同租户其他成员」。
+	// 内建 agent（IsBuiltin=true, CreatedBy=""）不会有 creator_name，前端按 builtin
+	// 分支单独渲染。
+	enrichAgentCreatorNames(ctx, h.userService, agents)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":                true,
 		"data":                   agents,
 		"disabled_own_agent_ids": disabledOwnIDs,
 	})
+}
+
+// enrichAgentCreatorNames 批量把 agent.CreatedBy 解析成展示名。失败吞掉，
+// 不影响列表本身可用。与 enrichKBCreatorNames 行为对齐。
+func enrichAgentCreatorNames(ctx context.Context, userSvc interfaces.UserService, agents []*types.CustomAgent) {
+	if userSvc == nil || len(agents) == 0 {
+		return
+	}
+	idSet := make(map[string]struct{}, len(agents))
+	for _, ag := range agents {
+		if ag.IsBuiltin || ag.CreatedBy == "" {
+			continue
+		}
+		idSet[ag.CreatedBy] = struct{}{}
+	}
+	if len(idSet) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	users, err := userSvc.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		logger.Warnf(ctx, "Failed to resolve agent creator names: %v", err)
+		return
+	}
+	for _, ag := range agents {
+		if ag.IsBuiltin || ag.CreatedBy == "" {
+			continue
+		}
+		u, ok := users[ag.CreatedBy]
+		if !ok || u == nil {
+			continue
+		}
+		ag.CreatorName = pickUserDisplayName(u)
+	}
 }
 
 // UpdateAgent godoc
@@ -376,6 +473,25 @@ func (h *CustomAgentHandler) GetPlaceholders(c *gin.Context) {
 			"rewrite_prompt":        types.PlaceholdersByField(types.PromptFieldRewritePrompt),
 			"fallback_prompt":       types.PlaceholdersByField(types.PromptFieldFallbackPrompt),
 		},
+	})
+}
+
+// GetAgentTypePresets godoc
+// @Summary      获取智能体类型预设列表
+// @Description  返回所有 smart-reasoning 下可用的智能体类型预设（RAG/Wiki/Hybrid/Custom），用于编辑器自动填充系统提示词、工具和 KB 兼容性
+// @Tags         智能体
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}  "预设列表"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /agents/type-presets [get]
+func (h *CustomAgentHandler) GetAgentTypePresets(c *gin.Context) {
+	ctx := c.Request.Context()
+	presets := types.ListAgentTypePresetsWithContext(ctx)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    presets,
 	})
 }
 

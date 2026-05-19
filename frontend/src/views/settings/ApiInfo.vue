@@ -30,11 +30,12 @@
         </div>
         <div class="setting-control">
           <div class="api-key-control">
-            <t-input 
-              v-model="displayApiKey" 
-              readonly 
+            <t-input
+              v-model="displayApiKey"
+              readonly
               type="text"
-              style="width: 100%; font-family: monospace; font-size: 12px;"
+              class="mono-text-input"
+              style="width: 100%;"
             />
             <t-button 
               size="small" 
@@ -50,6 +51,17 @@
               :title="$t('tenant.api.copyTitle')"
             >
               <t-icon name="file-copy" />
+            </t-button>
+            <t-button
+              v-if="authStore.hasRole('owner')"
+              size="small"
+              variant="text"
+              theme="danger"
+              :loading="resetting"
+              :title="$t('tenant.api.resetTitle')"
+              @click="confirmResetApiKey"
+            >
+              <t-icon name="refresh" />
             </t-button>
           </div>
         </div>
@@ -67,7 +79,8 @@
               :model-value="apiBaseUrlDisplay"
               readonly
               type="text"
-              style="width: 100%; font-family: monospace; font-size: 12px;"
+              class="mono-text-input"
+              style="width: 100%;"
             />
             <t-button
               size="small"
@@ -126,7 +139,8 @@
                 :model-value="wailsApiLanBaseURL"
                 readonly
                 type="text"
-                style="width: 100%; font-family: monospace; font-size: 12px;"
+                class="mono-text-input"
+                style="width: 100%;"
               />
               <t-button
                 size="small"
@@ -158,76 +172,34 @@
           </p>
         </div>
       </div>
-
-      <!-- User info -->
-      <div class="info-section-title">{{ $t('tenant.api.userSectionTitle') }}</div>
-
-      <!-- User ID -->
-      <div class="setting-row">
-        <div class="setting-info">
-          <label>{{ $t('tenant.api.userIdLabel') }}</label>
-          <p class="desc">{{ $t('tenant.api.userIdDescription') }}</p>
-        </div>
-        <div class="setting-control">
-          <span class="info-value">{{ userInfo?.id || '-' }}</span>
-        </div>
-      </div>
-
-      <!-- Username -->
-      <div class="setting-row">
-        <div class="setting-info">
-          <label>{{ $t('tenant.api.usernameLabel') }}</label>
-          <p class="desc">{{ $t('tenant.api.usernameDescription') }}</p>
-        </div>
-        <div class="setting-control">
-          <span class="info-value">{{ displayUsername(userInfo, { tenant: tenantInfo }) || '-' }}</span>
-        </div>
-      </div>
-
-      <!-- Email (hidden for iframe-auto-provisioned users since their email is a synthetic placeholder) -->
-      <div v-if="!userInfo?.email?.endsWith('@iframe.invalid')" class="setting-row">
-        <div class="setting-info">
-          <label>{{ $t('tenant.api.emailLabel') }}</label>
-          <p class="desc">{{ $t('tenant.api.emailDescription') }}</p>
-        </div>
-        <div class="setting-control">
-          <span class="info-value">{{ userInfo?.email || '-' }}</span>
-        </div>
-      </div>
-
-      <!-- Created at -->
-      <div class="setting-row">
-        <div class="setting-info">
-          <label>{{ $t('tenant.api.createdAtLabel') }}</label>
-          <p class="desc">{{ $t('tenant.api.createdAtDescription') }}</p>
-        </div>
-        <div class="setting-control">
-          <span class="info-value">{{ formatDate(userInfo?.created_at) }}</span>
-        </div>
-      </div>
-
+      <!-- 用户信息原本嵌在这一页底部，但 api 信息页是 owner-only（要看
+           api key + reset），把用户基本信息（id / 用户名 / 邮箱 / 注册
+           时间）也卡在这里意味着 viewer / contributor 看不到自己的账户
+           信息。已拆到独立的 UserProfile.vue（settings 里 viewer 可见）。 -->
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { getCurrentUser, type TenantInfo, type UserInfo } from '@/api/auth'
+import { getCurrentUser, type TenantInfo } from '@/api/auth'
+import { resetTenantApiKey } from '@/api/tenant'
 import { getApiBaseUrl } from '@/utils/api-base'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useEmbedded } from '@/composables/useEmbedded'
-import { displayUsername } from '@/utils/displayUsername'
+import { useAuthStore } from '@/stores/auth'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const { embedded } = useEmbedded()
+const authStore = useAuthStore()
 
 // Reactive state
 const tenantInfo = ref<TenantInfo | null>(null)
-const userInfo = ref<UserInfo | null>(null)
 const loading = ref(true)
 const error = ref('')
 const showApiKey = ref(false)
+const resetting = ref(false)
 /** WeKnora Lite (Wails): real API origin is loopback + dynamic port, not window.location.origin */
 const wailsApiBaseURL = ref<string | null>(null)
 const showDesktopPortSetting = ref(false)
@@ -415,9 +387,8 @@ const loadInfo = async () => {
     error.value = ''
     
     const userResponse = await getCurrentUser()
-    
+
     if ((userResponse as any).success && userResponse.data) {
-      userInfo.value = userResponse.data.user
       tenantInfo.value = userResponse.data.tenant
     } else {
       error.value = userResponse.message || t('tenant.messages.fetchFailed')
@@ -442,6 +413,43 @@ const fallbackCopyText = (text: string) => {
   textArea.select()
   document.execCommand('copy')
   document.body.removeChild(textArea)
+}
+
+const confirmResetApiKey = () => {
+  if (!tenantInfo.value?.id) {
+    MessagePlugin.warning(t('tenant.api.noKey'))
+    return
+  }
+  const dialog = DialogPlugin.confirm({
+    header: t('tenant.api.resetConfirmTitle'),
+    body: t('tenant.api.resetConfirmBody'),
+    confirmBtn: { content: t('tenant.api.resetConfirmOk'), theme: 'danger' },
+    cancelBtn: t('tenant.api.resetConfirmCancel'),
+    onConfirm: async () => {
+      await performResetApiKey()
+      dialog.destroy()
+    },
+    onClose: () => dialog.destroy(),
+  })
+}
+
+const performResetApiKey = async () => {
+  if (!tenantInfo.value?.id) return
+  resetting.value = true
+  try {
+    const resp = await resetTenantApiKey(tenantInfo.value.id)
+    if (resp.success && resp.data?.api_key) {
+      tenantInfo.value = { ...tenantInfo.value, api_key: resp.data.api_key }
+      showApiKey.value = true
+      MessagePlugin.success(t('tenant.api.resetSuccess'))
+    } else {
+      MessagePlugin.error(resp.message || t('tenant.api.resetFailed'))
+    }
+  } catch (err: any) {
+    MessagePlugin.error(err?.message || t('tenant.api.resetFailed'))
+  } finally {
+    resetting.value = false
+  }
 }
 
 const copyApiKey = async () => {
@@ -494,24 +502,6 @@ const copyApiUrl = async () => {
   }
 }
 
-const formatDate = (dateStr: string | undefined) => {
-  if (!dateStr) return t('tenant.unknown')
-  
-  try {
-    const date = new Date(dateStr)
-    const formatter = new Intl.DateTimeFormat(locale.value || 'zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-    return formatter.format(date)
-  } catch {
-    return t('tenant.formatError')
-  }
-}
-
 // Lifecycle
 onMounted(async () => {
   await tryLoadWailsApiBaseURL()
@@ -523,6 +513,16 @@ onMounted(async () => {
 <style lang="less" scoped>
 .api-info {
   width: 100%;
+}
+
+// TDesign's <t-input> forwards `style=""` to its wrapper but applies
+// `font: var(--td-font-body-medium)` (a shorthand) to the real <input>
+// inside, which silently resets font-family. Reach into the inner input
+// explicitly so the code font actually takes effect for API keys, URLs,
+// etc. Scoped via `.mono-text-input` so this only applies where we opt in.
+.mono-text-input :deep(input) {
+  font-family: var(--app-font-family-mono);
+  font-size: 12px;
 }
 
 .section-header {
@@ -596,23 +596,7 @@ onMounted(async () => {
   }
 
   .doc-link {
-    color: var(--td-brand-color);
-    text-decoration: none;
-    font-weight: 500;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
     cursor: pointer;
-    transition: all 0.2s ease;
-
-    &:hover {
-      color: var(--td-brand-color-active);
-      text-decoration: underline;
-    }
-
-    .link-icon {
-      font-size: 12px;
-    }
   }
 }
 
@@ -664,7 +648,7 @@ onMounted(async () => {
   }
 
   :deep(input) {
-    font-family: monospace;
+    font-family: var(--app-font-family-mono);
     font-size: 12px;
   }
 }

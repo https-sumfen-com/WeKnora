@@ -3,6 +3,7 @@
 package types
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -20,12 +21,6 @@ const (
 	ChunkTypeImageOCR ChunkType = "image_ocr"
 	// ChunkTypeImageCaption 表示图片描述的 Chunk
 	ChunkTypeImageCaption ChunkType = "image_caption"
-	// ChunkTypeVideoFrame 表示视频帧分析内容的 Chunk
-	ChunkTypeVideoFrame ChunkType = "video_frame"
-	// ChunkTypeVideoCaption 表示视频整体描述的 Chunk
-	ChunkTypeVideoCaption ChunkType = "video_caption"
-	// ChunkTypeVideoASR 表示视频音频转录的 Chunk
-	ChunkTypeVideoASR ChunkType = "video_asr"
 	// ChunkTypeSummary 表示摘要类型的 Chunk
 	ChunkTypeSummary = "summary"
 	// ChunkTypeEntity 表示实体类型的 Chunk
@@ -40,6 +35,8 @@ const (
 	ChunkTypeTableSummary ChunkType = "table_summary"
 	// ChunkTypeTableColumn 表示数据表列描述的 Chunk
 	ChunkTypeTableColumn ChunkType = "table_column"
+	// ChunkTypeWikiPage 表示 Wiki 页面同步的 Chunk，用于将 wiki 页面接入现有检索管线
+	ChunkTypeWikiPage ChunkType = "wiki_page"
 )
 
 // ChunkStatus 定义了不同状态的 Chunk
@@ -105,18 +102,6 @@ type ImageInfo struct {
 type VideoInfo struct {
 	// 视频URL
 	URL string `json:"url"          gorm:"type:text"`
-	// 帧数量
-	FrameCount int `json:"frame_count"`
-	// 是否有VLM分析
-	HasVLMAnalysis bool `json:"has_vlm_analysis"`
-	// 是否有ASR转录
-	HasASR bool `json:"has_asr"`
-	// 视频摘要
-	VideoSummary string `json:"video_summary"`
-	// ASR转录文本
-	ASRText string `json:"asr_text"`
-	// 帧描述列表
-	FrameDescriptions []string `json:"frame_descriptions"`
 }
 
 // Chunk represents a document chunk
@@ -179,4 +164,56 @@ type Chunk struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// Soft delete marker, supports data recovery
 	DeletedAt gorm.DeletedAt `json:"deleted_at"               gorm:"index"`
+	// ContextHeader is an in-memory-only context string (e.g. a Markdown
+	// heading breadcrumb) that the indexing pipeline prepends to Content
+	// when generating embeddings. NOT persisted — populated by the chunker
+	// during initial splitting and discarded after indexing.
+	ContextHeader string `json:"-" gorm:"-"`
+}
+
+// EmbeddingContent returns the chunk content with ContextHeader prepended
+// when set. Use this where the embedding model needs section context that
+// isn't part of the literal Content. Surrounding whitespace on Content is
+// trimmed so leading/trailing newlines from boundary slicing don't dilute
+// the embedded vector.
+func (c *Chunk) EmbeddingContent() string {
+	if c == nil {
+		return ""
+	}
+	body := strings.TrimSpace(c.Content)
+	if c.ContextHeader == "" {
+		return body
+	}
+	return c.ContextHeader + "\n\n" + body
+}
+
+// AssignChunkSeqIDs assigns sequential SeqIDs to a batch of chunks that have SeqID == 0.
+// Must be called before CreateInBatches for SQLite compatibility.
+func AssignChunkSeqIDs(tx *gorm.DB, chunks []*Chunk) error {
+	needAssign := false
+	for _, c := range chunks {
+		if c.SeqID == 0 {
+			needAssign = true
+			break
+		}
+	}
+	if !needAssign {
+		return nil
+	}
+
+	var maxSeqID *int64
+	if err := tx.Unscoped().Model(&Chunk{}).Select("MAX(seq_id)").Scan(&maxSeqID).Error; err != nil {
+		return err
+	}
+	next := int64(1)
+	if maxSeqID != nil {
+		next = *maxSeqID + 1
+	}
+	for _, c := range chunks {
+		if c.SeqID == 0 {
+			c.SeqID = next
+			next++
+		}
+	}
+	return nil
 }

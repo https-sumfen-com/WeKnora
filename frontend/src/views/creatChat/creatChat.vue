@@ -243,10 +243,11 @@ const handleKBEditorSuccess = (kbId: string) => {
 }
 
 .dialogue-answers {
-    position: absolute;
     display: flex;
     flex-flow: column;
     align-items: center;
+    width: 100%;
+    max-width: 800px;
 
     :deep(.answers-input) {
         position: static;
@@ -257,7 +258,7 @@ const handleKBEditorSuccess = (kbId: string) => {
 .dialogue-title {
     display: flex;
     color: var(--td-text-color-primary);
-    font-family: "PingFang SC";
+    font-family: var(--app-font-family);
     font-size: 28px;
     font-weight: 600;
     align-items: center;

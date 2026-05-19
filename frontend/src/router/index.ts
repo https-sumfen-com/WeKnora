@@ -2,10 +2,19 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useEmbeddedStore } from '@/stores/embedded'
-import { autoSetup } from '@/api/auth'
+import { autoSetup, getCurrentUser } from '@/api/auth'
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
 const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
+const AUTO_SETUP_FAILED_KEY = 'weknora_auto_setup_failed'
+
+function shouldTryAutoSetup() {
+  return localStorage.getItem(AUTO_SETUP_FAILED_KEY) !== 'true'
+}
+
+function markAutoSetupFailed() {
+  localStorage.setItem(AUTO_SETUP_FAILED_KEY, 'true')
+}
 
 function isLiteEdition(authStore: ReturnType<typeof useAuthStore>) {
   return authStore.isLiteMode || localStorage.getItem('weknora_lite_mode') === 'true'
@@ -22,6 +31,12 @@ function isLiteSpaDefaultEntry(to: RouteLocationNormalized) {
 
 function isSafeLiteRestoreTarget(path: string) {
   return path.startsWith('/platform/') && !path.startsWith('/platform/organizations')
+}
+
+function hasPendingOIDCCallback() {
+  if (typeof window === 'undefined') return false
+  const hash = window.location.hash || ''
+  return hash.includes('oidc_result=') || hash.includes('oidc_error=')
 }
 
 const router = createRouter({
@@ -93,9 +108,14 @@ const router = createRouter({
         },
         {
           path: "knowledge-search",
-          name: "knowledgeSearch",
-          component: () => import("../views/knowledge/KnowledgeSearch.vue"),
-          meta: { requiresInit: true, requiresAuth: true }
+          // 旧路径保留为重定向，打开全局命令面板（⌘K），带上可选的 q 参数
+          redirect: (to) => {
+            const q = to.query.q
+            return {
+              path: '/platform/knowledge-bases',
+              query: typeof q === 'string' ? { cmdk: q } : { cmdk: '' },
+            }
+          },
         },
         {
           path: "agents",
@@ -129,6 +149,13 @@ const router = createRouter({
         },
       ],
     },
+    // Dev-only markdown rendering test page
+    ...(import.meta.env.DEV ? [{
+      path: '/platform/dev/markdown',
+      name: 'markdownTest',
+      component: () => import('../views/dev/MarkdownTestPage.vue'),
+      meta: { requiresAuth: false, requiresInit: false }
+    }] : []),
   ],
 });
 
@@ -142,6 +169,7 @@ function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, respon
       avatar: response.user.avatar,
       tenant_id: String(response.tenant.id) || '',
       can_access_all_tenants: response.user.can_access_all_tenants || false,
+      preferences: response.user.preferences,
       created_at: response.user.created_at || new Date().toISOString(),
       updated_at: response.user.updated_at || new Date().toISOString()
     })
@@ -160,6 +188,71 @@ function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, respon
   }
 }
 
+async function hydrateSessionFromToken(authStore: ReturnType<typeof useAuthStore>) {
+  const token = localStorage.getItem('weknora_token')
+  if (!token) return false
+
+  if (!authStore.token) {
+    authStore.setToken(token)
+  }
+
+  const storedRefreshToken = localStorage.getItem('weknora_refresh_token')
+  if (storedRefreshToken && !authStore.refreshToken) {
+    authStore.setRefreshToken(storedRefreshToken)
+  }
+
+  try {
+    const response = await getCurrentUser()
+    const user = response.data?.user
+    if (!response.success || !user) {
+      return false
+    }
+
+    authStore.setUser({
+      id: user.id || '',
+      username: user.username || '',
+      email: user.email || '',
+      avatar: user.avatar,
+      tenant_id: String(user.tenant_id || response.data?.tenant?.id || ''),
+      can_access_all_tenants: user.can_access_all_tenants || false,
+      preferences: user.preferences,
+      created_at: user.created_at || new Date().toISOString(),
+      updated_at: user.updated_at || new Date().toISOString(),
+    })
+
+    const tenant = response.data?.tenant
+    if (tenant) {
+      authStore.setTenant({
+        id: String(tenant.id) || '',
+        name: tenant.name || '',
+        api_key: tenant.api_key || '',
+        owner_id: tenant.owner_id || user.id || '',
+        description: tenant.description,
+        status: tenant.status,
+        business: tenant.business,
+        storage_quota: tenant.storage_quota,
+        storage_used: tenant.storage_used,
+        created_at: tenant.created_at || new Date().toISOString(),
+        updated_at: tenant.updated_at || new Date().toISOString(),
+      })
+    }
+
+    // Refresh memberships on every page load — same reason as
+    // App.vue's syncOIDCUserContext: without this the auth store
+    // would only ever see the snapshot from the original /auth/login
+    // call, so role changes (and tenant-switch role lookups) would
+    // be silently stale until the user logged out and back in.
+    const memberships = response.data?.memberships
+    if (Array.isArray(memberships)) {
+      authStore.setMemberships(memberships)
+    }
+
+    return true
+  } catch {
+    return false
+  }
+}
+
 let autoSetupAttempted = false
 let liteDeepLinkRestoreDone = false
 
@@ -167,6 +260,13 @@ let liteDeepLinkRestoreDone = false
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   const embeddedStore = useEmbeddedStore()
+
+  // OIDC 回跳登录结果依赖 App.vue 在挂载后消费 URL hash。
+  // 如果这里先按“未登录”拦截到 /login，会导致回调结果没有机会落盘。
+  if (hasPendingOIDCCallback()) {
+    next()
+    return
+  }
 
   // Lite：硬刷新后若落在默认首页，恢复本次会话中最后访问的 /platform 子路径
   if (!liteDeepLinkRestoreDone) {
@@ -201,8 +301,13 @@ router.beforeEach(async (to, from, next) => {
   // 检查用户认证状态
   if (to.meta.requiresAuth !== false) {
     if (!authStore.isLoggedIn) {
-      // Lite 版：尝试自动初始化（仅一次），成功则跳过登录页
-      if (!autoSetupAttempted) {
+      const restored = await hydrateSessionFromToken(authStore)
+      if (restored) {
+        next(to.fullPath)
+        return
+      }
+
+      if (!autoSetupAttempted && shouldTryAutoSetup()) {
         autoSetupAttempted = true
         try {
           const response = await autoSetup()
@@ -211,9 +316,11 @@ router.beforeEach(async (to, from, next) => {
             authStore.setLiteMode(true)
             next(to.fullPath)
             return
+          } else {
+            markAutoSetupFailed()
           }
         } catch {
-          // auto-setup 不可用（非 lite 版本），走正常登录流程
+          markAutoSetupFailed()
         }
       }
       next('/login')

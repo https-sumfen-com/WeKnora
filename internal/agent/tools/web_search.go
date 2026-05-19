@@ -151,27 +151,19 @@ func (t *WebSearchTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 		}, fmt.Errorf("tenant ID not found in context")
 	}
 
-	// Get tenant info from context. Mirrors chat_pipeline/search.go:searchWebIfEnabled:
-	// if the legacy tenant.WebSearchConfig JSONB is empty but the agent tool was wired
-	// with a providerID (comes from new web_search_providers table), synthesize a
-	// minimal config so the tool still works. Iframe-auto-provisioned tenants never
-	// populate WebSearchConfig via UI, so without this fallback the tool bails here.
-	tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+	// Get tenant info from context (same approach as search.go)
+	var tenant *types.Tenant
+	if tenantValue := ctx.Value(types.TenantInfoContextKey); tenantValue != nil {
+		tenant, _ = tenantValue.(*types.Tenant)
+	}
+
+	// Resolve provider ID: tool-level (set from agent config, which already resolved default)
 	resolvedProviderID := t.providerID
 
-	var searchConfig types.WebSearchConfig
-	switch {
-	case tenant != nil && tenant.WebSearchConfig != nil:
-		searchConfig = *tenant.WebSearchConfig
-	case resolvedProviderID != "":
-		// Provider configured via new table; tenant-level JSONB legacy config empty.
-		searchConfig = types.WebSearchConfig{MaxResults: t.maxResults}
-	default:
-		logger.Errorf(ctx, "[Tool][WebSearch] Web search not configured for tenant %d", tenantID)
-		return &types.ToolResult{
-			Success: false,
-			Error:   "web search is not configured for this tenant",
-		}, fmt.Errorf("web search is not configured for tenant %d", tenantID)
+	// Create a copy of the effective web search config with maxResults from agent config.
+	searchConfig := types.EffectiveWebSearchConfig(nil)
+	if tenant != nil {
+		searchConfig = types.EffectiveWebSearchConfig(tenant.WebSearchConfig)
 	}
 	searchConfig.MaxResults = t.maxResults
 
@@ -182,7 +174,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 		resolvedProviderID,
 		searchConfig.MaxResults,
 	)
-	webResults, err := t.webSearchService.Search(ctx, resolvedProviderID, &searchConfig, query)
+	webResults, err := t.webSearchService.Search(ctx, resolvedProviderID, searchConfig, query)
 	if err != nil {
 		logger.Errorf(ctx, "[Tool][WebSearch] Web search failed: %v", err)
 		return &types.ToolResult{
@@ -193,11 +185,9 @@ func (t *WebSearchTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 
 	logger.Infof(ctx, "[Tool][WebSearch] Web search returned %d results", len(webResults))
 
-	// Apply RAG compression if configured (only when legacy WebSearchConfig exists;
-	// fallback-synthesized configs from web_search_providers don't carry compression).
-	if len(webResults) > 0 && tenant != nil && tenant.WebSearchConfig != nil &&
-		tenant.WebSearchConfig.CompressionMethod != "none" &&
-		tenant.WebSearchConfig.CompressionMethod != "" {
+	// Apply RAG compression if configured
+	if len(webResults) > 0 && searchConfig.CompressionMethod != "none" &&
+		searchConfig.CompressionMethod != "" {
 		// Load session-scoped temp KB state from Redis using WebSearchStateRepository
 		tempKBID, seen, ids := t.webSearchStateService.GetWebSearchTempKBState(ctx, t.sessionID)
 
@@ -206,7 +196,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 
 		logger.Infof(ctx, "[Tool][WebSearch] Applying RAG compression")
 		compressed, kbID, newSeen, newIDs, err := t.webSearchService.CompressWithRAG(
-			ctx, t.sessionID, tempKBID, questions, webResults, tenant.WebSearchConfig,
+			ctx, t.sessionID, tempKBID, questions, webResults, searchConfig,
 			t.knowledgeBaseService, t.knowledgeService, seen, ids,
 		)
 		if err != nil {

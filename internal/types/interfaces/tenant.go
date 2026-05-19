@@ -12,6 +12,10 @@ type TenantService interface {
 	CreateTenant(ctx context.Context, tenant *types.Tenant) (*types.Tenant, error)
 	// GetTenantByID gets a tenant by ID
 	GetTenantByID(ctx context.Context, id uint64) (*types.Tenant, error)
+	// GetTenantsByIDs batches GetTenantByID for multiple IDs in a single
+	// query. Returns a map keyed by tenant ID for O(1) lookup at the
+	// call site; missing tenants are simply absent from the map.
+	GetTenantsByIDs(ctx context.Context, ids []uint64) (map[uint64]*types.Tenant, error)
 	// ListTenants lists all tenants
 	ListTenants(ctx context.Context) ([]*types.Tenant, error)
 	// UpdateTenant updates a tenant
@@ -28,8 +32,8 @@ type TenantService interface {
 	SearchTenants(ctx context.Context, keyword string, tenantID uint64, page, pageSize int) ([]*types.Tenant, int64, error)
 	// GetTenantByIDForUser gets a tenant by ID with permission check
 	GetTenantByIDForUser(ctx context.Context, tenantID uint64, userID string) (*types.Tenant, error)
-	// GetTenantByAPIKey gets a tenant by API key
-	GetDocreaderCredentials(ctx context.Context) *types.DocreaderCredentials
+	// GetWeKnoraCloudCredentials returns the decrypted WeKnoraCloud credentials for the current tenant.
+	GetWeKnoraCloudCredentials(ctx context.Context) *types.WeKnoraCloudCredentials
 }
 
 // TenantRepository defines the tenant repository interface
@@ -38,6 +42,8 @@ type TenantRepository interface {
 	CreateTenant(ctx context.Context, tenant *types.Tenant) error
 	// GetTenantByID gets a tenant by ID
 	GetTenantByID(ctx context.Context, id uint64) (*types.Tenant, error)
+	// GetTenantsByIDs batches GetTenantByID; see TenantService.GetTenantsByIDs.
+	GetTenantsByIDs(ctx context.Context, ids []uint64) (map[uint64]*types.Tenant, error)
 	// ListTenants lists all tenants
 	ListTenants(ctx context.Context) ([]*types.Tenant, error)
 	// SearchTenants searches tenants with pagination and filters

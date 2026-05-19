@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -11,9 +13,105 @@ import (
 	"github.com/Tencent/WeKnora/internal/common"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"golang.org/x/sync/errgroup"
 )
+
+// langfuseToolOutputPreview caps the Output field we send to Langfuse for a
+// tool call. Tool outputs are already truncated by the registry to
+// DefaultMaxToolOutput (16KB) before this point, but rendering 16KB in the
+// Langfuse UI for every tool call is noisy. We keep a generous slice so the
+// gist is preserved, and include the original length in metadata.
+const langfuseToolOutputPreview = 4000
+
+// truncateForLangfuse returns s truncated to at most n runes, with a "…"
+// marker appended when truncated. Runes (not bytes) are used so multi-byte
+// CJK content is never split mid-character.
+func truncateForLangfuse(s string, n int) string {
+	if n <= 0 || len(s) == 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// argKeys returns the sorted list of top-level keys in a tool's argument
+// map. Used when we choose not to send the raw arguments to Langfuse
+// (e.g. database_query's SQL) but still want to signal what was passed in.
+func argKeys(args map[string]any) []string {
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// finishToolSpan serialises a completed tool call into a Langfuse span
+// update. Extracted from runToolCall so the tool-call pipeline keeps
+// a single assignment per line and the observability-specific logic
+// (payload shaping, error classification) lives in one place.
+func finishToolSpan(span *langfuse.Span, tc types.ToolCall, execErr error, durationMs int64) {
+	if span == nil {
+		return
+	}
+	success := tc.Result != nil && tc.Result.Success
+	output := map[string]interface{}{
+		"success":     success,
+		"duration_ms": durationMs,
+	}
+	if tc.Result != nil {
+		if tc.Result.Output != "" {
+			output["output"] = truncateForLangfuse(tc.Result.Output, langfuseToolOutputPreview)
+			output["output_len"] = len(tc.Result.Output)
+		}
+		if tc.Result.Error != "" {
+			output["error"] = tc.Result.Error
+		}
+		if len(tc.Result.Data) > 0 {
+			// Data is structured but can be arbitrarily large (e.g. full
+			// search-result payloads). Only report key shape so Langfuse
+			// users see what was surfaced without blowing up trace size.
+			output["data_keys"] = dataKeys(tc.Result.Data)
+		}
+		if len(tc.Result.Images) > 0 {
+			output["image_count"] = len(tc.Result.Images)
+		}
+	}
+	// Classify the span's outcome: a non-nil execErr is always an error, and
+	// a result with Success=false is treated as an error too (matches the
+	// user-visible behaviour — the LLM would see this as a failed tool call
+	// and try a different approach).
+	var spanErr error
+	switch {
+	case execErr != nil:
+		spanErr = execErr
+	case tc.Result != nil && !tc.Result.Success:
+		msg := tc.Result.Error
+		if msg == "" {
+			msg = "tool returned success=false"
+		}
+		spanErr = errors.New(msg)
+	}
+	span.Finish(output, map[string]interface{}{
+		"success":     success,
+		"duration_ms": durationMs,
+	}, spanErr)
+}
+
+// dataKeys returns the sorted top-level keys of a tool's Data map.
+func dataKeys(data map[string]interface{}) []string {
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // toolDisplayNames maps internal tool names to user-friendly display labels.
 var toolDisplayNames = map[string]string{
@@ -67,7 +165,7 @@ func formatToolHint(name string, args map[string]any) string {
 // When ParallelToolCalls is enabled and there are 2+ tool calls, they execute concurrently.
 func (e *AgentEngine) executeToolCalls(
 	ctx context.Context, response *types.ChatResponse,
-	step *types.AgentStep, iteration int, sessionID string,
+	step *types.AgentStep, iteration int, sessionID, assistantMessageID string,
 ) {
 	if len(response.ToolCalls) == 0 {
 		return
@@ -79,12 +177,12 @@ func (e *AgentEngine) executeToolCalls(
 
 	// Use parallel execution when enabled and there are multiple tool calls
 	if e.config.ParallelToolCalls && n >= 2 {
-		e.executeToolCallsParallel(ctx, response, step, iteration, sessionID)
+		e.executeToolCallsParallel(ctx, response, step, iteration, sessionID, assistantMessageID)
 		return
 	}
 
 	for i, tc := range response.ToolCalls {
-		e.executeSingleToolCall(ctx, tc, i, step, iteration, round, sessionID)
+		e.executeSingleToolCall(ctx, tc, i, step, iteration, round, sessionID, assistantMessageID)
 	}
 }
 
@@ -92,7 +190,7 @@ func (e *AgentEngine) executeToolCalls(
 // collecting results in original order.
 func (e *AgentEngine) executeToolCallsParallel(
 	ctx context.Context, response *types.ChatResponse,
-	step *types.AgentStep, iteration int, sessionID string,
+	step *types.AgentStep, iteration int, sessionID, assistantMessageID string,
 ) {
 	round := iteration + 1
 	n := len(response.ToolCalls)
@@ -105,7 +203,7 @@ func (e *AgentEngine) executeToolCallsParallel(
 	for i, tc := range response.ToolCalls {
 		i, tc := i, tc // capture loop vars
 		g.Go(func() error {
-			toolCall := e.runToolCall(gCtx, tc, i, iteration, round, sessionID)
+			toolCall := e.runToolCall(gCtx, tc, i, iteration, round, sessionID, assistantMessageID)
 			mu.Lock()
 			results[i] = toolCall
 			mu.Unlock()
@@ -160,9 +258,9 @@ func (e *AgentEngine) executeToolCallsParallel(
 // executeSingleToolCall runs one tool call sequentially (original behavior).
 func (e *AgentEngine) executeSingleToolCall(
 	ctx context.Context, tc types.LLMToolCall, i int,
-	step *types.AgentStep, iteration, round int, sessionID string,
+	step *types.AgentStep, iteration, round int, sessionID, assistantMessageID string,
 ) {
-	toolCall := e.runToolCall(ctx, tc, i, iteration, round, sessionID)
+	toolCall := e.runToolCall(ctx, tc, i, iteration, round, sessionID, assistantMessageID)
 	step.ToolCalls = append(step.ToolCalls, toolCall)
 
 	result := toolCall.Result
@@ -206,7 +304,7 @@ func (e *AgentEngine) executeSingleToolCall(
 // It returns the completed ToolCall struct. Safe to call from multiple goroutines.
 func (e *AgentEngine) runToolCall(
 	ctx context.Context, tc types.LLMToolCall, i int,
-	iteration, round int, sessionID string,
+	iteration, round int, sessionID, assistantMessageID string,
 ) types.ToolCall {
 	tc.ID = agenttools.NormalizeToolCallID(tc.ID, tc.Function.Name, i)
 	total := "?" // unknown in isolation; callers log the batch size
@@ -262,9 +360,54 @@ func (e *AgentEngine) runToolCall(
 		"tool_index":   fmt.Sprintf("%d/%s", i+1, total),
 	})
 
-	toolCtx, toolCancel := context.WithTimeout(ctx, defaultToolExecTimeout)
+	// Open a Langfuse span for the tool invocation so the Langfuse UI shows
+	// trace → agent.execute → agent.round.N → agent.tool.<name>, alongside
+	// any nested generations (embedding/rerank/VLM) that the tool itself
+	// triggers. No-op when Langfuse is disabled.
+	mgr := langfuse.GetManager()
+	toolSpanInput := map[string]interface{}{
+		"arguments":    args,
+		"tool_call_id": tc.ID,
+	}
+	// database_query's SQL is treated as sensitive by the UI hint layer
+	// (toolHintSensitiveArgs) because it exposes implementation details.
+	// Mirror that policy for Langfuse: redact raw arguments to avoid
+	// leaking raw SQL into the observability backend.
+	if toolHintSensitiveArgs[tc.Function.Name] {
+		toolSpanInput = map[string]interface{}{
+			"tool_call_id":  tc.ID,
+			"arg_keys":      argKeys(args),
+			"args_redacted": true,
+		}
+	}
+	toolCtx, toolSpan := mgr.StartSpan(ctx, langfuse.SpanOptions{
+		Name:  "agent.tool." + tc.Function.Name,
+		Input: toolSpanInput,
+		Metadata: map[string]interface{}{
+			"iteration":    iteration,
+			"round":        round,
+			"tool_index":   i + 1,
+			"tool_call_id": tc.ID,
+			"session_id":   sessionID,
+		},
+	})
+
+	userID, _ := types.UserIDFromContext(ctx)
+	toolExecCtx := agenttools.WithToolExecContext(toolCtx, &agenttools.ToolExecContext{
+		SessionID:          sessionID,
+		AssistantMessageID: assistantMessageID,
+		EventBus:           e.eventBus,
+		ToolCallID:         tc.ID,
+		UserID:             userID,
+		// ApprovalCtx keeps the round-level ctx without the per-tool 60s timeout,
+		// so MCP tool human-approval (issue #1173) can legitimately block longer.
+		ApprovalCtx: toolCtx,
+		ExecTimeout: defaultToolExecTimeout,
+	})
+
+	execCtx, toolCancel := context.WithTimeout(toolExecCtx, defaultToolExecTimeout)
 	result, err := e.toolRegistry.ExecuteTool(
-		toolCtx, tc.Function.Name,
+		execCtx, tc.Function.Name,
 		json.RawMessage(tc.Function.Arguments),
 	)
 	toolCancel()
@@ -293,6 +436,8 @@ func (e *AgentEngine) runToolCall(
 		logger.Infof(ctx, "%s Completed in %dms: success=%v, output=%d chars",
 			toolTag, duration, success, outputLen)
 	}
+
+	finishToolSpan(toolSpan, toolCall, err, duration)
 
 	// Pipeline event for monitoring
 	toolSuccess := toolCall.Result != nil && toolCall.Result.Success

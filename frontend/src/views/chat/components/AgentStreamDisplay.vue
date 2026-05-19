@@ -42,7 +42,7 @@
                   </div>
                   <div v-if="event.content && isEventExpanded(event.event_id)" class="action-details">
                     <div class="thinking-detail-content markdown-content">
-                      <div v-for="(token, idx) in getTokens(event.content)" :key="idx" v-html="getTokenHTML(token)"></div>
+                      <div v-html="renderMarkdownContent(event.content)"></div>
                     </div>
                   </div>
                 </div>
@@ -64,10 +64,26 @@
                   </div>
                   <div v-if="event.tool_data?.thought && isEventExpanded(event.tool_call_id)" class="action-details">
                     <div class="thinking-detail-content markdown-content">
-                      <div v-for="(token, idx) in getTokens(event.tool_data.thought)" :key="idx" v-html="getTokenHTML(token)"></div>
+                      <div v-html="renderMarkdownContent(event.tool_data.thought)"></div>
                     </div>
                   </div>
                 </div>
+              </div>
+
+              <!-- MCP tool human approval (issue #1173) -->
+              <div v-else-if="event.type === 'tool_approval_required'" class="tool-event">
+                <ToolApprovalCard
+                  :pending-id="event.pending_id"
+                  :service-name="event.service_name || ''"
+                  :mcp-tool-name="event.mcp_tool_name || ''"
+                  :description="event.description"
+                  :args-json="event.args_json"
+                  :timeout-seconds="event.timeout_seconds"
+                  :requested-at="event.requested_at"
+                  :resolved="event.resolved"
+                  :approved="event.approved"
+                  :resolve-reason="event.resolve_reason"
+                />
               </div>
 
               <!-- Tool Call Event (non-thinking) -->
@@ -173,10 +189,26 @@
             </div>
             <div v-if="event.content && isEventExpanded(event.event_id)" class="action-details">
               <div class="thinking-detail-content markdown-content">
-                <div v-for="(token, idx) in getTokens(event.content)" :key="idx" v-html="getTokenHTML(token)"></div>
+                <div v-html="renderMarkdownContent(event.content)"></div>
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- MCP tool human approval -->
+        <div v-else-if="event.type === 'tool_approval_required'" class="tool-event">
+          <ToolApprovalCard
+            :pending-id="event.pending_id"
+            :service-name="event.service_name || ''"
+            :mcp-tool-name="event.mcp_tool_name || ''"
+            :description="event.description"
+            :args-json="event.args_json"
+            :timeout-seconds="event.timeout_seconds"
+            :requested-at="event.requested_at"
+            :resolved="event.resolved"
+            :approved="event.approved"
+            :resolve-reason="event.resolve_reason"
+          />
         </div>
 
         <!-- Thinking Tool Call -->
@@ -195,7 +227,7 @@
             </div>
             <div v-if="event.tool_data?.thought && isEventExpanded(event.tool_call_id)" class="action-details">
               <div class="thinking-detail-content markdown-content">
-                <div v-for="(token, idx) in getTokens(event.tool_data.thought)" :key="idx" v-html="getTokenHTML(token)"></div>
+                <div v-html="renderMarkdownContent(event.tool_data.thought)"></div>
               </div>
             </div>
           </div>
@@ -207,9 +239,9 @@
             v-if="event.content && event.content.trim()"
             class="answer-content markdown-content"
           >
-               <div v-for="(token, idx) in getTokens(event.content)" :key="idx" v-html="getTokenHTML(token)"></div>
+               <div v-html="renderAnswerContent(event.content)"></div>
           </div>
-          <div v-if="event.done" class="answer-toolbar">
+          <div v-if="event.done && event.content && event.content.trim()" class="answer-toolbar">
             <t-button size="small" variant="outline" shape="round" @click.stop="handleCopyAnswer(event)" :title="$t('agent.copy')">
               <t-icon name="copy" />
             </t-button>
@@ -335,21 +367,58 @@
   
   <!-- Image Preview -->
   <picturePreview :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl" @closePreImg="closeImagePreview" />
+  
+  <!-- Wiki Page Detail Drawer -->
+  <t-drawer
+    v-model:visible="wikiDrawerVisible"
+    :header="wikiDrawerPage?.title || ''"
+    size="480px"
+    :footer="false"
+    placement="right"
+    attach="body"
+    :show-overlay="true"
+    :close-btn="true"
+    :close-on-overlay-click="true"
+    class="wiki-graph-drawer"
+  >
+    <template v-if="wikiDrawerPage">
+      <div class="wiki-reader-meta" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <t-tag size="small" :theme="getTypeTheme(wikiDrawerPage.page_type)" variant="light-outline">
+            {{ getTypeLabel(wikiDrawerPage.page_type) }}
+          </t-tag>
+          <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: wikiDrawerPage.version || 1 }) }}</span>
+        </div>
+        <t-link theme="primary" hover="color" @click="navigateToWikiGraph">
+          <template #prefixIcon><t-icon name="chart-bubble" /></template>
+          {{ $t('knowledgeEditor.wikiBrowser.viewInGraph') }}
+        </t-link>
+      </div>
+      <div ref="wikiDrawerBodyRef" class="wiki-reader-body" v-html="wikiDrawerContent" @click="handleWikiDrawerClick"></div>
+    </template>
+  </t-drawer>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { marked } from 'marked';
+import markedKatex from 'marked-katex-extension';
+import 'katex/dist/katex.min.css';
 import DOMPurify from 'dompurify';
 import ToolResultRenderer from './ToolResultRenderer.vue';
+import ToolApprovalCard from './ToolApprovalCard.vue';
 import picturePreview from '@/components/picture-preview.vue';
 import { getChunkByIdOnly } from '@/api/knowledge-base';
+import { getWikiPage, type WikiPage } from '@/api/wiki';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useUIStore } from '@/stores/ui';
+import { useSettingsStore } from '@/stores/settings';
+import { useAuthStore } from '@/stores/auth';
 import { useI18n } from 'vue-i18n';
 import i18n from '@/i18n';
 import { hydrateProtectedFileImages } from '@/utils/security';
+import { unwrapFinalAnswerWrappers, thinkingEqualsAnswer } from '@/utils/finalAnswer';
 import {
   buildManualMarkdown,
   copyTextToClipboard,
@@ -363,7 +432,10 @@ import {
 } from '@/utils/mermaidShared';
 
 const router = useRouter();
+const route = useRoute();
 const uiStore = useUIStore();
+const settingsStore = useSettingsStore();
+const authStore = useAuthStore();
 const { t } = useI18n();
 
 ensureMermaidInitialized();
@@ -378,11 +450,13 @@ const DOMPurifyConfig = {
     'svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polygon',
     'polyline', 'text', 'tspan', 'defs', 'marker', 'filter', 'use',
     'clippath', 'lineargradient', 'radialgradient', 'stop', 'pattern',
-    'image', 'foreignobject', 'desc', 'title', 'switch', 'symbol', 'mask'
+    'image', 'foreignobject', 'desc', 'title', 'switch', 'symbol', 'mask',
+    // KaTeX MathML 支持的标签
+    'math', 'annotation', 'semantics', 'mo', 'mi', 'mn', 'msup', 'mrow', 'mfrac', 'msqrt', 'mroot', 'mstyle'
   ],
   ALLOWED_ATTR: [
     'href', 'title', 'target', 'rel', 'data-tooltip', 'data-url', 'data-kb-id',
-    'data-chunk-id', 'data-doc', 'class', 'role', 'tabindex', 'src', 'alt', 'data-protected-src',
+    'data-chunk-id', 'data-doc', 'data-slug', 'class', 'role', 'tabindex', 'src', 'alt', 'data-protected-src',
     'width', 'height', 'style', 'id',
     // Mermaid SVG 支持的属性
     'd', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
@@ -397,8 +471,11 @@ const DOMPurifyConfig = {
     'patternunits', 'patterntransform', 'clippathunits', 'maskunits',
     'filterunits', 'primitiveunits', 'xmlns', 'xmlns:xlink', 'xlink:href',
     'version', 'baseprofile', 'enable-background', 'overflow', 'visibility',
-    'display', 'pointer-events', 'cursor', 'data-emit', 'direction'
+    'display', 'pointer-events', 'cursor', 'data-emit', 'direction',
+    // KaTeX MathML 支持的属性
+    'mathvariant', 'encoding', 'aria-hidden'
   ],
+  USE_PROFILES: { html: true, svg: true, mathMl: true },
   // Allow provider:// URLs so they can be hydrated later.
   ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp):|(?:local|minio|cos|tos):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
 };
@@ -478,7 +555,10 @@ const sanitizeForDisplay = (text: string): string => {
   });
   result = result.replace(ID_LABEL_RE, '');
   result = result.replace(UUID_RE, '');
-  result = result.replace(/`\s*`/g, '');
+  // Remove empty inline code like `` or ` ` while preserving triple-backtick
+  // fenced code blocks (```). Without the lookaround the greedy pair match
+  // would eat two of the three fence backticks and break code block rendering.
+  result = result.replace(/(?<!`)`[ \t]*`(?!`)/g, '');
   result = result.replace(/\(\s*\)/g, '');
   return result;
 };
@@ -498,6 +578,110 @@ const openImagePreview = (url: string) => {
 
 const closeImagePreview = () => {
   imagePreviewVisible.value = false;
+};
+
+// Wiki Drawer 状态
+const wikiDrawerVisible = ref(false);
+const wikiDrawerPage = ref<WikiPage | null>(null);
+const wikiDrawerBodyRef = ref<HTMLElement | null>(null);
+const currentWikiKbId = ref<string>('');
+
+function getTypeTheme(type: string): string {
+  const map: Record<string, string> = {
+    summary: 'primary', entity: 'success', concept: 'warning',
+    synthesis: 'primary', comparison: 'danger', index: 'default', log: 'default',
+  };
+  return map[type] || 'default';
+}
+
+function getTypeLabel(type: string): string {
+  const map: Record<string, string> = {
+    summary: t('knowledgeEditor.wikiBrowser.filterSummary'),
+    entity: t('knowledgeEditor.wikiBrowser.filterEntity'),
+    concept: t('knowledgeEditor.wikiBrowser.filterConcept'),
+    synthesis: t('knowledgeEditor.wikiBrowser.filterSynthesis'),
+    comparison: t('knowledgeEditor.wikiBrowser.filterComparison'),
+    index: 'Index',
+    log: 'Log',
+  };
+  return map[type] || type;
+}
+
+const wikiDrawerContent = computed(() => {
+  if (!wikiDrawerPage.value) return '';
+  const content = wikiDrawerPage.value.content || '';
+  
+  // Pre-process wiki links [[slug|name]] to custom HTML tags for the drawer
+  let preprocessed = content.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+    const pipeIdx = inner.indexOf('|');
+    const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim();
+    let display = slug;
+    if (pipeIdx > 0) {
+      display = inner.substring(pipeIdx + 1).trim();
+    } else {
+      const parts = slug.split('/');
+      display = parts.length > 1 ? parts.slice(1).join('/') : slug;
+    }
+    return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${escapeHtml(slug)}">${escapeHtml(display)}</a>`;
+  });
+
+  return marked.parse(preprocessed, { breaks: true, async: false }) as string;
+});
+
+watch(wikiDrawerContent, async () => {
+  await nextTick();
+  if (wikiDrawerBodyRef.value) {
+    await hydrateProtectedFileImages(wikiDrawerBodyRef.value);
+  }
+});
+
+const openWikiDrawer = async (kbId: string, slug: string) => {
+  if (!kbId || !slug) return;
+  try {
+    currentWikiKbId.value = kbId;
+    const res = await getWikiPage(kbId, slug);
+    wikiDrawerPage.value = (res as any).data || res as any;
+    wikiDrawerVisible.value = true;
+  } catch (e) {
+    console.error(`Failed to load page ${slug}:`, e);
+    MessagePlugin.warning(t('agentStream.citation.loadFailed'));
+  }
+};
+
+const navigateToWikiGraph = () => {
+  if (currentWikiKbId.value && wikiDrawerPage.value?.slug) {
+    wikiDrawerVisible.value = false;
+    try {
+      router.push(`/platform/knowledge-bases/${currentWikiKbId.value}?tab=graph&slug=${encodeURIComponent(wikiDrawerPage.value.slug)}`);
+    } catch (error) {
+      console.error('Failed to navigate to wiki graph:', error);
+    }
+  }
+};
+
+const handleWikiDrawerClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  if (target.closest('.citation-wiki')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const slug = target.closest('.citation-wiki')?.getAttribute('data-slug');
+    if (slug) openWikiDrawer(currentWikiKbId.value, slug);
+  } else if (target.tagName.toLowerCase() === 'img') {
+    e.preventDefault();
+    const src = target.getAttribute('src');
+    if (src) openImagePreview(src);
+  } else {
+    // allow link navigation inside drawer
+    const aEl = target.closest?.('a') as HTMLAnchorElement | null;
+    // @ts-ignore
+    if (aEl && aEl.href && window.runtime && window.runtime.BrowserOpenURL) {
+      if (aEl.href.startsWith('http://') || aEl.href.startsWith('https://')) {
+        e.preventDefault();
+        // @ts-ignore
+        window.runtime.BrowserOpenURL(aEl.href);
+      }
+    }
+  }
 };
 
 // 浮层状态（Web/KB 共用）
@@ -586,6 +770,16 @@ const props = defineProps<{
 
 // Configure marked for security
 marked.use({});
+marked.use(markedKatex({ throwOnError: false, nonStandard: true }));
+
+const preprocessMathDelimiters = (rawText: string): string => {
+  if (!rawText || typeof rawText !== 'string') {
+    return '';
+  }
+  return rawText
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+};
 
 // Event stream
 const eventStream = computed(() => props.session?.agentEventStream || []);
@@ -705,6 +899,12 @@ const isConversationDone = computed(() => {
     console.log('[Collapse] Found stop event, conversation done');
     return true;
   }
+
+  const completeEvent = stream.find((e: any) => e.type === 'agent_complete');
+  if (completeEvent) {
+    console.log('[Collapse] Found complete event, conversation done');
+    return true;
+  }
   
   // Check for answer event with done=true
   const answerEvents = stream.filter((e: any) => e.type === 'answer');
@@ -732,6 +932,19 @@ const finalContent = computed(() => {
 
   if (hasAnswerContent) {
     return { type: 'answer' };
+  }
+
+  // Do NOT fall back to re-rendering the last thinking event when the
+  // intermediate-steps tree already shows it — that would duplicate the
+  // thinking card below the tree. The fallback is only meaningful for
+  // legacy conversations where the tree is absent. Also skip for
+  // user-stopped conversations which have no final answer to fall back to.
+  if (shouldShowCollapsedSteps.value) {
+    return null;
+  }
+  const wasStopped = stream.some((e: any) => e.type === 'stop');
+  if (wasStopped) {
+    return null;
   }
 
   // Fallback: if no answer content (legacy path or LLM didn't call final_answer),
@@ -877,15 +1090,78 @@ const buildFullEventList = (stream: any[]) => {
 
     result.push(event);
   }
-  return result;
+
+  // Drop thinking events whose content is whitespace-only. Some models emit
+  // "\n\n" before a tool call (see e.g. qwen3 emitting blank lines between
+  // [assistant] and tool_calls), which the backend faithfully forwards as
+  // thought_chunk events. Without this filter the tree shows an empty
+  // "思考" card with no text — confusing to the user.
+  return result.filter((e: any) => {
+    if (e.type !== 'thinking') return true;
+    const content = typeof e.content === 'string' ? e.content : '';
+    return content.trim().length > 0;
+  });
 };
+
+// IDs of thinking events that should NOT be rendered in the intermediate-
+// steps tree because their content is already shown as the final answer.
+// Two cases produce duplicates:
+//   1. `promotedThinkingEventId` — agent loop ended via natural-stop with
+//      no answer event at all; we promote the trailing thinking into a
+//      virtual answer card (see displayEvents) and must hide the source
+//      thinking from the tree.
+//   2. Natural-stop path on the backend streams answer chunks as thought
+//      events first, then re-emits the *same* content as one big answer
+//      event. The merged thinking event in the tree would duplicate the
+//      answer card, so detect content-equivalence and hide it.
+const hiddenThinkingEventIds = computed<Set<string>>(() => {
+  const hidden = new Set<string>();
+  const stream = eventStream.value;
+  if (!stream || !Array.isArray(stream)) return hidden;
+
+  // Case 1: trailing thinking promoted to answer (no answer events present).
+  const final = finalContent.value;
+  if (final && final.type === 'thinking') {
+    const hasRealAnswer = stream.some(
+      (e: any) => e.type === 'answer' && e.content && e.content.trim()
+    );
+    if (!hasRealAnswer && final.event_id) {
+      hidden.add(final.event_id);
+    }
+  }
+
+  // Case 2: natural-stop duplicates — answer events carry the same content
+  // already streamed as thinking chunks. Compare merged thinking events
+  // against the concatenated answer content and hide on match.
+  const answerContent = stream
+    .filter((e: any) => e.type === 'answer' && e.content)
+    .map((e: any) => e.content)
+    .join('');
+  if (answerContent.trim()) {
+    const merged = buildFullEventList(stream);
+    for (const e of merged) {
+      if (e.type !== 'thinking' || !e.event_id || !e.content) continue;
+      if (hidden.has(e.event_id)) continue;
+      if (thinkingEqualsAnswer(e.content, answerContent)) {
+        hidden.add(e.event_id);
+      }
+    }
+  }
+
+  return hidden;
+});
 
 // Intermediate events (tree children: everything except answer)
 const intermediateEvents = computed(() => {
   const stream = eventStream.value;
   if (!stream || !Array.isArray(stream)) return [];
   const result = buildFullEventList(stream);
-  return result.filter((e: any) => e.type !== 'answer' && e.type !== 'agent_complete');
+  const hidden = hiddenThinkingEventIds.value;
+  return result.filter((e: any) => {
+    if (e.type === 'answer' || e.type === 'agent_complete') return false;
+    if (e.type === 'thinking' && e.event_id && hidden.has(e.event_id)) return false;
+    return true;
+  });
 });
 
 // Events to display (non-tree: before answer starts show all, after answer starts show only answer)
@@ -911,6 +1187,14 @@ const displayEvents = computed(() => {
     return answerEvents;
   }
 
+  // If the intermediate-steps tree is active, all thinking/tool_call events
+  // are already rendered there. Showing anything else here would duplicate
+  // them. This covers both the user-stopped case and any completion path
+  // that didn't produce an answer event.
+  if (shouldShowCollapsedSteps.value) {
+    return [];
+  }
+
   // Fallback: if no answer events, show last thinking (legacy compatibility)
   const final = finalContent.value;
   if (!final) {
@@ -918,14 +1202,23 @@ const displayEvents = computed(() => {
   }
 
   if (final.type === 'thinking') {
-    const thinkingFiltered = result.filter((e: any) =>
+    // The agent loop ended via natural-stop (the model wrote its answer as
+    // free text instead of calling final_answer). Synthesize a virtual
+    // `answer` event from the trailing thinking content so it renders with
+    // the answer card UI (expanded markdown + copy/add toolbar) rather than
+    // the collapsed "思考" card. The original thinking event is still in
+    // the intermediate-steps tree when applicable.
+    const thinking = result.find((e: any) =>
       e.type === 'thinking' && e.event_id === final.event_id
     );
-    if (final.showAnswerToolbar) {
-      const answerDoneEvents = result.filter((e: any) => e.type === 'answer' && e.done === true);
-      return [...thinkingFiltered, ...answerDoneEvents];
-    }
-    return thinkingFiltered;
+    if (!thinking || !thinking.content) return result;
+    return [{
+      type: 'answer',
+      event_id: thinking.event_id,
+      content: thinking.content,
+      done: true,
+      _promoted_from_thinking: true,
+    }];
   }
 
   return result;
@@ -936,6 +1229,9 @@ const getEventKey = (event: any, index: number): string => {
   if (!event) return `event-${index}`;
   if (event.event_id) return `event-${event.event_id}`;
   if (event.tool_call_id) return `tool-${event.tool_call_id}`;
+  if (event.type === 'tool_approval_required' && event.pending_id) {
+    return `approval-${event.pending_id}`;
+  }
   return `event-${index}-${event.type || 'unknown'}`;
 };
 
@@ -1024,13 +1320,14 @@ type KbTooltipState = {
 
 const kbChunkDetails = ref<Record<string, KbTooltipState>>({});
 
-const escapeHtml = (value: string): string =>
-  value
+function escapeHtml(value: string): string {
+  return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
 
 const buildKbTooltipContent = (content: string): string => {
   const escapedContent = escapeHtml(content).replace(/\n/g, '<br>');
@@ -1185,6 +1482,49 @@ const onHoverOut = (e: Event) => {
   scheduleFloatClose();
 };
 
+const getKbIdForWiki = (slug: string): string => {
+  if (route.params.kbId) return route.params.kbId as string;
+
+  // The backend ships `found_kbs` as a map<slug, string[]> — a single slug can
+  // legitimately resolve to more than one KB when multiple wiki KBs are in
+  // scope. For navigation we just pick the first one; cross-KB disambiguation
+  // (if ever needed) can layer on top. We also defensively handle the legacy
+  // string shape in case older tool outputs are still cached in a session.
+  const pickKbId = (v: unknown): string => {
+    if (!v) return '';
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string' && item) return item;
+      }
+    }
+    return '';
+  };
+
+  // Try to extract from agent event stream (retrieval pipeline). Walk
+  // backwards so we prefer the most recent tool call's mapping.
+  if (props.session?.agentEventStream) {
+    for (let i = props.session.agentEventStream.length - 1; i >= 0; i--) {
+      const event = props.session.agentEventStream[i];
+      const foundKbs = event?.tool_data?.found_kbs;
+      if (event.type === 'tool_call' && foundKbs) {
+        const hit = pickKbId(foundKbs[slug]);
+        if (hit) return hit;
+      }
+    }
+  }
+
+  // Fallbacks
+  const selectedKbs = settingsStore.getSelectedKnowledgeBases();
+  if (selectedKbs && selectedKbs.length > 0) return selectedKbs[0];
+
+  if (authStore.knowledgeBases && authStore.knowledgeBases.length > 0) {
+    return authStore.knowledgeBases[0].id;
+  }
+
+  return '';
+};
+
 const onRootClick = (e: Event) => {
   const target = e.target as HTMLElement;
   if (!target) return;
@@ -1228,6 +1568,24 @@ const onRootClick = (e: Event) => {
     return;
   }
   
+  // Handle wiki link clicks -> navigate to KB wiki browser page
+  const wikiEl = target.closest?.('.citation-wiki') as HTMLElement | null;
+  if (wikiEl && wikiEl.getAttribute('data-slug')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const slug = wikiEl.getAttribute('data-slug');
+    
+    // Determine the relevant KB ID
+    const kbId = getKbIdForWiki(slug);
+    
+    if (kbId && slug) {
+      openWikiDrawer(kbId, slug);
+    } else {
+      MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
+    }
+    return;
+  }
+  
   // Handle generic a clicks (especially in Wails desktop)
   const aEl = target.closest?.('a') as HTMLAnchorElement | null;
   // @ts-ignore
@@ -1267,6 +1625,24 @@ const onRootKeydown = (e: KeyboardEvent) => {
         } catch (error) {
           console.error('Failed to navigate to knowledge base:', error);
         }
+      }
+    }
+    return;
+  }
+
+  // Handle wiki citation keyboard -> navigate to KB wiki browser
+  const wikiEl = target.closest?.('.citation-wiki') as HTMLElement | null;
+  if (wikiEl) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      const slug = wikiEl.getAttribute('data-slug');
+      
+      const kbId = getKbIdForWiki(slug || '');
+      
+      if (kbId && slug) {
+        openWikiDrawer(kbId, slug);
+      } else {
+        MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
       }
     }
     return;
@@ -1389,13 +1765,64 @@ const preprocessMarkdown = (contentStr: string): string => {
         const displayDoc = escapeHtml(truncateMiddle(doc));
         return `<span class="citation citation-kb" data-kb-id="${safeKbId}" data-chunk-id="${safeChunkId}" data-doc="${safeDoc}" role="button" tabindex="0"><span class="citation-icon kb"></span><span class="citation-text">${displayDoc}</span><span class="citation-tip"><span class="t-popup__content"><span class="tip-loading">${t('agentStream.citation.loading')}</span></span></span></span>`;
       }
+    )
+    .replace(
+      /\[\[([^\]]+)\]\]/g,
+      (match, inner: string) => {
+        const pipeIdx = inner.indexOf('|');
+        const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim();
+        let display = slug;
+        if (pipeIdx > 0) {
+          display = inner.substring(pipeIdx + 1).trim();
+        } else {
+          // Fallback: strip type prefix like "summary/" or "concept/"
+          const parts = slug.split('/');
+          display = parts.length > 1 ? parts.slice(1).join('/') : slug;
+        }
+
+        // Bail out on empty slug; otherwise accept any non-empty slug.
+        // Structural pages like "index" and "log" have no slash but are
+        // still valid targets — the drawer renderer already treats them
+        // as such, so the chat bubble must match.
+        if (!slug) return match;
+
+        const safeSlug = escapeHtml(slug);
+        const safeDisplay = escapeHtml(display);
+        return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${safeSlug}">${safeDisplay}</a>`;
+      }
     );
 };
 
-// Get tokens from markdown content (with sanitization for user-friendly display)
-const getTokens = (content: any) => {
+const HTML_PLACEHOLDER_RE = /@@WEKNORA_HTML_PLACEHOLDER_(\d+)@@/g;
+
+const extractRenderableHtmlPlaceholders = (contentStr: string): { content: string; htmlSnippets: string[] } => {
+  const htmlSnippets: string[] = [];
+  const storeHtml = (html: string): string => {
+    const idx = htmlSnippets.length;
+    htmlSnippets.push(html);
+    return `@@WEKNORA_HTML_PLACEHOLDER_${idx}@@`;
+  };
+
+  const content = contentStr
+    .replace(/<(?:kb|web)\b[^>]*\/>/g, (match) => storeHtml(preprocessMarkdown(match)))
+    .replace(/\[\[([^\]]+)\]\]/g, (match) => storeHtml(preprocessMarkdown(match)));
+
+  return { content, htmlSnippets };
+};
+
+const restoreRenderableHtmlPlaceholders = (html: string, htmlSnippets: string[]): string => {
+  if (!htmlSnippets.length) return html;
+  return html.replace(HTML_PLACEHOLDER_RE, (_match, idx) => htmlSnippets[Number(idx)] || '');
+};
+
+// 自定义渲染器 - 支持 Mermaid
+const agentRenderer = new marked.Renderer();
+agentRenderer.code = createMermaidCodeRenderer('mermaid-agent');
+
+// 单次渲染 Markdown 内容（替代 token-by-token，修复 KaTeX 公式在 streaming 时闪烁消失的问题）
+const renderMarkdownContent = (content: any): string => {
   const contentStr = typeof content === 'string' ? content : String(content || '');
-  if (!contentStr.trim()) return [];
+  if (!contentStr.trim()) return '';
 
   // Extract <kb.../> and <web.../> tags before sanitization to prevent
   // sanitizeForDisplay from stripping chunk_id labels and UUIDs inside them.
@@ -1415,32 +1842,41 @@ const getTokens = (content: any) => {
     return `\x00IMG${idx}\x00`;
   });
 
-  let sanitized = sanitizeForDisplay(preservedWithImages);
+  // Preserve wiki links [[slug|name]]
+  const wikiPlaceholders: string[] = [];
+  const preservedWithWiki = preservedWithImages.replace(/\[\[([^\]]+)\]\]/g, (match) => {
+    const idx = wikiPlaceholders.length;
+    wikiPlaceholders.push(match);
+    return `\x00WIKI${idx}\x00`;
+  });
+
+  let sanitized = sanitizeForDisplay(preservedWithWiki);
+
+  // Restore preserved wiki links
+  sanitized = sanitized.replace(/\x00WIKI(\d+)\x00/g, (_, idx) => wikiPlaceholders[Number(idx)]);
 
   // Restore preserved images
   sanitized = sanitized.replace(/\x00IMG(\d+)\x00/g, (_, idx) => imagePlaceholders[Number(idx)]);
-  
+
   // Restore preserved tags
   sanitized = sanitized.replace(/\x00TAG(\d+)\x00/g, (_, idx) => tagPlaceholders[Number(idx)]);
 
-  const processed = preprocessMarkdown(sanitized);
-  return marked.lexer(processed);
+  const mathSafe = preprocessMathDelimiters(sanitized);
+  const imageSafe = replaceIncompleteImageWithPlaceholder(mathSafe);
+  const { content: markdownWithPlaceholders, htmlSnippets } = extractRenderableHtmlPlaceholders(imageSafe);
+  const html = marked.parse(markdownWithPlaceholders, { renderer: agentRenderer }) as string;
+  const htmlWithCitations = restoreRenderableHtmlPlaceholders(html, htmlSnippets);
+  const protectedHTML = protectProviderImageSrcInHTML(htmlWithCitations);
+  return DOMPurify.sanitize(protectedHTML, DOMPurifyConfig);
 };
 
-// 自定义渲染器 - 支持 Mermaid
-const agentRenderer = new marked.Renderer();
-agentRenderer.code = createMermaidCodeRenderer('mermaid-agent');
-
-// Render HTML from a single token
-const getTokenHTML = (token: any): string => {
-  try {
-    const html = marked.parser([token], { renderer: agentRenderer });
-    const protectedHTML = protectProviderImageSrcInHTML(html);
-    return DOMPurify.sanitize(protectedHTML, DOMPurifyConfig);
-  } catch (e) {
-    console.error('Token rendering error:', e);
-    return '';
-  }
+// Renders an answer event's content. Strips final-answer wrappers
+// (e.g. <answer>…</answer>, "Final Answer:") that some models emit instead
+// of calling the structured final_answer tool, then delegates to the
+// standard markdown renderer.
+const renderAnswerContent = (content: any): string => {
+  const contentStr = typeof content === 'string' ? content : String(content || '');
+  return renderMarkdownContent(unwrapFinalAnswerWrappers(contentStr));
 };
 
 // Legacy Markdown rendering function (kept for summaries)
@@ -1449,11 +1885,14 @@ const renderMarkdown = (content: any): string => {
   if (!contentStr.trim()) return '';
 
   try {
-    const processed = preprocessMarkdown(contentStr);
-    const html = marked.parse(processed, { renderer: agentRenderer }) as string;
+    const mathSafe = preprocessMathDelimiters(contentStr);
+    const imageSafe = replaceIncompleteImageWithPlaceholder(mathSafe);
+    const { content: markdownWithPlaceholders, htmlSnippets } = extractRenderableHtmlPlaceholders(imageSafe);
+    const html = marked.parse(markdownWithPlaceholders, { renderer: agentRenderer }) as string;
     if (!html) return '';
 
-    const protectedHTML = protectProviderImageSrcInHTML(html);
+    const htmlWithCitations = restoreRenderableHtmlPlaceholders(html, htmlSnippets);
+    const protectedHTML = protectProviderImageSrcInHTML(htmlWithCitations);
     return DOMPurify.sanitize(protectedHTML, DOMPurifyConfig);
   } catch (e) {
     console.error('Markdown rendering error:', e, 'Content:', contentStr.substring(0, 100));
@@ -1847,24 +2286,26 @@ const formatJSON = (obj: any): string => {
   }
 };
 
-// Helper function to get actual content (from answer or last thinking)
+// Helper function to get actual content (from answer or last thinking).
+// Strips final-answer wrappers (e.g. <answer>…</answer>, "Final Answer:")
+// so callers like copy and add-to-knowledge get clean text.
 const getActualContent = (answerEvent: any): string => {
   // First try to get content from answer event
   const answerContent = (answerEvent?.content || '').trim();
   if (answerContent) {
-    return answerContent;
+    return unwrapFinalAnswerWrappers(answerContent).trim();
   }
-  
+
   // If answer is empty, try to get from last thinking
   const stream = eventStream.value;
   if (stream && Array.isArray(stream)) {
     const thinkingEvents = stream.filter((e: any) => e.type === 'thinking' && e.content && e.content.trim());
     if (thinkingEvents.length > 0) {
       const lastThinking = thinkingEvents[thinkingEvents.length - 1];
-      return (lastThinking.content || '').trim();
+      return unwrapFinalAnswerWrappers((lastThinking.content || '').trim()).trim();
     }
   }
-  
+
   return '';
 };
 
@@ -2126,7 +2567,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
         background: var(--td-bg-color-secondarycontainer);
         padding: 2px 5px;
         border-radius: 3px;
-        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        font-family: var(--app-font-family-mono);
         font-size: 11px;
       }
       
@@ -2675,7 +3116,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
     padding: 0;
     
     .detail-output {
-      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+      font-family: var(--app-font-family-mono);
       font-size: 11px;
       color: var(--td-text-color-primary);
       padding: 12px;
@@ -2867,6 +3308,29 @@ const handleAddToKnowledge = (answerEvent: any) => {
   pointer-events: none;
 }
 
+/* Inline wiki link style for chat bubbles — brand-blue dashed underline,
+   matching the style used inside the wiki drawer. Rendered inline with
+   the surrounding text, NOT as a pill, so it reads like a regular link. */
+:deep(a.wiki-content-link) {
+  color: var(--td-brand-color);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--td-brand-color);
+  cursor: pointer;
+  font-weight: 500;
+  transition: border-bottom-style 0.15s ease;
+}
+
+:deep(a.wiki-content-link:hover) {
+  border-bottom-style: solid;
+  text-decoration: none !important;
+}
+
+:deep(a.wiki-content-link:focus-visible) {
+  outline: 2px solid var(--td-brand-color);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .tool-arguments-wrapper {
   margin-top: 8px;
   padding: 0 10px;
@@ -2889,7 +3353,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
     background: var(--td-bg-color-container);
     padding: 10px;
     border-radius: 6px;
-    font-family: 'Monaco', 'Courier New', monospace;
+    font-family: var(--app-font-family-mono);
     color: var(--td-text-color-primary);
     margin: 0;
     overflow-x: auto;
@@ -3012,6 +3476,166 @@ const handleAddToKnowledge = (answerEvent: any) => {
 </style>
 
 <style lang="less">
+/* Global styles for teleported components */
+
+.wiki-graph-drawer {
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+
+  .wiki-reader-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .wiki-reader-meta-text {
+    font-size: 13px;
+    color: var(--td-text-color-placeholder);
+  }
+
+  .wiki-reader-body {
+    line-height: 1.6;
+    font-size: 14px;
+    color: var(--td-text-color-primary);
+
+    h1 { font-size: 24px; margin: 28px 0 16px; font-weight: 600; line-height: 1.4; }
+    h2 { font-size: 18px; margin: 24px 0 12px; font-weight: 600; line-height: 1.4; }
+    h3 { font-size: 16px; margin: 20px 0 10px; font-weight: 600; line-height: 1.5; }
+    h4, h5, h6 { font-size: 14px; margin: 16px 0 8px; font-weight: 600; line-height: 1.5; }
+    
+    p { margin: 0 0 14px; }
+    
+    ul, ol { 
+      margin: 0 0 14px; 
+      padding-left: 24px; 
+    }
+    li { 
+      margin-bottom: 6px; 
+      line-height: 1.6;
+    }
+    li > p {
+      margin-bottom: 6px;
+    }
+
+    blockquote {
+      margin: 0 0 14px;
+      padding: 10px 16px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-left: 4px solid var(--td-component-border);
+      border-radius: 0 4px 4px 0;
+      color: var(--td-text-color-secondary);
+    }
+    
+    code {
+      font-family: var(--app-font-family-mono);
+      font-size: 13px;
+      padding: 2px 4px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-radius: 4px;
+      color: var(--td-brand-color);
+    }
+    
+    pre {
+      margin: 0 0 14px;
+      padding: 12px 16px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-radius: 6px;
+      overflow-x: auto;
+      
+      code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+      }
+    }
+
+    p:has(img) {
+      text-align: center;
+      color: var(--td-text-color-secondary);
+      font-size: 13px;
+      margin-top: 16px;
+      margin-bottom: 24px;
+      
+      img {
+        max-width: 100%;
+        max-height: 400px;
+        object-fit: contain;
+        border-radius: 6px;
+        display: block;
+        margin: 0 auto 8px;
+        cursor: zoom-in;
+        transition: opacity 0.2s;
+        
+        &:hover {
+          opacity: 0.9;
+        }
+      }
+    }
+
+    a.wiki-content-link {
+      color: var(--td-brand-color);
+      text-decoration: none;
+      border-bottom: 1px dashed var(--td-brand-color);
+      cursor: pointer;
+      font-weight: 500;
+      &:hover {
+        border-bottom-style: solid;
+        text-decoration: none !important;
+      }
+    }
+
+    table {
+      display: block;
+      width: fit-content;
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 0 0 16px;
+      border-collapse: collapse;
+      font-size: 13px;
+      line-height: 1.55;
+      background: var(--td-bg-color-container);
+      border: 1px solid var(--td-component-stroke);
+      border-radius: 6px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table thead {
+      background: var(--td-bg-color-secondarycontainer);
+    }
+
+    table th,
+    table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--td-component-stroke);
+      border-right: 1px solid var(--td-component-stroke);
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    table th {
+      font-weight: 600;
+      color: var(--td-text-color-primary);
+      white-space: nowrap;
+    }
+
+    table th:last-child,
+    table td:last-child {
+      border-right: none;
+    }
+
+    table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    table tbody tr:hover {
+      background: var(--td-bg-color-secondarycontainer);
+    }
+
+    table code {
+      font-size: 12px;
+    }
+  }
+}
 // Dark mode: invert agent icon (uses currentColor which doesn't work in <img>)
 html[theme-mode="dark"] .tree-root-title img {
   filter: invert(1);

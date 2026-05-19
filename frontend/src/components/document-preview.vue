@@ -5,7 +5,10 @@ import { previewKnowledgeFile } from '@/api/knowledge-base/index';
 import { MessagePlugin } from 'tdesign-vue-next';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github.css';
+import markedKatex from 'marked-katex-extension';
+import 'katex/dist/katex.min.css';
 import { useI18n } from 'vue-i18n';
+import { sanitizeHTML, safeMarkdownToHTML } from '@/utils/security';
 
 
 const VueOfficePptx = defineAsyncComponent(() => import('@vue-office/pptx'));
@@ -103,6 +106,15 @@ function getHighlightLang(ft: string): string {
   return langMap[lower] || lower;
 }
 
+const preprocessMathDelimiters = (rawText: string): string => {
+  if (!rawText || typeof rawText !== 'string') {
+    return '';
+  }
+  return rawText
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+};
+
 async function renderDocx(blob: Blob) {
   const { renderAsync } = await import('docx-preview');
   if (docxContainer.value) {
@@ -174,7 +186,7 @@ async function renderExcel(blob: Blob, fileType?: string) {
     html += sheetHtml;
     html += `</div>`;
   });
-  excelHtml.value = html;
+  excelHtml.value = sanitizeHTML(html);
 }
 
 async function renderText(blob: Blob, fileType: string) {
@@ -206,6 +218,7 @@ async function renderMarkdown(blob: Blob) {
     breaks: true,
     gfm: true,
   });
+  marked.use(markedKatex({ throwOnError: false, nonStandard: true }));
   const renderer = new marked.Renderer();
   renderer.code = function ({text, lang}) {
     // 空值校验：防止 text 为 undefined 或 null
@@ -223,7 +236,10 @@ async function renderMarkdown(blob: Blob) {
     return `<pre><code class="hljs">${highlighted}</code></pre>`;
   };
   marked.use({ renderer });
-  markdownHtml.value = marked.parse(text);
+  const mathSafeText = preprocessMathDelimiters(text);
+  const safeText = safeMarkdownToHTML(mathSafeText);
+  const rawHtml = marked.parse(safeText) as string;
+  markdownHtml.value = sanitizeHTML(rawHtml);
 }
 
 function onImageLoad(e: Event) {
@@ -438,6 +454,12 @@ onUnmounted(() => {
 @error-color: var(--td-error-color);
 @table-border: var(--td-component-stroke);
 @preview-max-h: calc(100vh - 200px);
+// Note: <html> carries a `zoom` multiplier for font-size control, so 100vh
+// is evaluated against the unscaled viewport and the resulting max-height
+// may exceed the real viewport by the zoom factor (≤12.5% at "large").
+// That produces an extra bit of scroll inside the non-fullscreen preview,
+// which is acceptable for document reading. Not worth the complexity of
+// inverse-scaling here.
 @transition: all 0.2s ease;
 
 // ── Shared container mixin ──
@@ -472,13 +494,18 @@ onUnmounted(() => {
     z-index: 2002;
   }
 
+  /* Children use height: 100% rather than 100vh because <html> carries a
+     `zoom` multiplier for font-size control; 100vh resolves against the
+     unscaled viewport and then gets scaled, overshooting the screen. The
+     fullscreen container is already inset 0 on all sides, so 100% resolves
+     to the true viewport height. */
   .preview-pdf {
-    height: 100vh;
+    height: 100%;
   }
 
   .preview-pptx {
     height: auto;
-    min-height: 100vh;
+    min-height: 100%;
     overflow: visible;
     border: none;
 
@@ -489,30 +516,30 @@ onUnmounted(() => {
   }
 
   .preview-docx {
-    height: 100vh;
+    height: 100%;
     display: flex;
     flex-direction: column;
     .docx-container {
-      max-height: 100vh;
+      max-height: 100%;
       height: 100%;
       flex: 1;
     }
   }
 
   .preview-image {
-    min-height: 100vh;
+    min-height: 100%;
     display: flex;
     justify-content: center;
     align-items: center;
     .image-wrapper img {
-      max-height: calc(100vh - 80px);
+      max-height: calc(100% - 80px);
     }
   }
 
   .preview-excel .excel-container,
   .preview-markdown,
   .preview-text .code-preview {
-    max-height: 100vh;
+    max-height: 100%;
   }
 }
 

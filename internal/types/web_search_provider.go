@@ -3,6 +3,7 @@ package types
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"log"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/utils"
@@ -20,6 +21,7 @@ const (
 	WebSearchProviderTypeTavily     WebSearchProviderType = "tavily"
 	WebSearchProviderTypeOllama     WebSearchProviderType = "ollama"
 	WebSearchProviderTypeBaidu      WebSearchProviderType = "baidu"
+	WebSearchProviderTypeSearxng    WebSearchProviderType = "searxng"
 )
 
 // WebSearchProviderEntity represents a configured web search provider instance for a tenant.
@@ -63,13 +65,22 @@ func (e *WebSearchProviderEntity) BeforeCreate(tx *gorm.DB) (err error) {
 
 // WebSearchProviderParameters holds provider-specific configuration.
 // API keys are encrypted at rest using AES-GCM.
-// BaseURL is intentionally NOT included — each provider type uses a hardcoded
-// official API endpoint to prevent SSRF attacks.
+//
+// Credential mutation flows through the dedicated /credentials subresource
+// (see internal/handler/web_search_provider_credentials.go). Secret fields
+// are never returned in responses — handlers serialize via
+// dto.NewWebSearchProviderResponse which omits APIKey by construction.
 type WebSearchProviderParameters struct {
 	// API key for the search provider (encrypted in DB)
 	APIKey string `yaml:"api_key" json:"api_key,omitempty"`
 	// Google Custom Search Engine ID (only for Google provider)
 	EngineID string `yaml:"engine_id" json:"engine_id,omitempty"`
+	// Base URL for self-hosted search engines (e.g. SearXNG instance URL).
+	// Validated with utils.ValidateURLForSSRF; private hosts must be added to SSRF_WHITELIST.
+	BaseURL string `yaml:"base_url" json:"base_url,omitempty"`
+	// Optional HTTP/HTTPS proxy URL for outbound search requests (e.g. http://host:port); validated with utils.ValidateURLForSSRF.
+	// Does not replace the search API endpoint; only tunnels traffic to the official APIs.
+	ProxyURL string `yaml:"proxy_url" json:"proxy_url,omitempty"`
 	// Provider-specific extra configuration for future extensibility
 	ExtraConfig map[string]string `yaml:"extra_config" json:"extra_config,omitempty"`
 }
@@ -98,10 +109,11 @@ func (p *WebSearchProviderParameters) Scan(value interface{}) error {
 	if err := json.Unmarshal(b, p); err != nil {
 		return err
 	}
-	if key := utils.GetAESKey(); key != nil && p.APIKey != "" {
-		if decrypted, err := utils.DecryptAESGCM(p.APIKey, key); err == nil {
-			p.APIKey = decrypted
-		}
+	if plain, ok := utils.DecryptStoredSecretLenient(p.APIKey); ok {
+		p.APIKey = plain
+	} else {
+		log.Printf("[crypto] web search provider api_key: decrypt failed (SYSTEM_AES_KEY missing/rotated?), treating as unconfigured")
+		p.APIKey = ""
 	}
 	return nil
 }
@@ -117,6 +129,10 @@ type WebSearchProviderTypeInfo struct {
 	RequiresAPIKey bool `json:"requires_api_key"`
 	// Whether the provider requires an engine ID (e.g., Google CSE)
 	RequiresEngineID bool `json:"requires_engine_id"`
+	// Whether the provider requires a user-supplied base URL (e.g., self-hosted SearXNG instance)
+	RequiresBaseURL bool `json:"requires_base_url"`
+	// Whether optional proxy_url in parameters is honored for outbound requests
+	SupportsProxy bool `json:"supports_proxy"`
 	// Description
 	Description string `json:"description"`
 	// URL to the provider's official website or documentation for obtaining credentials
@@ -130,6 +146,7 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			ID:             "duckduckgo",
 			Name:           "DuckDuckGo",
 			RequiresAPIKey: false,
+			SupportsProxy:  true,
 			Description:    "DuckDuckGo Search (free, no API key required)",
 			DocsURL:        "https://duckduckgo.com/",
 		},
@@ -137,6 +154,7 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			ID:             "bing",
 			Name:           "Bing",
 			RequiresAPIKey: true,
+			SupportsProxy:  true,
 			Description:    "Bing Search API (requires API key from Azure)",
 			DocsURL:        "https://learn.microsoft.com/en-us/bing/search-apis/bing-web-search/overview",
 		},
@@ -145,6 +163,7 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			Name:             "Google",
 			RequiresAPIKey:   true,
 			RequiresEngineID: true,
+			SupportsProxy:    true,
 			Description:      "Google Custom Search API (requires API key and engine ID)",
 			DocsURL:          "https://developers.google.com/custom-search/v1/overview",
 		},
@@ -152,6 +171,7 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			ID:             "tavily",
 			Name:           "Tavily",
 			RequiresAPIKey: true,
+			SupportsProxy:  true,
 			Description:    "Tavily Search API (requires API key)",
 			DocsURL:        "https://tavily.com/",
 		},
@@ -161,6 +181,15 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			RequiresAPIKey: true,
 			Description:    "Ollama Cloud web search (requires Ollama API key)",
 			DocsURL:        "https://docs.ollama.com/capabilities/web-search",
+		},
+		{
+			ID:              "searxng",
+			Name:            "SearXNG",
+			RequiresAPIKey:  false,
+			RequiresBaseURL: true,
+			SupportsProxy:   true,
+			Description:     "Self-hosted SearXNG metasearch instance (provide instance URL; private hosts must be SSRF-whitelisted)",
+			DocsURL:         "https://docs.searxng.org/",
 		},
 		{
 			ID:             "baidu",

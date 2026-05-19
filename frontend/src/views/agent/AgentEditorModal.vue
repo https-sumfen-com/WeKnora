@@ -6,7 +6,7 @@
           <!-- 关闭按钮 -->
           <button class="close-btn" @click="handleClose" :aria-label="$t('common.close')">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-              <path d="M15 5L5 15M5 5L15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M15 5L5 15M5 5L15 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
 
@@ -14,15 +14,12 @@
             <!-- 左侧导航 -->
             <div class="settings-sidebar">
               <div class="sidebar-header">
-                <h2 class="sidebar-title">{{ mode === 'create' ? $t('agent.editor.createTitle') : $t('agent.editor.editTitle') }}</h2>
+                <h2 class="sidebar-title">{{ mode === 'create' ? $t('agent.editor.createTitle') :
+                  $t('agent.editor.editTitle') }}</h2>
               </div>
               <div class="settings-nav">
-                <div 
-                  v-for="(item, index) in navItems" 
-                  :key="index"
-                  :class="['nav-item', { 'active': currentSection === item.key }]"
-                  @click="currentSection = item.key"
-                >
+                <div v-for="(item, index) in navItems" :key="index"
+                  :class="['nav-item', { 'active': currentSection === item.key }]" @click="currentSection = item.key">
                   <t-icon :name="item.icon" class="nav-icon" />
                   <span class="nav-label">{{ item.label }}</span>
                 </div>
@@ -38,7 +35,7 @@
                     <h2>{{ $t('agent.editor.basicInfo') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.basicInfoDesc') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 内置智能体提示 -->
                     <div v-if="isBuiltinAgent" class="builtin-agent-notice">
@@ -50,7 +47,8 @@
                     <div class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.mode') }} <span class="required">*</span></label>
-                        <p class="desc">{{ agentMode === 'smart-reasoning' ? $t('agent.editor.agentDesc') : $t('agent.editor.normalDesc') }}</p>
+                        <p class="desc">{{ agentMode === 'smart-reasoning' ? $t('agent.editor.agentDesc') :
+                          $t('agent.editor.normalDesc') }}</p>
                       </div>
                       <div class="setting-control">
                         <t-radio-group v-model="agentMode" :disabled="isBuiltinAgent">
@@ -64,10 +62,33 @@
                       </div>
                     </div>
 
+                    <!-- 智能体类型（仅智能推理模式下显示） -->
+                    <div v-if="isAgentMode && agentTypePresets.length > 0" class="setting-row setting-row--emphasize">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.agentType.label') }}</label>
+                        <p class="desc">{{ $t('agentEditor.agentType.desc') }}</p>
+                        <p v-if="activeAgentTypePreset" class="desc agent-type-preset-desc">{{
+                          agentTypePresetDescription(activeAgentTypePreset) }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-select :value="agentType" @change="onAgentTypeChange" :disabled="isBuiltinAgent"
+                          :placeholder="$t('agentEditor.agentType.label')" :options="agentTypeSelectOptions"
+                          :popup-props="{ overlayClassName: 'agent-type-popup' }" class="agent-type-select">
+                          <template #option="{ option }">
+                            <div class="agent-type-option">
+                              <span class="agent-type-option-label">{{ option.label }}</span>
+                              <span v-if="option.desc" class="agent-type-option-desc">{{ option.desc }}</span>
+                            </div>
+                          </template>
+                        </t-select>
+                      </div>
+                    </div>
+
                     <!-- 名称 -->
                     <div class="setting-row">
                       <div class="setting-info">
-                        <label>{{ $t('agent.editor.name') }} <span v-if="!isBuiltinAgent" class="required">*</span></label>
+                        <label>{{ $t('agent.editor.name') }} <span v-if="!isBuiltinAgent"
+                            class="required">*</span></label>
                         <p class="desc">{{ $t('agentEditor.desc.name') }}</p>
                       </div>
                       <div class="setting-control">
@@ -78,12 +99,8 @@
                           </div>
                           <!-- 自定义智能体使用 AgentAvatar -->
                           <AgentAvatar v-else :name="formData.name || '?'" size="medium" />
-                          <t-input 
-                            v-model="formData.name" 
-                            :placeholder="$t('agent.editor.namePlaceholder')" 
-                            class="name-input"
-                            :disabled="isBuiltinAgent"
-                          />
+                          <t-input v-model="formData.name" :placeholder="$t('agent.editor.namePlaceholder')"
+                            class="name-input" :disabled="isBuiltinAgent" />
                         </div>
                       </div>
                     </div>
@@ -95,33 +112,26 @@
                         <p class="desc">{{ $t('agentEditor.desc.description') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-textarea 
-                          v-model="formData.description" 
+                        <t-textarea v-model="formData.description"
                           :placeholder="$t('agent.editor.descriptionPlaceholder')"
-                          :autosize="{ minRows: 2, maxRows: 4 }"
-                          :disabled="isBuiltinAgent"
-                        />
+                          :autosize="{ minRows: 2, maxRows: 4 }" :disabled="isBuiltinAgent" />
                       </div>
                     </div>
 
                     <!-- 系统提示词 -->
                     <div class="setting-row setting-row-vertical">
                       <div class="setting-info">
-                        <label>{{ $t('agent.editor.systemPrompt') }} <span v-if="!isBuiltinAgent" class="required">*</span></label>
-                        <p class="desc">{{ $t('agentEditor.desc.systemPrompt') }}{{ isBuiltinAgent ? $t('agentEditor.desc.leaveEmptyDefault') : '' }}</p>
+                        <label>{{ $t('agent.editor.systemPrompt') }} <span v-if="!isBuiltinAgent"
+                            class="required">*</span></label>
+                        <p class="desc">{{ $t('agentEditor.desc.systemPrompt') }}{{ isBuiltinAgent ?
+                          $t('agentEditor.desc.leaveEmptyDefault') : '' }}</p>
                         <div class="placeholder-tags">
                           <span class="placeholder-label">{{ $t('agentEditor.placeholders.available') }}</span>
-                          <t-tooltip 
-                            v-for="placeholder in availablePlaceholders" 
-                            :key="placeholder.name"
+                          <t-tooltip v-for="placeholder in availablePlaceholders" :key="placeholder.name"
                             :content="placeholder.description + $t('agentEditor.placeholders.clickToInsert')"
-                            placement="top"
-                          >
-                            <span 
-                              class="placeholder-tag"
-                              @click="handlePlaceholderClick('system', placeholder.name)"
-                              v-text="'{{' + placeholder.name + '}}'"
-                            ></span>
+                            placement="top">
+                            <span class="placeholder-tag" @click="handlePlaceholderClick('system', placeholder.name)"
+                              v-text="'{{' + placeholder.name + '}}'"></span>
                           </t-tooltip>
                           <span class="placeholder-hint">{{ $t('agentEditor.placeholders.hint') }}</span>
                         </div>
@@ -129,56 +139,31 @@
                       <div class="setting-control setting-control-full" style="position: relative;">
                         <!-- Agent模式：统一提示词（使用 {{web_search_status}} 占位符动态控制行为） -->
                         <div v-if="isAgentMode" class="textarea-with-template">
-                          <t-textarea 
-                            ref="promptTextareaRef"
-                            v-model="formData.config.system_prompt" 
-                            :placeholder="systemPromptPlaceholder"
-                            :autosize="{ minRows: 10, maxRows: 25 }"
-                            @input="handlePromptInput"
-                            class="system-prompt-textarea"
-                          />
-                          <PromptTemplateSelector 
-                            type="agentSystemPrompt" 
-                            position="corner"
-                            :hasKnowledgeBase="hasKnowledgeBase"
-                            @select="handleSystemPromptTemplateSelect"
-                            @reset-default="handleSystemPromptTemplateSelect"
-                          />
+                          <t-textarea ref="promptTextareaRef" v-model="formData.config.system_prompt"
+                            :placeholder="systemPromptPlaceholder" :autosize="{ minRows: 10, maxRows: 25 }"
+                            @input="handlePromptInput" class="system-prompt-textarea" />
+                          <PromptTemplateSelector type="agentSystemPrompt" position="corner"
+                            :hasKnowledgeBase="hasKnowledgeBase" @select="handleSystemPromptTemplateSelect"
+                            @reset-default="handleAgentSystemPromptResetDefault" />
                         </div>
                         <!-- 普通模式：单个提示词 -->
                         <div v-else class="textarea-with-template">
-                          <t-textarea 
-                            ref="promptTextareaRef"
-                            v-model="formData.config.system_prompt" 
-                            :placeholder="systemPromptPlaceholder"
-                            :autosize="{ minRows: 10, maxRows: 25 }"
-                            @input="handlePromptInput"
-                            class="system-prompt-textarea"
-                          />
-                          <PromptTemplateSelector 
-                            type="systemPrompt" 
-                            position="corner"
-                            :hasKnowledgeBase="hasKnowledgeBase"
-                            @select="handleSystemPromptTemplateSelect"
-                            @reset-default="handleSystemPromptTemplateSelect"
-                          />
+                          <t-textarea ref="promptTextareaRef" v-model="formData.config.system_prompt"
+                            :placeholder="systemPromptPlaceholder" :autosize="{ minRows: 10, maxRows: 25 }"
+                            @input="handlePromptInput" class="system-prompt-textarea" />
+                          <PromptTemplateSelector type="systemPrompt" position="corner"
+                            :hasKnowledgeBase="hasKnowledgeBase" @select="handleSystemPromptTemplateSelect"
+                            @reset-default="handleSystemPromptTemplateSelect" />
                         </div>
                         <!-- 占位符提示下拉框 -->
                         <Teleport to="body">
-                          <div
-                            v-if="showPlaceholderPopup && filteredPlaceholders.length > 0"
-                            class="placeholder-popup-wrapper"
-                            :style="popupStyle"
-                          >
+                          <div v-if="showPlaceholderPopup && filteredPlaceholders.length > 0"
+                            class="placeholder-popup-wrapper" :style="popupStyle">
                             <div class="placeholder-popup">
-                              <div
-                                v-for="(placeholder, index) in filteredPlaceholders"
-                                :key="placeholder.name"
-                                class="placeholder-item"
-                                :class="{ active: selectedPlaceholderIndex === index }"
+                              <div v-for="(placeholder, index) in filteredPlaceholders" :key="placeholder.name"
+                                class="placeholder-item" :class="{ active: selectedPlaceholderIndex === index }"
                                 @mousedown.prevent="insertPlaceholder(placeholder.name, true)"
-                                @mouseenter="selectedPlaceholderIndex = index"
-                              >
+                                @mouseenter="selectedPlaceholderIndex = index">
                                 <div class="placeholder-name">
                                   <code v-html="`{{${placeholder.name}}}`"></code>
                                 </div>
@@ -193,59 +178,39 @@
                     <!-- 上下文模板（仅普通模式） -->
                     <div v-if="!isAgentMode" class="setting-row setting-row-vertical">
                       <div class="setting-info">
-                        <label>{{ $t('agent.editor.contextTemplate') }} <span v-if="!isBuiltinAgent" class="required">*</span></label>
-                        <p class="desc">{{ $t('agentEditor.desc.contextTemplate') }}{{ isBuiltinAgent ? $t('agentEditor.desc.leaveEmptyDefault') : '' }}</p>
+                        <label>{{ $t('agent.editor.contextTemplate') }} <span v-if="!isBuiltinAgent"
+                            class="required">*</span></label>
+                        <p class="desc">{{ $t('agentEditor.desc.contextTemplate') }}{{ isBuiltinAgent ?
+                          $t('agentEditor.desc.leaveEmptyDefault') : '' }}</p>
                         <div class="placeholder-tags">
                           <span class="placeholder-label">{{ $t('agentEditor.placeholders.available') }}</span>
-                          <t-tooltip 
-                            v-for="placeholder in contextTemplatePlaceholders" 
-                            :key="placeholder.name"
+                          <t-tooltip v-for="placeholder in contextTemplatePlaceholders" :key="placeholder.name"
                             :content="placeholder.description + $t('agentEditor.placeholders.clickToInsert')"
-                            placement="top"
-                          >
-                            <span 
-                              class="placeholder-tag"
-                              @click="handlePlaceholderClick('context', placeholder.name)"
-                              v-text="'{{' + placeholder.name + '}}'"
-                            ></span>
+                            placement="top">
+                            <span class="placeholder-tag" @click="handlePlaceholderClick('context', placeholder.name)"
+                              v-text="'{{' + placeholder.name + '}}'"></span>
                           </t-tooltip>
                           <span class="placeholder-hint">{{ $t('agentEditor.placeholders.hint') }}</span>
                         </div>
                       </div>
                       <div class="setting-control setting-control-full" style="position: relative;">
                         <div class="textarea-with-template">
-                          <t-textarea 
-                            ref="contextTemplateTextareaRef"
-                            v-model="formData.config.context_template" 
-                            :placeholder="contextTemplatePlaceholder"
-                            :autosize="{ minRows: 8, maxRows: 20 }"
-                            @input="handleContextTemplateInput"
-                            class="system-prompt-textarea"
-                          />
-                          <PromptTemplateSelector 
-                            type="contextTemplate" 
-                            position="corner"
-                            :hasKnowledgeBase="hasKnowledgeBase"
-                            @select="handleContextTemplateSelect"
-                            @reset-default="handleContextTemplateSelect"
-                          />
+                          <t-textarea ref="contextTemplateTextareaRef" v-model="formData.config.context_template"
+                            :placeholder="contextTemplatePlaceholder" :autosize="{ minRows: 8, maxRows: 20 }"
+                            @input="handleContextTemplateInput" class="system-prompt-textarea" />
+                          <PromptTemplateSelector type="contextTemplate" position="corner"
+                            :hasKnowledgeBase="hasKnowledgeBase" @select="handleContextTemplateSelect"
+                            @reset-default="handleContextTemplateSelect" />
                         </div>
                         <!-- 上下文模板占位符提示下拉框 -->
                         <Teleport to="body">
-                          <div
-                            v-if="showContextPlaceholderPopup && filteredContextPlaceholders.length > 0"
-                            class="placeholder-popup-wrapper"
-                            :style="contextPopupStyle"
-                          >
+                          <div v-if="showContextPlaceholderPopup && filteredContextPlaceholders.length > 0"
+                            class="placeholder-popup-wrapper" :style="contextPopupStyle">
                             <div class="placeholder-popup">
-                              <div
-                                v-for="(placeholder, index) in filteredContextPlaceholders"
-                                :key="placeholder.name"
-                                class="placeholder-item"
-                                :class="{ active: selectedContextPlaceholderIndex === index }"
+                              <div v-for="(placeholder, index) in filteredContextPlaceholders" :key="placeholder.name"
+                                class="placeholder-item" :class="{ active: selectedContextPlaceholderIndex === index }"
                                 @mousedown.prevent="insertContextPlaceholder(placeholder.name, true)"
-                                @mouseenter="selectedContextPlaceholderIndex = index"
-                              >
+                                @mouseenter="selectedContextPlaceholderIndex = index">
                                 <div class="placeholder-name">
                                   <code v-html="`{{${placeholder.name}}}`"></code>
                                 </div>
@@ -266,7 +231,7 @@
                     <h2>{{ $t('agent.editor.modelConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.modelConfigDesc') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 模型选择 -->
                     <div class="setting-row">
@@ -275,14 +240,10 @@
                         <p class="desc">{{ $t('agentEditor.desc.model') }}</p>
                       </div>
                       <div class="setting-control">
-                        <ModelSelector
-                          model-type="KnowledgeQA"
-                          :selected-model-id="formData.config.model_id"
+                        <ModelSelector model-type="KnowledgeQA" :selected-model-id="formData.config.model_id"
                           :all-models="allModels"
                           @update:selected-model-id="(val: string) => formData.config.model_id = val"
-                          @add-model="handleAddModel('llm')"
-                          :placeholder="$t('agent.editor.modelPlaceholder')"
-                        />
+                          @add-model="handleAddModel('llm')" :placeholder="$t('agent.editor.modelPlaceholder')" />
                       </div>
                     </div>
 
@@ -307,7 +268,8 @@
                         <p class="desc">{{ $t('agentEditor.desc.maxTokens') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-input-number v-model="formData.config.max_completion_tokens" :min="100" :max="100000" :step="100" theme="column" />
+                        <t-input-number v-model="formData.config.max_completion_tokens" :min="100" :max="100000"
+                          :step="100" theme="column" />
                       </div>
                     </div>
 
@@ -351,14 +313,11 @@
                         <p class="desc">{{ $t('agentEditor.imageUpload.vlmModelDesc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <ModelSelector
-                          model-type="VLLM"
-                          :selected-model-id="formData.config.vlm_model_id"
+                        <ModelSelector model-type="VLLM" :selected-model-id="formData.config.vlm_model_id"
                           :all-models="allModels"
                           @update:selected-model-id="(val: string) => formData.config.vlm_model_id = val"
                           @add-model="handleAddModel('vllm')"
-                          :placeholder="$t('agentEditor.imageUpload.vlmModelPlaceholder')"
-                        />
+                          :placeholder="$t('agentEditor.imageUpload.vlmModelPlaceholder')" />
                       </div>
                     </div>
 
@@ -369,27 +328,20 @@
                         <p class="desc">{{ $t('agentEditor.imageUpload.storageProviderDesc') }}</p>
                       </div>
                       <div class="setting-control" style="flex-direction: column; align-items: flex-end;">
-                        <t-select
-                          v-model="formData.config.image_storage_provider"
-                          style="width: 280px;"
-                          :placeholder="$t('agentEditor.imageUpload.storageProviderPlaceholder')"
-                          clearable
-                        >
+                        <t-select v-model="formData.config.image_storage_provider" style="width: 280px;"
+                          :placeholder="$t('agentEditor.imageUpload.storageProviderPlaceholder')" clearable>
                           <t-option value="" :label="$t('agentEditor.imageUpload.storageDefault')" />
-                          <t-option
-                            v-for="opt in imageStorageOptions"
-                            :key="opt.value"
-                            :value="opt.value"
-                            :label="opt.label"
-                            :disabled="opt.disabled"
-                          >
+                          <t-option v-for="opt in imageStorageOptions" :key="opt.value" :value="opt.value"
+                            :label="opt.label" :disabled="opt.disabled">
                             <span class="select-option-with-tag">
                               <span>{{ opt.label }}</span>
-                              <t-tag v-if="opt.disabled" theme="warning" variant="light" size="small">{{ $t('agentEditor.imageUpload.notConfigured') }}</t-tag>
+                              <t-tag v-if="opt.disabled" theme="warning" variant="light" size="small">{{
+                                $t('agentEditor.imageUpload.notConfigured') }}</t-tag>
                             </span>
                           </t-option>
                         </t-select>
-                        <a href="javascript:void(0)" class="go-settings-link" @click.prevent="uiStore.openSettings('storage')">
+                        <a href="javascript:void(0)" class="go-settings-link"
+                          @click.prevent="uiStore.openSettings('storage')">
                           {{ $t('agentEditor.imageUpload.goStorageSettings') }}
                         </a>
                       </div>
@@ -413,14 +365,11 @@
                         <p class="desc">{{ $t('agentEditor.audioUpload.asrModelDesc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <ModelSelector
-                          model-type="ASR"
-                          :selected-model-id="formData.config.asr_model_id"
+                        <ModelSelector model-type="ASR" :selected-model-id="formData.config.asr_model_id"
                           :all-models="allModels"
                           @update:selected-model-id="(val: string) => formData.config.asr_model_id = val"
                           @add-model="handleAddModel('asr')"
-                          :placeholder="$t('agentEditor.audioUpload.asrModelPlaceholder')"
-                        />
+                          :placeholder="$t('agentEditor.audioUpload.asrModelPlaceholder')" />
                       </div>
                     </div>
                   </div>
@@ -432,7 +381,7 @@
                     <h2>{{ $t('agent.editor.conversationSettings') }}</h2>
                     <p class="section-description">{{ $t('agentEditor.desc.conversationSection') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 多轮对话 -->
                     <div class="setting-row">
@@ -467,59 +416,57 @@
                       </div>
                     </div>
 
+                    <!-- 问题理解模型（独立模型，留空则复用主对话模型） -->
+                    <div v-if="formData.config.multi_turn_enabled && !isAgentMode && formData.config.enable_rewrite"
+                      class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agent.editor.queryUnderstandModel') }}</label>
+                        <p class="desc">{{ $t('agentEditor.desc.queryUnderstandModel') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <ModelSelector model-type="KnowledgeQA"
+                          :selected-model-id="formData.config.query_understand_model_id" :all-models="allModels"
+                          @update:selected-model-id="(val: string) => formData.config.query_understand_model_id = val"
+                          @add-model="handleAddModel('llm')"
+                          :placeholder="$t('agent.editor.queryUnderstandModelPlaceholder')" />
+                      </div>
+                    </div>
+
                     <!-- 改写系统提示词 -->
-                    <div v-if="formData.config.multi_turn_enabled && !isAgentMode && formData.config.enable_rewrite" class="setting-row setting-row-vertical">
+                    <div v-if="formData.config.multi_turn_enabled && !isAgentMode && formData.config.enable_rewrite"
+                      class="setting-row setting-row-vertical">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.rewritePromptSystem') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.rewriteSystemPrompt') }}</p>
                         <div class="placeholder-tags" v-if="rewriteSystemPlaceholders.length > 0">
                           <span class="placeholder-label">{{ $t('agentEditor.placeholders.available') }}</span>
-                          <t-tooltip 
-                            v-for="placeholder in rewriteSystemPlaceholders" 
-                            :key="placeholder.name"
+                          <t-tooltip v-for="placeholder in rewriteSystemPlaceholders" :key="placeholder.name"
                             :content="placeholder.description + $t('agentEditor.placeholders.clickToInsert')"
-                            placement="top"
-                          >
-                            <span 
-                              class="placeholder-tag"
+                            placement="top">
+                            <span class="placeholder-tag"
                               @click="handlePlaceholderClick('rewriteSystem', placeholder.name)"
-                              v-text="'{{' + placeholder.name + '}}'"
-                            ></span>
+                              v-text="'{{' + placeholder.name + '}}'"></span>
                           </t-tooltip>
                           <span class="placeholder-hint">{{ $t('agentEditor.placeholders.hint') }}</span>
                         </div>
                       </div>
                       <div class="setting-control setting-control-full" style="position: relative;">
                         <div class="textarea-with-template">
-                          <t-textarea 
-                            ref="rewriteSystemTextareaRef"
-                            v-model="formData.config.rewrite_prompt_system" 
+                          <t-textarea ref="rewriteSystemTextareaRef" v-model="formData.config.rewrite_prompt_system"
                             :placeholder="defaultRewritePromptSystem || $t('agent.editor.rewritePromptSystemPlaceholder')"
-                            :autosize="{ minRows: 4, maxRows: 10 }"
-                            @input="handleRewriteSystemInput"
-                          />
-                          <PromptTemplateSelector 
-                            type="rewrite" 
-                            position="corner"
-                            @select="handleRewriteTemplateSelect"
-                            @reset-default="handleRewriteTemplateSelect"
-                          />
+                            :autosize="{ minRows: 4, maxRows: 10 }" @input="handleRewriteSystemInput" />
+                          <PromptTemplateSelector type="rewrite" position="corner" @select="handleRewriteTemplateSelect"
+                            @reset-default="handleRewriteTemplateSelect" />
                         </div>
                         <Teleport to="body">
-                          <div
-                            v-if="rewriteSystemPopup.show && filteredRewriteSystemPlaceholders.length > 0"
-                            class="placeholder-popup-wrapper"
-                            :style="rewriteSystemPopup.style"
-                          >
+                          <div v-if="rewriteSystemPopup.show && filteredRewriteSystemPlaceholders.length > 0"
+                            class="placeholder-popup-wrapper" :style="rewriteSystemPopup.style">
                             <div class="placeholder-popup">
-                              <div
-                                v-for="(placeholder, index) in filteredRewriteSystemPlaceholders"
-                                :key="placeholder.name"
-                                class="placeholder-item"
+                              <div v-for="(placeholder, index) in filteredRewriteSystemPlaceholders"
+                                :key="placeholder.name" class="placeholder-item"
                                 :class="{ active: rewriteSystemPopup.selectedIndex === index }"
                                 @mousedown.prevent="insertGenericPlaceholder('rewriteSystem', placeholder.name, true)"
-                                @mouseenter="rewriteSystemPopup.selectedIndex = index"
-                              >
+                                @mouseenter="rewriteSystemPopup.selectedIndex = index">
                                 <div class="placeholder-name">
                                   <code v-html="`{{${placeholder.name}}}`"></code>
                                 </div>
@@ -532,58 +479,40 @@
                     </div>
 
                     <!-- 改写用户提示词 -->
-                    <div v-if="formData.config.multi_turn_enabled && !isAgentMode && formData.config.enable_rewrite" class="setting-row setting-row-vertical">
+                    <div v-if="formData.config.multi_turn_enabled && !isAgentMode && formData.config.enable_rewrite"
+                      class="setting-row setting-row-vertical">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.rewritePromptUser') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.rewriteUserPrompt') }}</p>
                         <div class="placeholder-tags" v-if="rewritePlaceholders.length > 0">
                           <span class="placeholder-label">{{ $t('agentEditor.placeholders.available') }}</span>
-                          <t-tooltip 
-                            v-for="placeholder in rewritePlaceholders" 
-                            :key="placeholder.name"
+                          <t-tooltip v-for="placeholder in rewritePlaceholders" :key="placeholder.name"
                             :content="placeholder.description + $t('agentEditor.placeholders.clickToInsert')"
-                            placement="top"
-                          >
-                            <span 
-                              class="placeholder-tag"
+                            placement="top">
+                            <span class="placeholder-tag"
                               @click="handlePlaceholderClick('rewriteUser', placeholder.name)"
-                              v-text="'{{' + placeholder.name + '}}'"
-                            ></span>
+                              v-text="'{{' + placeholder.name + '}}'"></span>
                           </t-tooltip>
                           <span class="placeholder-hint">{{ $t('agentEditor.placeholders.hint') }}</span>
                         </div>
                       </div>
                       <div class="setting-control setting-control-full" style="position: relative;">
                         <div class="textarea-with-template">
-                          <t-textarea 
-                            ref="rewriteUserTextareaRef"
-                            v-model="formData.config.rewrite_prompt_user" 
+                          <t-textarea ref="rewriteUserTextareaRef" v-model="formData.config.rewrite_prompt_user"
                             :placeholder="defaultRewritePromptUser || $t('agent.editor.rewritePromptUserPlaceholder')"
-                            :autosize="{ minRows: 4, maxRows: 10 }"
-                            @input="handleRewriteUserInput"
-                          />
-                          <PromptTemplateSelector 
-                            type="rewrite" 
-                            position="corner"
-                            @select="handleRewriteTemplateSelect"
-                            @reset-default="handleRewriteTemplateSelect"
-                          />
+                            :autosize="{ minRows: 4, maxRows: 10 }" @input="handleRewriteUserInput" />
+                          <PromptTemplateSelector type="rewrite" position="corner" @select="handleRewriteTemplateSelect"
+                            @reset-default="handleRewriteTemplateSelect" />
                         </div>
                         <Teleport to="body">
-                          <div
-                            v-if="rewriteUserPopup.show && filteredRewriteUserPlaceholders.length > 0"
-                            class="placeholder-popup-wrapper"
-                            :style="rewriteUserPopup.style"
-                          >
+                          <div v-if="rewriteUserPopup.show && filteredRewriteUserPlaceholders.length > 0"
+                            class="placeholder-popup-wrapper" :style="rewriteUserPopup.style">
                             <div class="placeholder-popup">
-                              <div
-                                v-for="(placeholder, index) in filteredRewriteUserPlaceholders"
-                                :key="placeholder.name"
-                                class="placeholder-item"
+                              <div v-for="(placeholder, index) in filteredRewriteUserPlaceholders"
+                                :key="placeholder.name" class="placeholder-item"
                                 :class="{ active: rewriteUserPopup.selectedIndex === index }"
                                 @mousedown.prevent="insertGenericPlaceholder('rewriteUser', placeholder.name, true)"
-                                @mouseenter="rewriteUserPopup.selectedIndex = index"
-                              >
+                                @mouseenter="rewriteUserPopup.selectedIndex = index">
                                 <div class="placeholder-name">
                                   <code v-html="`{{${placeholder.name}}}`"></code>
                                 </div>
@@ -603,30 +532,97 @@
                     <h2>{{ $t('agent.editor.toolsConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.toolsConfigDesc') }}</p>
                   </div>
-                  
+
+                  <!-- 合并面板：能力状态 + 预设切换 -->
+                  <div class="tools-overview">
+                    <div class="tools-overview-row">
+                      <div class="tools-status-chip">
+                        <t-icon name="folder" />
+                        <template v-if="kbSelectionMode === 'none'">
+                          <span>{{ $t('agentEditor.tools.statusNoKb') }}</span>
+                        </template>
+                        <template v-else>
+                          <span class="tools-status-metric">
+                            <strong>{{ ragKbCount }}</strong> {{ $t('agentEditor.tools.kbMetricRag') }}
+                          </span>
+                          <span class="tools-status-sep">·</span>
+                          <span class="tools-status-metric">
+                            <strong>{{ wikiKbCount }}</strong> {{ $t('agentEditor.tools.kbMetricWiki') }}
+                          </span>
+                        </template>
+                      </div>
+                      <div v-if="inactiveToolCount > 0" class="tools-status-chip tools-status-chip--warn">
+                        <t-icon name="error-circle" />
+                        <span>{{ $t('agentEditor.tools.statusInactive', { count: inactiveToolCount }) }}</span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="settings-group">
-                    <!-- 允许的工具 -->
+                    <!-- 允许的工具（按组渲染，统一网格） -->
                     <div class="setting-row setting-row-vertical">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.allowedTools') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.selectTools') }}</p>
                       </div>
                       <div class="setting-control setting-control-full">
-                        <t-checkbox-group v-model="formData.config.allowed_tools" class="tools-checkbox-group">
-                          <t-checkbox 
-                            v-for="tool in availableTools" 
-                            :key="tool.value" 
-                            :value="tool.value"
-                            :disabled="tool.disabled"
-                            :class="['tool-checkbox-item', { 'tool-disabled': tool.disabled }]"
-                          >
-                            <div class="tool-item-content">
-                              <span class="tool-name">{{ tool.label }}</span>
-                              <span v-if="tool.description" class="tool-desc">{{ tool.description }}</span>
-                              <span v-if="tool.disabled" class="tool-disabled-hint">{{ $t('agentEditor.tools.requiresKb') }}</span>
+                        <t-checkbox-group v-model="formData.config.allowed_tools" class="tool-groups">
+                          <section v-for="group in groupedAvailableTools" :key="group.key"
+                            :class="['tool-group', `tool-group--${group.key}`]">
+                            <header class="tool-group-header">
+                              <span class="tool-group-bar" />
+                              <span class="tool-group-title">{{ group.label }}</span>
+                              <span class="tool-group-count">{{ group.tools.length }}</span>
+                              <span v-if="group.key === 'wiki_edit'" class="tool-group-warning">
+                                <t-icon name="error-circle" />
+                                {{ $t('agentEditor.tools.writeWarning') }}
+                              </span>
+                            </header>
+                            <div class="tool-grid">
+                              <t-checkbox v-for="tool in group.tools" :key="tool.value" :value="tool.value"
+                                :disabled="tool.disabled"
+                                :class="['tool-card', { 'tool-card--disabled': tool.disabled, 'tool-card--danger': tool.danger }]">
+                                <div class="tool-card-body">
+                                  <div class="tool-card-head">
+                                    <span class="tool-card-name">{{ tool.label }}</span>
+                                    <span v-if="tool.danger" class="tool-card-badge">
+                                      {{ $t('agentEditor.tools.dangerTag') }}
+                                    </span>
+                                  </div>
+                                  <span v-if="tool.description" class="tool-card-desc">{{ tool.description }}</span>
+                                  <span v-if="tool.disabled && tool.disabledReason" class="tool-card-hint">
+                                    {{ tool.disabledReason }}
+                                  </span>
+                                </div>
+                              </t-checkbox>
                             </div>
-                          </t-checkbox>
+                          </section>
                         </t-checkbox-group>
+                      </div>
+                    </div>
+
+                    <!-- 有效工具预览：所见即所得 -->
+                    <div class="setting-row setting-row-vertical">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.tools.effectiveLabel') }}</label>
+                        <p class="desc">{{ $t('agentEditor.tools.effectiveDesc') }}</p>
+                      </div>
+                      <div class="setting-control setting-control-full">
+                        <div class="effective-tools">
+                          <template v-if="effectiveTools.length === 0">
+                            <div class="effective-tools-empty">
+                              {{ $t('agentEditor.tools.effectiveEmpty') }}
+                            </div>
+                          </template>
+                          <template v-else>
+                            <span v-for="item in effectiveTools" :key="item.value"
+                              :class="['effective-chip', { 'effective-chip--inactive': !item.active }]"
+                              :title="item.reason || ''">
+                              <span class="effective-chip-label">{{ item.label }}</span>
+                              <span v-if="!item.active" class="effective-chip-reason">{{ item.reason }}</span>
+                            </span>
+                          </template>
+                        </div>
                       </div>
                     </div>
 
@@ -638,6 +634,19 @@
                       </div>
                       <div class="setting-control">
                         <t-input-number v-model="formData.config.max_iterations" :min="1" :max="50" theme="column" />
+                      </div>
+                    </div>
+
+                    <!-- LLM 调用超时时间 -->
+                    <div class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.llmCallTimeout.label') }}</label>
+                        <p class="desc">{{ $t('agentEditor.llmCallTimeout.desc') }}</p>
+                        <p class="desc-hint">{{ $t('agentEditor.llmCallTimeout.hint') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-input-number v-model="formData.config.llm_call_timeout" :min="0" :max="3600" theme="column"
+                          :placeholder="$t('agentEditor.llmCallTimeout.placeholder')" clearable />
                       </div>
                     </div>
 
@@ -663,18 +672,9 @@
                         <p class="desc">{{ $t('agentEditor.mcp.selectDesc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-select
-                          v-model="formData.config.mcp_services"
-                          multiple
-                          :placeholder="$t('agentEditor.mcp.selectPlaceholder')"
-                          filterable
-                        >
-                          <t-option 
-                            v-for="mcp in mcpOptions" 
-                            :key="mcp.value" 
-                            :value="mcp.value" 
-                            :label="mcp.label" 
-                          />
+                        <t-select v-model="formData.config.mcp_services" multiple
+                          :placeholder="$t('agentEditor.mcp.selectPlaceholder')" filterable>
+                          <t-option v-for="mcp in mcpOptions" :key="mcp.value" :value="mcp.value" :label="mcp.label" />
                         </t-select>
                       </div>
                     </div>
@@ -705,19 +705,16 @@
                     </div>
 
                     <!-- 选择指定 Skills -->
-                    <div v-if="skillsSelectionMode === 'selected' && skillOptions.length > 0" class="setting-row setting-row-vertical">
+                    <div v-if="skillsSelectionMode === 'selected' && skillOptions.length > 0"
+                      class="setting-row setting-row-vertical">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.selectSkills') }}</label>
                         <p class="desc">{{ $t('agent.editor.selectSkillsDesc') }}</p>
                       </div>
                       <div class="setting-control setting-control-full">
                         <t-checkbox-group v-model="formData.config.selected_skills" class="skills-checkbox-group">
-                          <t-checkbox
-                            v-for="skill in skillOptions"
-                            :key="skill.name"
-                            :value="skill.name"
-                            class="skill-checkbox-item"
-                          >
+                          <t-checkbox v-for="skill in skillOptions" :key="skill.name" :value="skill.name"
+                            class="skill-checkbox-item">
                             <div class="skill-item-content">
                               <span class="skill-name">{{ skill.name }}</span>
                               <span class="skill-desc">{{ skill.description }}</span>
@@ -751,7 +748,7 @@
                     <h2>{{ $t('agent.editor.knowledgeConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.knowledgeConfigDesc') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 关联知识库 -->
                     <div class="setting-row">
@@ -762,7 +759,8 @@
                       <div class="setting-control">
                         <t-radio-group v-model="kbSelectionMode">
                           <t-radio-button value="all">{{ $t('agent.editor.allKnowledgeBases') }}</t-radio-button>
-                          <t-radio-button value="selected">{{ $t('agent.editor.selectedKnowledgeBases') }}</t-radio-button>
+                          <t-radio-button value="selected">{{ $t('agent.editor.selectedKnowledgeBases')
+                            }}</t-radio-button>
                           <t-radio-button value="none">{{ $t('agent.editor.noKnowledgeBase') }}</t-radio-button>
                         </t-radio-group>
                       </div>
@@ -775,43 +773,38 @@
                         <p class="desc">{{ $t('agent.editor.selectKnowledgeBasesDesc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-select 
-                          v-model="formData.config.knowledge_bases" 
-                          multiple 
-                          :placeholder="$t('agent.editor.selectKnowledgeBases')"
-                          filterable
-                          :min-collapsed-num="3"
-                        >
-                          <t-option-group v-if="myKbOptions.length" :label="$t('agent.editor.myKnowledgeBases')">
-                            <t-option 
-                              v-for="kb in myKbOptions" 
-                              :key="kb.value" 
-                              :value="kb.value" 
-                              :label="kb.label"
-                            >
-                              <div class="kb-option-item">
+                        <t-select v-model="formData.config.knowledge_bases" multiple
+                          :placeholder="$t('agent.editor.selectKnowledgeBases')" filterable :min-collapsed-num="3">
+                          <t-option-group v-if="filteredMyKbOptions.length"
+                            :label="$t('agent.editor.myKnowledgeBases')">
+                            <t-option v-for="kb in filteredMyKbOptions" :key="kb.value" :value="kb.value"
+                              :label="kb.label" :disabled="kb.disabled">
+                              <div class="kb-option-item" :title="kb.disabled ? kb.disabledReason : ''">
                                 <span class="kb-option-icon" :class="kb.type === 'faq' ? 'faq-icon' : 'doc-icon'">
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
                                 <span class="kb-option-label">{{ kb.label }}</span>
+                                <span v-if="kb.ragEnabled" class="kb-option-tag tag-rag">RAG</span>
+                                <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
+                                <span v-if="kb.disabled" class="kb-option-disabled-hint">{{ kb.disabledReason }}</span>
                               </div>
                             </t-option>
                           </t-option-group>
-                          <t-option-group v-if="sharedKbOptions.length" :label="$t('agent.editor.sharedKnowledgeBases')">
-                            <t-option 
-                              v-for="kb in sharedKbOptions" 
-                              :key="kb.value" 
-                              :value="kb.value" 
-                              :label="kb.label"
-                            >
-                              <div class="kb-option-item">
+                          <t-option-group v-if="filteredSharedKbOptions.length"
+                            :label="$t('agent.editor.sharedKnowledgeBases')">
+                            <t-option v-for="kb in filteredSharedKbOptions" :key="kb.value" :value="kb.value"
+                              :label="kb.label" :disabled="kb.disabled">
+                              <div class="kb-option-item" :title="kb.disabled ? kb.disabledReason : ''">
                                 <span class="kb-option-icon" :class="kb.type === 'faq' ? 'faq-icon' : 'doc-icon'">
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
                                 <span class="kb-option-label">{{ kb.label }}</span>
+                                <span v-if="kb.ragEnabled" class="kb-option-tag tag-rag">RAG</span>
+                                <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span v-if="kb.orgName" class="kb-option-org">{{ kb.orgName }}</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
+                                <span v-if="kb.disabled" class="kb-option-disabled-hint">{{ kb.disabledReason }}</span>
                               </div>
                             </t-option>
                           </t-option-group>
@@ -826,19 +819,10 @@
                         <p class="desc">{{ $t('agentEditor.fileTypes.desc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-select 
-                          v-model="formData.config.supported_file_types" 
-                          multiple 
-                          :placeholder="$t('agentEditor.fileTypes.allTypes')"
-                          :min-collapsed-num="3"
-                          clearable
-                        >
-                          <t-option 
-                            v-for="ft in availableFileTypes" 
-                            :key="ft.value" 
-                            :value="ft.value" 
-                            :label="ft.label"
-                          />
+                        <t-select v-model="formData.config.supported_file_types" multiple
+                          :placeholder="$t('agentEditor.fileTypes.allTypes')" :min-collapsed-num="3" clearable>
+                          <t-option v-for="ft in availableFileTypes" :key="ft.value" :value="ft.value"
+                            :label="ft.label" />
                         </t-select>
                       </div>
                     </div>
@@ -854,21 +838,27 @@
                       </div>
                     </div>
 
-                    <!-- ReRank 模型（当配置了知识库时显示） -->
-                    <div v-if="needsRerankModel" class="setting-row">
+                    <!-- ReRank 模型（关联知识库时常驻显示，仅在作用域内存在 RAG 类型 KB 时必填） -->
+                    <div v-if="hasKnowledgeBase" class="setting-row">
                       <div class="setting-info">
-                        <label>{{ $t('agent.editor.rerankModel') }} <span class="required">*</span></label>
-                        <p class="desc">{{ $t('agent.editor.rerankModelDesc') }}</p>
+                        <label>
+                          {{ $t('agent.editor.rerankModel') }}
+                          <span v-if="needsRerankModel" class="required">*</span>
+                        </label>
+                        <p class="desc">
+                          {{ $t('agent.editor.rerankModelDesc') }}
+                          <template v-if="!needsRerankModel">
+                            <br />
+                            <span class="hint">{{ $t('agent.editor.rerankModelOptionalHint') }}</span>
+                          </template>
+                        </p>
                       </div>
                       <div class="setting-control">
-                        <ModelSelector
-                          model-type="Rerank"
-                          :selected-model-id="formData.config.rerank_model_id"
+                        <ModelSelector model-type="Rerank" :selected-model-id="formData.config.rerank_model_id"
                           :all-models="allModels"
                           @update:selected-model-id="(val: string) => formData.config.rerank_model_id = val"
                           @add-model="handleAddModel('rerank')"
-                          :placeholder="$t('agent.editor.rerankModelPlaceholder')"
-                        />
+                          :placeholder="$t('agent.editor.rerankModelPlaceholder')" />
                       </div>
                     </div>
 
@@ -901,8 +891,10 @@
                         </div>
                         <div class="setting-control">
                           <div class="slider-wrapper">
-                            <t-slider v-model="formData.config.faq_direct_answer_threshold" :min="0.7" :max="1" :step="0.05" />
-                            <span class="slider-value">{{ formData.config.faq_direct_answer_threshold?.toFixed(2) }}</span>
+                            <t-slider v-model="formData.config.faq_direct_answer_threshold" :min="0.7" :max="1"
+                              :step="0.05" />
+                            <span class="slider-value">{{ formData.config.faq_direct_answer_threshold?.toFixed(2)
+                              }}</span>
                           </div>
                         </div>
                       </div>
@@ -921,6 +913,7 @@
                         </div>
                       </div>
                     </div>
+
                   </div>
                 </div>
 
@@ -930,7 +923,7 @@
                     <h2>{{ $t('agent.editor.webSearchConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.webSearchConfigDesc') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 网络搜索 -->
                     <div class="setting-row">
@@ -950,20 +943,13 @@
                         <p class="desc">{{ $t('agentEditor.desc.webSearchProvider') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-select
-                          v-model="formData.config.web_search_provider_id"
-                          clearable
-                          :placeholder="$t('agent.editor.webSearchProviderPlaceholder')"
-                          style="width: 240px;"
-                        >
-                          <t-option
-                            v-for="p in webSearchProviderList"
-                            :key="p.id"
-                            :value="p.id"
-                            :label="p.name"
-                          >
+                        <t-select v-model="formData.config.web_search_provider_id" clearable
+                          :placeholder="$t('agent.editor.webSearchProviderPlaceholder')" style="width: 240px;">
+                          <t-option v-for="p in webSearchProviderList" :key="p.id" :value="p.id" :label="p.name">
                             <span>{{ p.name }}</span>
-                            <t-tag v-if="p.is_default" theme="primary" size="small" style="margin-left: 6px;">{{ $t('common.default') }}</t-tag>
+                            <t-tag v-if="p.is_default" theme="primary" size="small" style="margin-left: 6px;">{{
+                              $t('common.default')
+                              }}</t-tag>
                           </t-option>
                         </t-select>
                       </div>
@@ -995,7 +981,8 @@
                     </div>
 
                     <!-- 抓取页面数 -->
-                    <div v-if="formData.config.web_search_enabled && formData.config.web_fetch_enabled" class="setting-row">
+                    <div v-if="formData.config.web_search_enabled && formData.config.web_fetch_enabled"
+                      class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.webFetchTopN') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.webFetchTopN') }}</p>
@@ -1016,7 +1003,7 @@
                     <h2>{{ $t('agent.editor.retrievalStrategy') }}</h2>
                     <p class="section-description">{{ $t('agentEditor.desc.retrievalSection') }}</p>
                   </div>
-                  
+
                   <div class="settings-group">
                     <!-- 查询扩展（仅普通模式） -->
                     <div v-if="!isAgentMode" class="setting-row">
@@ -1068,8 +1055,8 @@
                       </div>
                     </div>
 
-                    <!-- 重排TopK -->
-                    <div class="setting-row">
+                    <!-- 重排TopK（仅在配置了 Rerank 模型时展示） -->
+                    <div v-if="formData.config.rerank_model_id" class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.rerankTopK') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.rerankTopK') }}</p>
@@ -1079,8 +1066,8 @@
                       </div>
                     </div>
 
-                    <!-- 重排阈值 -->
-                    <div class="setting-row">
+                    <!-- 重排阈值（仅在配置了 Rerank 模型时展示） -->
+                    <div v-if="formData.config.rerank_model_id" class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.rerankThreshold') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.rerankThreshold') }}</p>
@@ -1090,6 +1077,17 @@
                           <t-slider v-model="formData.config.rerank_threshold" :min="-10" :max="10" :step="0.01" />
                           <span class="slider-value">{{ formData.config.rerank_threshold?.toFixed(1) }}</span>
                         </div>
+                      </div>
+                    </div>
+
+                    <!-- 表格数据分析（仅普通模式，命中 CSV/Excel 时会多一次 LLM 调用生成 SQL） -->
+                    <div v-if="!isAgentMode" class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.dataAnalysis.enableLabel') }}</label>
+                        <p class="desc">{{ $t('agentEditor.dataAnalysis.enableDesc') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-switch v-model="formData.config.data_analysis_enabled" />
                       </div>
                     </div>
 
@@ -1109,83 +1107,60 @@
                       </div>
 
                       <!-- 固定兜底回复 -->
-                      <div v-if="formData.config.fallback_strategy === 'fixed'" class="setting-row setting-row-vertical">
+                      <div v-if="formData.config.fallback_strategy === 'fixed'"
+                        class="setting-row setting-row-vertical">
                         <div class="setting-info">
                           <label>{{ $t('agent.editor.fallbackResponse') }}</label>
                           <p class="desc">{{ $t('agentEditor.desc.fallbackResponse') }}</p>
                         </div>
                         <div class="setting-control setting-control-full">
                           <div class="textarea-with-template">
-                            <t-textarea 
-                              v-model="formData.config.fallback_response" 
+                            <t-textarea v-model="formData.config.fallback_response"
                               :placeholder="defaultFallbackResponse || $t('agent.editor.fallbackResponsePlaceholder')"
-                              :autosize="{ minRows: 2, maxRows: 6 }"
-                            />
-                            <PromptTemplateSelector 
-                              type="fallback" 
-                              position="corner"
-                              fallbackMode="fixed"
+                              :autosize="{ minRows: 2, maxRows: 6 }" />
+                            <PromptTemplateSelector type="fallback" position="corner" fallbackMode="fixed"
                               @select="handleFallbackResponseTemplateSelect"
-                              @reset-default="handleFallbackResponseTemplateSelect"
-                            />
+                              @reset-default="handleFallbackResponseTemplateSelect" />
                           </div>
                         </div>
                       </div>
 
                       <!-- 兜底提示词 -->
-                      <div v-if="formData.config.fallback_strategy === 'model'" class="setting-row setting-row-vertical">
+                      <div v-if="formData.config.fallback_strategy === 'model'"
+                        class="setting-row setting-row-vertical">
                         <div class="setting-info">
                           <label>{{ $t('agent.editor.fallbackPrompt') }}</label>
                           <p class="desc">{{ $t('agentEditor.desc.fallbackPrompt') }}</p>
                           <div class="placeholder-tags" v-if="fallbackPlaceholders.length > 0">
                             <span class="placeholder-label">{{ $t('agentEditor.placeholders.available') }}</span>
-                            <t-tooltip 
-                              v-for="placeholder in fallbackPlaceholders" 
-                              :key="placeholder.name"
+                            <t-tooltip v-for="placeholder in fallbackPlaceholders" :key="placeholder.name"
                               :content="placeholder.description + $t('agentEditor.placeholders.clickToInsert')"
-                              placement="top"
-                            >
-                              <span 
-                                class="placeholder-tag"
+                              placement="top">
+                              <span class="placeholder-tag"
                                 @click="handlePlaceholderClick('fallback', placeholder.name)"
-                                v-text="'{{' + placeholder.name + '}}'"
-                              ></span>
+                                v-text="'{{' + placeholder.name + '}}'"></span>
                             </t-tooltip>
                             <span class="placeholder-hint">{{ $t('agentEditor.placeholders.hint') }}</span>
                           </div>
                         </div>
                         <div class="setting-control setting-control-full" style="position: relative;">
                           <div class="textarea-with-template">
-                            <t-textarea 
-                              ref="fallbackPromptTextareaRef"
-                              v-model="formData.config.fallback_prompt" 
+                            <t-textarea ref="fallbackPromptTextareaRef" v-model="formData.config.fallback_prompt"
                               :placeholder="defaultFallbackPrompt || $t('agent.editor.fallbackPromptPlaceholder')"
-                              :autosize="{ minRows: 4, maxRows: 10 }"
-                              @input="handleFallbackPromptInput"
-                            />
-                            <PromptTemplateSelector 
-                              type="fallback" 
-                              position="corner"
-                              fallbackMode="model"
+                              :autosize="{ minRows: 4, maxRows: 10 }" @input="handleFallbackPromptInput" />
+                            <PromptTemplateSelector type="fallback" position="corner" fallbackMode="model"
                               @select="handleFallbackPromptTemplateSelect"
-                              @reset-default="handleFallbackPromptTemplateSelect"
-                            />
+                              @reset-default="handleFallbackPromptTemplateSelect" />
                           </div>
                           <Teleport to="body">
-                            <div
-                              v-if="fallbackPromptPopup.show && filteredFallbackPlaceholders.length > 0"
-                              class="placeholder-popup-wrapper"
-                              :style="fallbackPromptPopup.style"
-                            >
+                            <div v-if="fallbackPromptPopup.show && filteredFallbackPlaceholders.length > 0"
+                              class="placeholder-popup-wrapper" :style="fallbackPromptPopup.style">
                               <div class="placeholder-popup">
-                                <div
-                                  v-for="(placeholder, index) in filteredFallbackPlaceholders"
-                                  :key="placeholder.name"
-                                  class="placeholder-item"
+                                <div v-for="(placeholder, index) in filteredFallbackPlaceholders"
+                                  :key="placeholder.name" class="placeholder-item"
                                   :class="{ active: fallbackPromptPopup.selectedIndex === index }"
                                   @mousedown.prevent="insertGenericPlaceholder('fallback', placeholder.name, true)"
-                                  @mouseenter="fallbackPromptPopup.selectedIndex = index"
-                                >
+                                  @mouseenter="fallbackPromptPopup.selectedIndex = index">
                                   <div class="placeholder-name">
                                     <code v-html="`{{${placeholder.name}}}`"></code>
                                   </div>
@@ -1201,7 +1176,8 @@
                 </div>
 
                 <!-- 共享管理（仅编辑模式且非内置智能体） -->
-                <div v-if="props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin" v-show="currentSection === 'share'" class="section">
+                <div v-if="props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin"
+                  v-show="currentSection === 'share'" class="section">
                   <AgentShareSettings :agent-id="props.agent.id" :agent="props.agent" />
                 </div>
 
@@ -1211,8 +1187,10 @@
                     <h2>{{ $t('agentEditor.im.title') }}</h2>
                     <p class="section-description">
                       {{ $t('agentEditor.im.description') }}
-                      <a v-if="!embedded" href="https://github.com/Tencent/WeKnora/blob/main/docs/IM%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3.md" target="_blank" rel="noopener noreferrer" class="section-doc-link">
-                        <t-icon name="link" class="link-icon" />{{ $t('agentEditor.im.docLink') }}
+                      <a v-if="!embedded" href="https://github.com/Tencent/WeKnora/blob/main/docs/IM%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3.md"
+                        target="_blank" rel="noopener noreferrer" class="doc-link">
+                        {{ $t('agentEditor.im.docLink') }}
+                        <t-icon name="link" class="link-icon" />
                       </a>
                     </p>
                   </div>
@@ -1224,8 +1202,12 @@
 
               <!-- 底部操作栏 -->
               <div class="settings-footer">
-                <t-button variant="outline" @click="handleClose">{{ $t('common.cancel') }}</t-button>
-                <t-button theme="primary" :loading="saving" @click="handleSave">{{ $t('common.confirm') }}</t-button>
+                <t-button variant="outline" @click="handleClose">{{ props.readOnly ? $t('common.close') :
+                  $t('common.cancel')
+                  }}</t-button>
+                <t-button v-if="!props.readOnly" theme="primary" :loading="saving" @click="handleSave">{{
+                  $t('common.confirm')
+                  }}</t-button>
               </div>
             </div>
           </div>
@@ -1239,13 +1221,25 @@
 import { ref, computed, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { MessagePlugin } from 'tdesign-vue-next';
-import { createAgent, updateAgent, getPlaceholders, type CustomAgent, type PlaceholderDefinition } from '@/api/agent';
+import {
+  createAgent,
+  updateAgent,
+  getPlaceholders,
+  getAgentTypePresets,
+  type CustomAgent,
+  type PlaceholderDefinition,
+  type AgentTypePreset,
+  type AgentType,
+  type AgentTypeKBFilter,
+  type KBCapabilities,
+} from '@/api/agent';
 import { listModels, type ModelConfig } from '@/api/model';
 import { listKnowledgeBases } from '@/api/knowledge-base';
 import { listMCPServices, type MCPService } from '@/api/mcp-service';
 import { listSkills, type SkillInfo } from '@/api/skill';
 import { listWebSearchProviders, type WebSearchProviderEntity } from '@/api/web-search-provider';
-import { getAgentConfig, getConversationConfig, getStorageEngineStatus, type StorageEngineStatusItem, type PromptTemplate } from '@/api/system';
+import { getStorageEngineStatus, getPromptTemplates, type StorageEngineStatusItem, type PromptTemplate } from '@/api/system';
+import { getTenantRetrievalConfig } from '@/api/retrieval';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
@@ -1255,12 +1249,18 @@ import ModelSelector from '@/components/ModelSelector.vue';
 import AgentShareSettings from '@/components/AgentShareSettings.vue';
 import IMChannelPanel from '@/components/IMChannelPanel.vue';
 import { useEmbedded } from '@/composables/useEmbedded';
+import {
+  evaluateToolRequirement,
+  deriveKbFilterFromTools,
+  type RequirementMissKind,
+  type ScopeCapabilities,
+} from '@/utils/tool-capabilities';
 
 const uiStore = useUIStore();
 const authStore = useAuthStore();
 const orgStore = useOrganizationStore();
 
-const { t } = useI18n();
+const { t, locale: i18nLocale } = useI18n();
 const { embedded } = useEmbedded();
 
 const props = defineProps<{
@@ -1268,6 +1268,12 @@ const props = defineProps<{
   mode: 'create' | 'edit';
   agent?: CustomAgent | null;
   initialSection?: string;
+  // readOnly hides the save button so a Viewer who clicks an agent
+  // card to inspect its config doesn't see a "确定" that 403s on the
+  // backend update endpoint. Field-level disable is intentionally NOT
+  // wired here yet (the modal has 3000+ lines of form inputs); instead
+  // we just remove the only mutation surface — the footer button.
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -1278,7 +1284,12 @@ const emit = defineEmits<{
 const currentSection = ref(props.initialSection || 'basic');
 const saving = ref(false);
 const allModels = ref<ModelConfig[]>([]);
-const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string }[]>([]);
+const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string; ragEnabled?: boolean; wikiEnabled?: boolean; capabilities?: KBCapabilities }[]>([]);
+
+// 智能体类型预设（仅 smart-reasoning 模式下展示）
+const agentTypePresets = ref<AgentTypePreset[]>([]);
+// Agent 系统提示词模板缓存（用于切换智能体类型时根据 system_prompt_id 解析出实际文本填入）
+const agentSystemPromptTemplates = ref<PromptTemplate[]>([]);
 const mcpOptions = ref<{ label: string; value: string }[]>([]);
 const webSearchProviderList = ref<WebSearchProviderEntity[]>([]);
 const skillOptions = ref<{ name: string; description: string }[]>([]);
@@ -1302,8 +1313,11 @@ const imageStorageOptions = computed(() => {
 });
 
 // 系统默认配置（用于内置智能体显示默认提示词）
-const defaultAgentSystemPrompt = ref('');  // Agent 模式的默认系统提示词（来自 agent-config）
-const defaultNormalSystemPrompt = ref('');  // 普通模式的默认系统提示词（来自 conversation-config）
+// Agent (smart-reasoning) 模式的默认系统提示词。直接从 prompt-templates
+// 的 agent_system_prompt 数组里挑 mode==='rag' && default 的那条得到，
+// 与后端 agent.GetProgressiveRAGSystemPrompt 是同一份数据源。
+const defaultAgentSystemPrompt = ref('');
+const defaultNormalSystemPrompt = ref('');  // 普通模式默认系统提示词（来自 prompt-templates 的 default 项）
 const defaultContextTemplate = ref('');
 const defaultRewritePromptSystem = ref('');
 const defaultRewritePromptUser = ref('');
@@ -1318,8 +1332,11 @@ const defaultRerankThreshold = ref(0.5);
 const defaultMaxCompletionTokens = ref(2048);
 const defaultTemperature = ref(0.7);
 
-// 知识库相关工具列表
+// 知识库相关工具列表（用于 watch(hasKnowledgeBase) 从"无"变"有"时 seed 默认工具）
 const knowledgeBaseTools = ['grep_chunks', 'knowledge_search', 'list_knowledge_chunks', 'query_knowledge_graph', 'get_document_info', 'database_query'];
+
+// Wiki 读取类工具（用于 watch(agentMode) 切到 smart-reasoning 时 seed 默认工具）
+const wikiReadTools = ['wiki_search', 'wiki_read_page', 'wiki_read_source_doc', 'wiki_flag_issue'];
 
 // 初始化标志，防止初始化时触发 watch 自动添加工具
 const isInitializing = ref(false);
@@ -1333,18 +1350,48 @@ const mcpSelectionMode = ref<'all' | 'selected' | 'none'>('none');
 // Skills 选择模式：all=全部, selected=指定, none=不使用
 const skillsSelectionMode = ref<'all' | 'selected' | 'none'>('none');
 
-// 可用工具列表 (与后台 definitions.go 保持一致)
+// 可用工具列表（与后台 internal/agent/tools/definitions.go 保持一致）
+// group 决定 UI 分组：base / rag / wiki_read / wiki_edit / wiki_issue / data
+// danger: 写类破坏性工具，UI 上给出显著提示
+// 工具的 KB 能力依赖关系统一在 `@/utils/tool-capabilities` 声明，
+// `availableTools` 通过 `evaluateToolRequirement` 读取，不在这里重复维护。
 const allTools = computed(() => [
-  { value: 'thinking', label: t('agentEditor.tools.thinking'), description: t('agentEditor.tools.thinkingDesc'), requiresKB: false },
-  { value: 'todo_write', label: t('agentEditor.tools.todoWrite'), description: t('agentEditor.tools.todoWriteDesc'), requiresKB: false },
-  { value: 'grep_chunks', label: t('agentEditor.tools.grepChunks'), description: t('agentEditor.tools.grepChunksDesc'), requiresKB: true },
-  { value: 'knowledge_search', label: t('agentEditor.tools.knowledgeSearch'), description: t('agentEditor.tools.knowledgeSearchDesc'), requiresKB: true },
-  { value: 'list_knowledge_chunks', label: t('agentEditor.tools.listChunks'), description: t('agentEditor.tools.listChunksDesc'), requiresKB: true },
-  { value: 'query_knowledge_graph', label: t('agentEditor.tools.queryGraph'), description: t('agentEditor.tools.queryGraphDesc'), requiresKB: true },
-  { value: 'get_document_info', label: t('agentEditor.tools.getDocInfo'), description: t('agentEditor.tools.getDocInfoDesc'), requiresKB: true },
-  { value: 'database_query', label: t('agentEditor.tools.dbQuery'), description: t('agentEditor.tools.dbQueryDesc'), requiresKB: true },
-  { value: 'data_analysis', label: t('agentEditor.tools.dataAnalysis'), description: t('agentEditor.tools.dataAnalysisDesc'), requiresKB: true },
-  { value: 'data_schema', label: t('agentEditor.tools.dataSchema'), description: t('agentEditor.tools.dataSchemaDesc'), requiresKB: true },
+  // 基础思考类
+  { value: 'thinking', label: t('agentEditor.tools.thinking'), description: t('agentEditor.tools.thinkingDesc'), group: 'base' },
+  { value: 'todo_write', label: t('agentEditor.tools.todoWrite'), description: t('agentEditor.tools.todoWriteDesc'), group: 'base' },
+  // 知识库语义/关键词检索
+  { value: 'grep_chunks', label: t('agentEditor.tools.grepChunks'), description: t('agentEditor.tools.grepChunksDesc'), group: 'rag' },
+  { value: 'knowledge_search', label: t('agentEditor.tools.knowledgeSearch'), description: t('agentEditor.tools.knowledgeSearchDesc'), group: 'rag' },
+  { value: 'list_knowledge_chunks', label: t('agentEditor.tools.listChunks'), description: t('agentEditor.tools.listChunksDesc'), group: 'rag' },
+  { value: 'query_knowledge_graph', label: t('agentEditor.tools.queryGraph'), description: t('agentEditor.tools.queryGraphDesc'), group: 'rag' },
+  { value: 'get_document_info', label: t('agentEditor.tools.getDocInfo'), description: t('agentEditor.tools.getDocInfoDesc'), group: 'rag' },
+  { value: 'database_query', label: t('agentEditor.tools.dbQuery'), description: t('agentEditor.tools.dbQueryDesc'), group: 'rag' },
+  // Wiki 读取类（阅读、搜索、标记问题）
+  { value: 'wiki_search', label: t('agentEditor.tools.wikiSearch'), description: t('agentEditor.tools.wikiSearchDesc'), group: 'wiki_read' },
+  { value: 'wiki_read_page', label: t('agentEditor.tools.wikiReadPage'), description: t('agentEditor.tools.wikiReadPageDesc'), group: 'wiki_read' },
+  { value: 'wiki_read_source_doc', label: t('agentEditor.tools.wikiReadSourceDoc'), description: t('agentEditor.tools.wikiReadSourceDocDesc'), group: 'wiki_read' },
+  { value: 'wiki_flag_issue', label: t('agentEditor.tools.wikiFlagIssue'), description: t('agentEditor.tools.wikiFlagIssueDesc'), group: 'wiki_read' },
+  // Wiki 编辑类（会直接修改 Wiki 内容）
+  { value: 'wiki_write_page', label: t('agentEditor.tools.wikiWritePage'), description: t('agentEditor.tools.wikiWritePageDesc'), group: 'wiki_edit', danger: true },
+  { value: 'wiki_replace_text', label: t('agentEditor.tools.wikiReplaceText'), description: t('agentEditor.tools.wikiReplaceTextDesc'), group: 'wiki_edit', danger: true },
+  { value: 'wiki_rename_page', label: t('agentEditor.tools.wikiRenamePage'), description: t('agentEditor.tools.wikiRenamePageDesc'), group: 'wiki_edit', danger: true },
+  { value: 'wiki_delete_page', label: t('agentEditor.tools.wikiDeletePage'), description: t('agentEditor.tools.wikiDeletePageDesc'), group: 'wiki_edit', danger: true },
+  // Wiki 巡检类
+  { value: 'wiki_read_issue', label: t('agentEditor.tools.wikiReadIssue'), description: t('agentEditor.tools.wikiReadIssueDesc'), group: 'wiki_issue' },
+  { value: 'wiki_update_issue', label: t('agentEditor.tools.wikiUpdateIssue'), description: t('agentEditor.tools.wikiUpdateIssueDesc'), group: 'wiki_issue' },
+  // 数据分析
+  { value: 'data_analysis', label: t('agentEditor.tools.dataAnalysis'), description: t('agentEditor.tools.dataAnalysisDesc'), group: 'data' },
+  { value: 'data_schema', label: t('agentEditor.tools.dataSchema'), description: t('agentEditor.tools.dataSchemaDesc'), group: 'data' },
+]);
+
+// 工具分组元信息
+const toolGroups = computed(() => [
+  { key: 'base', label: t('agentEditor.tools.groupBase') },
+  { key: 'rag', label: t('agentEditor.tools.groupRag') },
+  { key: 'wiki_read', label: t('agentEditor.tools.groupWikiRead') },
+  { key: 'wiki_edit', label: t('agentEditor.tools.groupWikiEdit') },
+  { key: 'wiki_issue', label: t('agentEditor.tools.groupWikiIssue') },
+  { key: 'data', label: t('agentEditor.tools.groupData') },
 ]);
 
 // 知识库分组：我的 vs 共享的
@@ -1355,6 +1402,30 @@ const sharedKbOptions = computed(() => kbOptions.value.filter(kb => kb.shared));
 const hasKnowledgeBase = computed(() => {
   return kbSelectionMode.value !== 'none';
 });
+
+// 当前配置下进入到智能体作用域的知识库列表
+// 注意：用户可能选了 knowledge_bases（按库级），也可能选了 knowledge_ids（按文档级）
+// 这里仅用于 UI 上的工具可用性判定，按库级来计算
+const kbsInScope = computed(() => {
+  if (kbSelectionMode.value === 'none') return [];
+  if (kbSelectionMode.value === 'all') return kbOptions.value;
+  const selectedIds = formData.value.config.knowledge_bases || [];
+  return kbOptions.value.filter(kb => selectedIds.includes(kb.value));
+});
+
+// 是否存在至少一个启用了 RAG 能力的知识库（向量 or 关键词）
+const hasRagKnowledgeBase = computed(() => {
+  return kbsInScope.value.some(kb => kb.ragEnabled);
+});
+
+// 是否存在至少一个启用了 Wiki 能力的知识库
+const hasWikiKnowledgeBase = computed(() => {
+  return kbsInScope.value.some(kb => kb.wikiEnabled);
+});
+
+// 作用域内 RAG/Wiki 知识库数量（用于顶部状态栏）
+const ragKbCount = computed(() => kbsInScope.value.filter(kb => kb.ragEnabled).length);
+const wikiKbCount = computed(() => kbsInScope.value.filter(kb => kb.wikiEnabled).length);
 
 // 检测选择的知识库中是否包含 FAQ 类型
 const hasFaqKnowledgeBase = computed(() => {
@@ -1368,12 +1439,101 @@ const hasFaqKnowledgeBase = computed(() => {
   return kbOptions.value.some(kb => selectedKbIds.includes(kb.value) && kb.type === 'faq');
 });
 
-const availableTools = computed(() => {
-  return allTools.value.map(tool => ({
-    ...tool,
-    disabled: tool.requiresKB && !hasKnowledgeBase.value
-  }));
+// 把"作用域内 KB 能力"聚合成一个 ScopeCapabilities 对象，交给
+// `evaluateToolRequirement` 统一判定；UI 上的所有可用性提示都应出自此处。
+const scopeCapabilities = computed<ScopeCapabilities>(() => {
+  const scope: ScopeCapabilities = { vector: false, keyword: false, wiki: false, graph: false, faq: false };
+  for (const kb of kbsInScope.value) {
+    const caps = kb.capabilities;
+    if (caps) {
+      if (caps.vector) scope.vector = true;
+      if (caps.keyword) scope.keyword = true;
+      if (caps.wiki) scope.wiki = true;
+      if (caps.graph) scope.graph = true;
+      if (caps.faq) scope.faq = true;
+    } else {
+      // 向后兼容：capabilities 尚未加载时，退回到 ragEnabled/wikiEnabled 推断
+      if (kb.ragEnabled) { scope.vector = true; scope.keyword = true; }
+      if (kb.wikiEnabled) scope.wiki = true;
+      if (kb.type === 'faq') scope.faq = true;
+    }
+  }
+  return scope;
 });
+
+// 把 evaluateToolRequirement 返回的 missKind 映射到 i18n 文案。
+// 新增的 needsGraph / needsFaq 暂时复用 requiresRagKb 文案（"需要 RAG 知识库"），
+// 后续可按需增加独立的 i18n 键。
+const missKindToReason = (kind: RequirementMissKind): string | undefined => {
+  switch (kind) {
+    case 'needsKb': return t('agentEditor.tools.requiresKb');
+    case 'needsWiki': return t('agentEditor.tools.requiresWikiKb');
+    case 'needsRag':
+    case 'needsGraph':
+    case 'needsFaq': return t('agentEditor.tools.requiresRagKb');
+    case 'none':
+    default: return undefined;
+  }
+};
+
+const availableTools = computed(() => {
+  const scope = scopeCapabilities.value;
+  const hasAnyKb = hasKnowledgeBase.value;
+  return allTools.value.map(tool => {
+    const { ok, missKind } = evaluateToolRequirement(tool.value, scope, hasAnyKb);
+    return {
+      ...tool,
+      disabled: !ok,
+      disabledReason: ok ? undefined : missKindToReason(missKind),
+    };
+  });
+});
+
+// 按分组切片后的工具列表，用于模板分组渲染
+const groupedAvailableTools = computed(() => {
+  const map: Record<string, typeof availableTools.value> = {};
+  for (const tool of availableTools.value) {
+    const g = tool.group || 'base';
+    if (!map[g]) map[g] = [];
+    map[g].push(tool);
+  }
+  return toolGroups.value
+    .map(g => ({
+      ...g,
+      tools: map[g.key] || [],
+    }))
+    .filter(g => g.tools.length > 0);
+});
+
+// ==================== 有效工具预览 ====================
+// 最终运行时智能体实际能使用的工具集合（仅做预览展示）
+// 规则：基于 allowed_tools 过滤
+//   1) 勾选但缺失对应能力（无 KB / 无 Wiki 能力 KB）的工具会被灰显/隐藏
+//   2) 无论是否勾选，web_search / web_fetch 随 web_search_enabled 出现
+//   3) final_answer 始终存在
+//   4) 当 kb_selection_mode === 'none' 时，RAG/Wiki 工具都视为不可用
+const effectiveTools = computed(() => {
+  const chosen = new Set(formData.value.config.allowed_tools || []);
+  const items: Array<{ value: string; label: string; reason?: string; active: boolean }> = [];
+  for (const tool of availableTools.value) {
+    const picked = chosen.has(tool.value);
+    if (!picked) continue;
+    if (tool.disabled) {
+      items.push({ value: tool.value, label: tool.label, active: false, reason: tool.disabledReason });
+    } else {
+      items.push({ value: tool.value, label: tool.label, active: true });
+    }
+  }
+  if (formData.value.config.web_search_enabled) {
+    items.push({ value: 'web_search', label: t('agentEditor.tools.webSearch'), active: true });
+    items.push({ value: 'web_fetch', label: t('agentEditor.tools.webFetch'), active: true });
+  }
+  items.push({ value: 'final_answer', label: t('agentEditor.tools.finalAnswer'), active: true });
+  return items;
+});
+
+// 勾选了但当前配置下无法生效的工具数量（用于顶部状态提示）
+const inactiveToolCount = computed(() => effectiveTools.value.filter(i => !i.active).length);
 
 // 可用文件类型列表
 const availableFileTypes = [
@@ -1505,7 +1665,7 @@ const defaultFormData = {
   is_builtin: false,
   config: {
     // 基础设置
-    agent_mode: 'quick-answer' as 'quick-answer' | 'smart-reasoning',
+    agent_mode: 'smart-reasoning' as 'quick-answer' | 'smart-reasoning',
     system_prompt: '',
     context_template: '{{query}}',
     // 模型设置
@@ -1516,6 +1676,7 @@ const defaultFormData = {
     thinking: false, // 默认禁用思考模式
     // Agent模式设置
     max_iterations: 10,
+    llm_call_timeout: 120,  // 120 seconds
     allowed_tools: [] as string[],
     reflection_enabled: false,
     // MCP 服务设置
@@ -1524,15 +1685,23 @@ const defaultFormData = {
     // Skills 设置
     skills_selection_mode: 'none' as 'all' | 'selected' | 'none',
     selected_skills: [] as string[],
-    // 知识库设置
-    kb_selection_mode: 'none' as 'all' | 'selected' | 'none',
+    // 知识库设置：新建智能体默认选择 "全部知识库"，
+    // 让用户无需先去勾选 KB 即可上手；如有需要可改为 "selected" / "none"。
+    kb_selection_mode: 'all' as 'all' | 'selected' | 'none',
     knowledge_bases: [] as string[],
+    retrieve_kb_only_when_mentioned: false,
+    // 智能推理下的类型预设：新建 agent 时默认给 RAG 问答（最常用场景）。
+    // 编辑既有 agent 时会被 agent 自己保存的 agent_type 覆盖。
+    agent_type: 'rag-qa' as AgentType,
+    system_prompt_id: '' as string,
     // 图片上传/多模态设置
     image_upload_enabled: false,
     vlm_model_id: '',
     image_storage_provider: '',
     // 文件类型限制
     supported_file_types: [] as string[],
+    // 数据分析阶段开关（默认关闭，避免在普通问答上多一次 LLM 调用生成 SQL）
+    data_analysis_enabled: false,
     // FAQ 策略设置
     faq_priority_enabled: true, // 是否启用 FAQ 优先策略
     faq_direct_answer_threshold: 0.9, // FAQ 直接回答阈值（相似度高于此值直接使用 FAQ 答案）
@@ -1552,6 +1721,7 @@ const defaultFormData = {
     // 高级设置（普通模式）
     enable_query_expansion: true,
     enable_rewrite: true,
+    query_understand_model_id: '',
     rewrite_prompt_system: '',
     rewrite_prompt_user: '',
     fallback_strategy: 'model' as 'fixed' | 'model',
@@ -1570,6 +1740,251 @@ const agentMode = computed({
 });
 
 const isAgentMode = computed(() => agentMode.value === 'smart-reasoning');
+
+// ============================================================================
+// 智能体类型预设（仅 smart-reasoning 模式下可见）
+// 选择类型后自动填充 system_prompt_id / allowed_tools 等；
+// 选择 "custom" 或没有匹配预设时不做任何覆盖。
+// ============================================================================
+
+const agentType = computed({
+  get: () => (formData.value.config.agent_type as AgentType) || 'custom',
+  set: (val: AgentType) => { formData.value.config.agent_type = val; },
+});
+
+// 当前激活的预设对象（用于 KB 过滤 / UI 徽章）
+const activeAgentTypePreset = computed<AgentTypePreset | null>(() => {
+  if (!isAgentMode.value) return null;
+  const id = agentType.value;
+  if (!id || id === 'custom') return null;
+  return agentTypePresets.value.find(p => p.id === id) || null;
+});
+
+// 根据当前 locale 挑选 i18n 标签
+const agentTypePresetLabel = (p: AgentTypePreset): string => {
+  const locale = i18nLocale.value || 'default';
+  return p.i18n?.[locale]?.label || p.i18n?.default?.label || p.id;
+};
+const agentTypePresetDescription = (p: AgentTypePreset): string => {
+  const locale = i18nLocale.value || 'default';
+  return p.i18n?.[locale]?.description || p.i18n?.default?.description || '';
+};
+
+// t-select 的 options 数据：label 给 TDesign 自己（用于选中态显示），desc 走自定义 option slot
+const agentTypeSelectOptions = computed(() => {
+  return agentTypePresets.value.map(p => ({
+    value: p.id,
+    label: agentTypePresetLabel(p),
+    desc: agentTypePresetDescription(p),
+  }));
+});
+
+// 为每个预设生成"我的 <label>"的默认名称，让用户可以一键保存
+// custom 类型默认名为空（让用户自己想）
+const getPresetDefaultName = (preset: AgentTypePreset | null): string => {
+  if (!preset || preset.id === 'custom') return '';
+  return t('agentEditor.agentType.defaultNamePattern', { label: agentTypePresetLabel(preset) });
+};
+const getPresetDefaultDescription = (preset: AgentTypePreset | null): string => {
+  if (!preset) return '';
+  return agentTypePresetDescription(preset);
+};
+
+// 判断当前名称/描述是否由系统自动填入（任一预设的默认值 或 空）
+// 用于在切换类型时只覆盖"未被用户手动编辑"的值，避免覆盖用户输入
+const isNameSystemGenerated = (name: string): boolean => {
+  if (!name) return true;
+  return agentTypePresets.value.some(p => getPresetDefaultName(p) === name);
+};
+const isDescriptionSystemGenerated = (desc: string): boolean => {
+  if (!desc) return true;
+  return agentTypePresets.value.some(p => getPresetDefaultDescription(p) === desc);
+};
+
+// 按预设 id 返回面向用户的不兼容原因文案。
+// 不要直接把 "vector / keyword / wiki" 这些底层 capability 名回传给用户 —
+// 用户不关心技术实现，只想知道"为什么我这个知识库不能用"。
+const presetKbMismatchKeyMap: Record<string, string> = {
+  'rag-qa': 'ragQa',
+  'wiki-qa': 'wikiQa',
+  'hybrid-rag-wiki': 'hybridRagWiki',
+  'data-analysis': 'dataAnalysis',
+};
+const presetKbMismatchReason = (preset: AgentTypePreset): string => {
+  const subKey = presetKbMismatchKeyMap[preset.id];
+  if (subKey) return t(`agentEditor.agentType.kbMismatch.${subKey}`);
+  return t('agentEditor.agentType.kbMismatch.generic');
+};
+
+// 计算预设的"有效 KB 过滤器"：工具推导 + YAML 增量叠加。
+//
+// 设计原则：
+//   - 工具 → any_of（"KB 至少要能被其中一个工具用得上"）由
+//     `deriveKbFilterFromTools` 自动算出；
+//   - YAML 里的 `kb_filter` 只负责**工具推不出来**的业务规则（如
+//     data-analysis 的 `none_of: ["faq"]`），作为增量合并，而不是整体覆盖；
+//   - `all_of` / `none_of` 直接从 YAML 继承（工具不表达这类约束）。
+//
+// 这样 rag-qa / wiki-qa / hybrid 在 YAML 里彻底不写 `kb_filter`，
+// data-analysis 只需声明额外的 `none_of`，"工具→能力"的映射只在
+// `@/utils/tool-capabilities` 维护一份。
+const effectiveKbFilter = (preset: AgentTypePreset | null): AgentTypeKBFilter | null => {
+  if (!preset) return null;
+  const derived = deriveKbFilterFromTools(preset.config?.allowed_tools || []);
+  const yaml = preset.kb_filter;
+
+  // YAML 提供 any_of 时整体覆盖推导（给显式控制留口子）；否则用推导的
+  const anyOf = (yaml?.any_of && yaml.any_of.length > 0) ? yaml.any_of : (derived?.any_of ?? []);
+  const allOf = yaml?.all_of ?? [];
+  const noneOf = yaml?.none_of ?? [];
+  if (anyOf.length === 0 && allOf.length === 0 && noneOf.length === 0) return null;
+  return { any_of: anyOf, all_of: allOf, none_of: noneOf };
+};
+
+// 评估单个 KB 是否满足给定预设的 kb_filter
+const kbSatisfiesPresetFilter = (kb: { capabilities?: KBCapabilities; ragEnabled?: boolean; wikiEnabled?: boolean; type?: string }, preset: AgentTypePreset | null): { ok: boolean; reason: string } => {
+  const filter = effectiveKbFilter(preset);
+  if (!preset || !filter) return { ok: true, reason: '' };
+  const caps = kb.capabilities || {
+    vector: !!kb.ragEnabled,
+    keyword: !!kb.ragEnabled,
+    wiki: !!kb.wikiEnabled,
+    graph: false,
+    faq: kb.type === 'faq',
+  };
+  const has = (name: string): boolean => {
+    switch (name) {
+      case 'vector': return !!caps.vector;
+      case 'keyword': return !!caps.keyword;
+      case 'wiki': return !!caps.wiki;
+      case 'graph': return !!caps.graph;
+      case 'faq': return !!caps.faq;
+      default: return false;
+    }
+  };
+  const reason = presetKbMismatchReason(preset);
+  if (filter.all_of && filter.all_of.length > 0) {
+    for (const n of filter.all_of) {
+      if (!has(n)) return { ok: false, reason };
+    }
+  }
+  if (filter.any_of && filter.any_of.length > 0) {
+    if (!filter.any_of.some(n => has(n))) {
+      return { ok: false, reason };
+    }
+  }
+  if (filter.none_of && filter.none_of.length > 0) {
+    for (const n of filter.none_of) {
+      if (has(n)) return { ok: false, reason };
+    }
+  }
+  return { ok: true, reason: '' };
+};
+
+// "快速问答 / RAG 模式"对 KB 的隐式要求：必须有 vector 或 keyword 索引。
+// 这里跟 `activeAgentTypePreset` 解耦——quick-answer 没有 agent_type，
+// 所以预设链路恒为 null，但 wiki-only KB 在 RAG 模式下检索结果永远为空，
+// 必须在 UI 上 disable + 提示，避免用户白选。
+const kbSatisfiesQuickAnswerMode = (kb: { capabilities?: KBCapabilities; ragEnabled?: boolean }): { ok: boolean; reason: string } => {
+  if (agentMode.value !== 'quick-answer') return { ok: true, reason: '' };
+  const hasRag = kb.capabilities
+    ? (!!kb.capabilities.vector || !!kb.capabilities.keyword)
+    : !!kb.ragEnabled;
+  if (hasRag) return { ok: true, reason: '' };
+  return { ok: false, reason: t('agentEditor.agentType.kbMismatch.quickAnswer') };
+};
+
+// KB 过滤后的选项（用于"指定知识库"下拉）— 不满足的仍保留但标记 disabled + tooltip
+const filteredKbOptionsForPreset = computed(() => {
+  const preset = activeAgentTypePreset.value;
+  return kbOptions.value.map(kb => {
+    const presetResult = kbSatisfiesPresetFilter(kb, preset);
+    const modeResult = kbSatisfiesQuickAnswerMode(kb);
+    const ok = presetResult.ok && modeResult.ok;
+    const reason = !presetResult.ok ? presetResult.reason : (!modeResult.ok ? modeResult.reason : '');
+    return { ...kb, disabled: !ok, disabledReason: reason };
+  });
+});
+const filteredMyKbOptions = computed(() => filteredKbOptionsForPreset.value.filter(kb => !kb.shared));
+const filteredSharedKbOptions = computed(() => filteredKbOptionsForPreset.value.filter(kb => kb.shared));
+
+// 当前选中的 KB 中，有多少个在新预设 / 模式下会被禁用（用于保存前提示）。
+// quick-answer 模式下 preset 恒为 null，但 wiki-only KB 仍属"被禁用"，
+// 所以这里不再依赖 preset 是否存在，直接看是否有被 disable 的选中项。
+const incompatibleSelectedKbCount = computed(() => {
+  if (kbSelectionMode.value !== 'selected') return 0;
+  const selected = new Set(formData.value.config.knowledge_bases || []);
+  return filteredKbOptionsForPreset.value.filter(kb => selected.has(kb.value) && kb.disabled).length;
+});
+
+// 应用一个预设的 config 到 formData.config（仅覆盖预设里明确设置的字段，其他不动）
+const applyAgentTypePreset = (preset: AgentTypePreset | null) => {
+  if (!preset || !preset.config) return;
+  const c = preset.config;
+  const target = formData.value.config;
+  if (c.system_prompt_id !== undefined) {
+    target.system_prompt_id = c.system_prompt_id;
+    // 根据 system_prompt_id 从已加载的模板列表里查出正文并回填到用户可见的 textarea
+    const tmpl = agentSystemPromptTemplates.value.find(t => t.id === c.system_prompt_id);
+    if (tmpl && typeof tmpl.content === 'string') {
+      target.system_prompt = tmpl.content;
+    } else {
+      // 模板列表还没加载完 / 或预设引用了不存在的 id：清空让用户感知到变化
+      target.system_prompt = '';
+      if (c.system_prompt_id) {
+        console.warn(`[AgentType] system_prompt_id "${c.system_prompt_id}" not found in agent_system_prompt templates`);
+      }
+    }
+  }
+  if (typeof c.temperature === 'number') target.temperature = c.temperature;
+  if (typeof c.max_iterations === 'number') target.max_iterations = c.max_iterations;
+  if (Array.isArray(c.allowed_tools)) target.allowed_tools = [...c.allowed_tools];
+  if (typeof c.retain_retrieval_history === 'boolean') target.retain_retrieval_history = c.retain_retrieval_history;
+  if (typeof c.faq_priority_enabled === 'boolean') target.faq_priority_enabled = c.faq_priority_enabled;
+  if (typeof c.web_search_enabled === 'boolean') target.web_search_enabled = c.web_search_enabled;
+  // supported_file_types 采用"强同步"语义：只有 data-analysis 需要限定 csv/xlsx，
+  // 其余类型切过来时必须清空，否则会从上一个类型带过来残留。
+  if (Array.isArray(c.supported_file_types)) {
+    target.supported_file_types = [...c.supported_file_types];
+  } else {
+    target.supported_file_types = [];
+  }
+  // kb_selection_mode 同步到 formData 以及 UI 状态（两处都要改，否则单选按钮不更新）
+  if (c.kb_selection_mode) {
+    target.kb_selection_mode = c.kb_selection_mode;
+    kbSelectionMode.value = c.kb_selection_mode;
+  }
+};
+
+// 用户手动切换类型 → 应用预设
+const onAgentTypeChange = (val: AgentType) => {
+  // 切换前捕获"名称/描述是否可安全覆盖"
+  // 已编辑过的用户输入（不等于任何预设默认值）绝不覆盖
+  const canOverrideName = isNameSystemGenerated(formData.value.name);
+  const canOverrideDesc = isDescriptionSystemGenerated(formData.value.description);
+
+  agentType.value = val;
+  const preset = agentTypePresets.value.find(p => p.id === val) || null;
+  if (val !== 'custom') {
+    applyAgentTypePreset(preset);
+  }
+
+  // 用新预设的默认名/描述刷新自动填充字段
+  if (canOverrideName) {
+    formData.value.name = getPresetDefaultName(preset);
+  }
+  if (canOverrideDesc) {
+    formData.value.description = getPresetDefaultDescription(preset);
+  }
+
+  // 如果新预设与当前已选 KB 冲突，软提示（不强制移除）
+  if (incompatibleSelectedKbCount.value > 0) {
+    MessagePlugin.warning(
+      t('agentEditor.agentType.kbIncompatibleWarn', { count: incompatibleSelectedKbCount.value }),
+      4000,
+    );
+  }
+};
 
 // 思考模式计算属性（直接绑定 boolean）
 const thinkingEnabled = computed({
@@ -1592,9 +2007,19 @@ const contextTemplatePlaceholder = computed(() => {
   return t('agent.editor.contextTemplatePlaceholder');
 });
 
-// 是否需要配置 ReRank 模型（有知识库能力时需要）
+// 是否需要配置 ReRank 模型（仅当关联的知识库中有 RAG 类型时需要）
 const needsRerankModel = computed(() => {
-  return hasKnowledgeBase.value;
+  if (!hasKnowledgeBase.value) return false;
+  const mode = kbSelectionMode.value;
+  if (mode === 'all') {
+    // "全部"模式下，只要存在任何一个 RAG 知识库就需要
+    return kbOptions.value.some(kb => kb.ragEnabled);
+  }
+  if (mode === 'selected') {
+    const selectedIds = formData.value.config.knowledge_bases || [];
+    return kbOptions.value.some(kb => selectedIds.includes(kb.value) && kb.ragEnabled);
+  }
+  return false;
 });
 
 // 监听可见性变化，重置表单
@@ -1603,19 +2028,19 @@ watch(() => props.visible, async (val) => {
     currentSection.value = props.initialSection || 'basic';
     // 先加载依赖数据（包括默认配置）
     await loadDependencies();
-    
+
     if (props.mode === 'edit' && props.agent) {
       // 深度复制对象以避免引用问题
       const agentData = JSON.parse(JSON.stringify(props.agent));
-      
+
       // 确保 config 对象存在
       if (!agentData.config) {
         agentData.config = JSON.parse(JSON.stringify(defaultFormData.config));
       }
-      
+
       // 补全可能缺失的字段
       agentData.config = { ...defaultFormData.config, ...agentData.config };
-      
+
       // 确保数组字段存在
       if (!agentData.config.suggested_prompts) agentData.config.suggested_prompts = [];
       if (!agentData.config.knowledge_bases) agentData.config.knowledge_bases = [];
@@ -1664,7 +2089,7 @@ watch(() => props.visible, async (val) => {
           newFormData.config.system_prompt = defaultAgentSystemPrompt.value;
         }
       } else {
-        // 快速问答模式使用 conversation-config 的默认提示词
+        // 快速问答模式：默认提示词来自 prompt-templates 的 default 项
         if (defaultNormalSystemPrompt.value) {
           newFormData.config.system_prompt = defaultNormalSystemPrompt.value;
         }
@@ -1685,9 +2110,29 @@ watch(() => props.visible, async (val) => {
         }
       }
       formData.value = newFormData;
-      kbSelectionMode.value = 'none';
+      // 新建智能体：知识库默认 "全部"，MCP / Skills 仍默认 "不使用"。
+      kbSelectionMode.value = 'all';
       mcpSelectionMode.value = 'none';
       skillsSelectionMode.value = 'none';
+
+      // 新建智能推理 agent 时，立即应用默认的 agent_type 预设
+      // （补齐 system_prompt / allowed_tools / kb_selection_mode 等），
+      // 否则用户在 modal 打开瞬间看到的"默认表单"和类型下拉显示的类型不一致。
+      if (newFormData.config.agent_mode === 'smart-reasoning') {
+        const defaultTypeId = newFormData.config.agent_type as AgentType;
+        const preset = agentTypePresets.value.find(p => p.id === defaultTypeId) || null;
+        if (defaultTypeId && defaultTypeId !== 'custom') {
+          applyAgentTypePreset(preset);
+        }
+        // 给新建表单补上"我的 XXX"默认名 + 预设描述，让用户可直接保存；
+        // 用户输入过的值不会被覆盖（此处是新建场景，字段必定为空）。
+        if (!formData.value.name) {
+          formData.value.name = getPresetDefaultName(preset);
+        }
+        if (!formData.value.description) {
+          formData.value.description = getPresetDefaultDescription(preset);
+        }
+      }
     }
   }
 });
@@ -1735,14 +2180,14 @@ const initSkillsSelectionMode = () => {
 const fillBuiltinAgentDefaults = () => {
   const config = formData.value.config;
   const isAgent = config.agent_mode === 'smart-reasoning';
-  
+
   if (isAgent) {
     // Agent 模式：使用 agent-config 的默认提示词
     if (!config.system_prompt && defaultAgentSystemPrompt.value) {
       config.system_prompt = defaultAgentSystemPrompt.value;
     }
   } else {
-    // 普通模式：使用 conversation-config 的默认系统提示词和上下文模板
+    // 普通模式：默认系统提示词、上下文模板等来自 prompt-templates 的 default 项
     if (!config.system_prompt && defaultNormalSystemPrompt.value) {
       config.system_prompt = defaultNormalSystemPrompt.value;
     }
@@ -1750,7 +2195,7 @@ const fillBuiltinAgentDefaults = () => {
       config.context_template = defaultContextTemplate.value;
     }
   }
-  
+
   // 通用默认值
   if (!config.rewrite_prompt_system && defaultRewritePromptSystem.value) {
     config.rewrite_prompt_system = defaultRewritePromptSystem.value;
@@ -1808,24 +2253,25 @@ watch(skillsSelectionMode, (mode) => {
 // 监听模式变化，自动调整配置
 watch(agentMode, (val, _oldVal) => {
   if (val === 'smart-reasoning') {
-    // 切换到 Agent 模式，根据知识库配置启用工具
+    // 切换到 Agent 模式，根据知识库配置启用工具。
+    // 注意：默认不注入 thinking / todo_write —— 它们用于显式反思或多步计划，
+    // 会显著增加 token 消耗，用户按需手动勾选。
     if (formData.value.config.allowed_tools.length === 0) {
-      if (hasKnowledgeBase.value) {
-        // 有知识库时，启用所有工具
-        formData.value.config.allowed_tools = [
-          'thinking',
-          'todo_write',
+      const tools: string[] = [];
+      if (hasRagKnowledgeBase.value) {
+        tools.push(
           'knowledge_search',
           'grep_chunks',
           'list_knowledge_chunks',
           'query_knowledge_graph',
           'get_document_info',
           'database_query',
-        ];
-      } else {
-        // 没有知识库时，只启用非知识库工具
-        formData.value.config.allowed_tools = ['thinking', 'todo_write'];
+        );
       }
+      if (hasWikiKnowledgeBase.value) {
+        tools.push(...wikiReadTools);
+      }
+      formData.value.config.allowed_tools = tools;
     }
     if (formData.value.config.max_iterations <= 1) {
       formData.value.config.max_iterations = 10;
@@ -1867,26 +2313,28 @@ watch(agentMode, (val, _oldVal) => {
   }
 });
 
-// 监听知识库配置变化，自动移除/添加知识库相关工具
+// 监听知识库启用状态变化：
+//   - 从"无"变"有"：自动补齐 RAG 基础工具，方便用户开箱即用（仅 seed 行为）；
+//   - 从"有"变"无"：**不再**自动擦工具，依赖不满足时由 `availableTools` 灰显
+//     + 运行时工具注册器过滤。`allowed_tools` 代表用户意图，只应在用户显式操作
+//     （切 agent_type / 切 agent_mode / 手勾工具）时变更。
+// 历史背景：旧版本在 KB 能力消失时会擦除 KB/Wiki 工具，导致用户切换
+// `kb_selection_mode` 到 "selected"、但尚未勾具体 KB 的过渡期里静默丢失工具，
+// 对默认工具全是 wiki_* 的内置"维基问答"智能体尤为致命。
 watch(hasKnowledgeBase, (hasKB, oldHasKB) => {
   // 如果当前在检索策略页面但没有知识库能力了，切换到基础设置
   if (!hasKB && currentSection.value === 'retrieval') {
     currentSection.value = 'basic';
   }
-  
+
   // 初始化期间或非 Agent 模式下不自动调整工具
   if (isInitializing.value || !isAgentMode.value) return;
-  
+
   if (hasKB && !oldHasKB) {
-    // 从无知识库变为有知识库，自动添加知识库相关工具
+    // 从无知识库变为有知识库，seed 默认的 RAG 工具（仅补齐未勾的）
     const currentTools = formData.value.config.allowed_tools || [];
     const toolsToAdd = knowledgeBaseTools.filter((tool: string) => !currentTools.includes(tool));
     formData.value.config.allowed_tools = [...currentTools, ...toolsToAdd];
-  } else if (!hasKB && oldHasKB) {
-    // 从有知识库变为无知识库，移除知识库相关工具
-    formData.value.config.allowed_tools = formData.value.config.allowed_tools.filter(
-      (tool: string) => !knowledgeBaseTools.includes(tool)
-    );
   }
 });
 
@@ -1937,12 +2385,17 @@ const loadDependencies = async () => {
     const myKbs: typeof kbOptions.value = [];
     if (kbRes.data) {
       kbRes.data.forEach((kb: any) => {
-        myKbs.push({ 
-          label: kb.name, 
+        const strategy = kb.indexing_strategy;
+        const caps: KBCapabilities | undefined = kb.capabilities;
+        myKbs.push({
+          label: kb.name,
           value: kb.id,
           type: kb.type || 'document',
           count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
           shared: false,
+          ragEnabled: caps ? (caps.vector || caps.keyword) : (!strategy || strategy.vector_enabled || strategy.keyword_enabled),
+          wikiEnabled: caps ? caps.wiki : (strategy?.wiki_enabled || false),
+          capabilities: caps,
         });
       });
     }
@@ -1956,6 +2409,7 @@ const loadDependencies = async () => {
         sharedList.forEach((shared: any) => {
           const kb = shared.knowledge_base;
           if (!kb || myKbIds.has(kb.id)) return;
+          const caps: KBCapabilities | undefined = kb.capabilities;
           sharedKbs.push({
             label: kb.name,
             value: kb.id,
@@ -1963,6 +2417,9 @@ const loadDependencies = async () => {
             count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
             shared: true,
             orgName: shared.org_name,
+            ragEnabled: caps ? (caps.vector || caps.keyword) : (!kb.indexing_strategy || kb.indexing_strategy.vector_enabled || kb.indexing_strategy.keyword_enabled),
+            wikiEnabled: caps ? caps.wiki : (kb.indexing_strategy?.wiki_enabled || false),
+            capabilities: caps,
           });
         });
       }
@@ -1996,6 +2453,54 @@ const loadDependencies = async () => {
       skillsAvailable.value = false;
     }
 
+    // 加载智能体类型预设（smart-reasoning 模式下的"类型"下拉）
+    try {
+      const presetsRes: any = await getAgentTypePresets();
+      if (presetsRes?.data && Array.isArray(presetsRes.data)) {
+        agentTypePresets.value = presetsRes.data as AgentTypePreset[];
+      }
+    } catch (e) {
+      console.warn('Failed to load agent type presets', e);
+    }
+
+    // 加载 prompt-templates 用于：
+    //   1. agent_system_prompt 列表（applyAgentTypePreset 通过 system_prompt_id 回填正文）
+    //   2. 普通模式（builtin-quick-answer）创建时的默认 system_prompt / context_template /
+    //      rewrite / fallback —— 取每个分类里 default: true 的那条
+    try {
+      const tmplRes = await getPromptTemplates();
+      const cfg = tmplRes?.data;
+      if (cfg?.agent_system_prompt && Array.isArray(cfg.agent_system_prompt)) {
+        agentSystemPromptTemplates.value = cfg.agent_system_prompt;
+        // Smart-reasoning (Progressive RAG) 默认提示词：取 mode='rag' &&
+        // default 的那条；找不到就退化到第一条 mode==='rag'。这块取代了
+        // 之前的 getAgentConfig() —— 后端实现就是从同一份模板里挑这条。
+        const ragDefault =
+          cfg.agent_system_prompt.find(t => t.mode === 'rag' && t.default) ||
+          cfg.agent_system_prompt.find(t => t.mode === 'rag');
+        if (ragDefault?.content) {
+          defaultAgentSystemPrompt.value = ragDefault.content;
+        }
+      }
+      const pickDefault = (arr?: PromptTemplate[]): PromptTemplate | undefined =>
+        Array.isArray(arr) ? arr.find(t => t.default) : undefined;
+      const sysPrompt = pickDefault(cfg?.system_prompt);
+      if (sysPrompt?.content) defaultNormalSystemPrompt.value = sysPrompt.content;
+      const ctxTmpl = pickDefault(cfg?.context_template);
+      if (ctxTmpl?.content) defaultContextTemplate.value = ctxTmpl.content;
+      const rewriteTmpl = pickDefault(cfg?.rewrite);
+      if (rewriteTmpl?.content) defaultRewritePromptSystem.value = rewriteTmpl.content;
+      if (rewriteTmpl?.user) defaultRewritePromptUser.value = rewriteTmpl.user;
+      // fallback templates split into fixed-response (default) and model-mode (mode === 'model').
+      const fallbackList = Array.isArray(cfg?.fallback) ? cfg.fallback : [];
+      const fixedFallback = fallbackList.find(t => t.default && t.mode !== 'model');
+      if (fixedFallback?.content) defaultFallbackResponse.value = fixedFallback.content;
+      const modelFallback = fallbackList.find(t => t.mode === 'model' && t.default) || fallbackList.find(t => t.mode === 'model');
+      if (modelFallback?.content) defaultFallbackPrompt.value = modelFallback.content;
+    } catch (e) {
+      console.warn('Failed to load prompt templates', e);
+    }
+
     // 加载存储引擎可用状态（用于图片存储 provider 选择）
     try {
       const statusRes = await getStorageEngineStatus();
@@ -2026,53 +2531,19 @@ const loadDependencies = async () => {
       console.warn('Failed to load placeholders', e);
     }
 
-    // 加载 Agent 模式默认提示词（来自 agent-config，用于 smart-reasoning 模式）
-    const agentConfig = await getAgentConfig();
-    if (agentConfig.data?.system_prompt) {
-      defaultAgentSystemPrompt.value = agentConfig.data.system_prompt;
-    }
-
-    // 加载系统默认配置（来自 conversation-config，用于普通模式 quick-answer）
-    const conversationConfig = await getConversationConfig();
-    if (conversationConfig.data?.prompt) {
-      defaultNormalSystemPrompt.value = conversationConfig.data.prompt;
-    }
-    if (conversationConfig.data?.context_template) {
-      defaultContextTemplate.value = conversationConfig.data.context_template;
-    }
-    if (conversationConfig.data?.rewrite_prompt_system) {
-      defaultRewritePromptSystem.value = conversationConfig.data.rewrite_prompt_system;
-    }
-    if (conversationConfig.data?.rewrite_prompt_user) {
-      defaultRewritePromptUser.value = conversationConfig.data.rewrite_prompt_user;
-    }
-    if (conversationConfig.data?.fallback_prompt) {
-      defaultFallbackPrompt.value = conversationConfig.data.fallback_prompt;
-    }
-    if (conversationConfig.data?.fallback_response) {
-      defaultFallbackResponse.value = conversationConfig.data.fallback_response;
-    }
-    // 加载默认检索参数
-    if (conversationConfig.data?.embedding_top_k) {
-      defaultEmbeddingTopK.value = conversationConfig.data.embedding_top_k;
-    }
-    if (conversationConfig.data?.keyword_threshold !== undefined) {
-      defaultKeywordThreshold.value = conversationConfig.data.keyword_threshold;
-    }
-    if (conversationConfig.data?.vector_threshold !== undefined) {
-      defaultVectorThreshold.value = conversationConfig.data.vector_threshold;
-    }
-    if (conversationConfig.data?.rerank_top_k) {
-      defaultRerankTopK.value = conversationConfig.data.rerank_top_k;
-    }
-    if (conversationConfig.data?.rerank_threshold !== undefined) {
-      defaultRerankThreshold.value = conversationConfig.data.rerank_threshold;
-    }
-    if (conversationConfig.data?.max_completion_tokens) {
-      defaultMaxCompletionTokens.value = conversationConfig.data.max_completion_tokens;
-    }
-    if (conversationConfig.data?.temperature !== undefined) {
-      defaultTemperature.value = conversationConfig.data.temperature;
+    // 加载租户检索默认参数（embedding_top_k / 阈值 / rerank top_k 等）。
+    // temperature 与 max_completion_tokens 不在 RetrievalConfig 中，保持组件内
+    // 硬编码默认值（0.7 / 2048）；用户在 agent 表单里可逐项调整。
+    try {
+      const retrievalRes: any = await getTenantRetrievalConfig();
+      const rc = retrievalRes?.data;
+      if (rc?.embedding_top_k) defaultEmbeddingTopK.value = rc.embedding_top_k;
+      if (rc?.keyword_threshold !== undefined) defaultKeywordThreshold.value = rc.keyword_threshold;
+      if (rc?.vector_threshold !== undefined) defaultVectorThreshold.value = rc.vector_threshold;
+      if (rc?.rerank_top_k) defaultRerankTopK.value = rc.rerank_top_k;
+      if (rc?.rerank_threshold !== undefined) defaultRerankThreshold.value = rc.rerank_threshold;
+    } catch (e) {
+      console.warn('Failed to load retrieval config', e);
     }
   } catch (e) {
     console.error('Failed to load dependencies', e);
@@ -2099,7 +2570,7 @@ const filteredPlaceholders = computed(() => {
     return availablePlaceholders.value;
   }
   const prefix = placeholderPrefix.value.toLowerCase();
-  return availablePlaceholders.value.filter(p => 
+  return availablePlaceholders.value.filter(p =>
     p.name.toLowerCase().startsWith(prefix)
   );
 });
@@ -2110,7 +2581,7 @@ const filteredContextPlaceholders = computed(() => {
     return contextTemplatePlaceholders.value;
   }
   const prefix = contextPlaceholderPrefix.value.toLowerCase();
-  return contextTemplatePlaceholders.value.filter(p => 
+  return contextTemplatePlaceholders.value.filter(p =>
     p.name.toLowerCase().startsWith(prefix)
   );
 });
@@ -2121,7 +2592,7 @@ const filteredRewriteSystemPlaceholders = computed(() => {
     return rewriteSystemPlaceholders.value;
   }
   const prefix = rewriteSystemPopup.value.prefix.toLowerCase();
-  return rewriteSystemPlaceholders.value.filter(p => 
+  return rewriteSystemPlaceholders.value.filter(p =>
     p.name.toLowerCase().startsWith(prefix)
   );
 });
@@ -2132,7 +2603,7 @@ const filteredRewriteUserPlaceholders = computed(() => {
     return rewritePlaceholders.value;
   }
   const prefix = rewriteUserPopup.value.prefix.toLowerCase();
-  return rewritePlaceholders.value.filter(p => 
+  return rewritePlaceholders.value.filter(p =>
     p.name.toLowerCase().startsWith(prefix)
   );
 });
@@ -2143,7 +2614,7 @@ const filteredFallbackPlaceholders = computed(() => {
     return fallbackPlaceholders.value;
   }
   const prefix = fallbackPromptPopup.value.prefix.toLowerCase();
-  return fallbackPlaceholders.value.filter(p => 
+  return fallbackPlaceholders.value.filter(p =>
     p.name.toLowerCase().startsWith(prefix)
   );
 });
@@ -2165,19 +2636,19 @@ const getTextareaElement = (): HTMLTextAreaElement | null => {
 const calculateCursorPosition = (textarea: HTMLTextAreaElement) => {
   const cursorPos = textarea.selectionStart;
   const textBeforeCursor = formData.value.config.system_prompt.substring(0, cursorPos);
-  
+
   const style = window.getComputedStyle(textarea);
   const textareaRect = textarea.getBoundingClientRect();
-  
+
   const lineHeight = parseFloat(style.lineHeight) || 20;
   const paddingTop = parseFloat(style.paddingTop) || 0;
   const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  
+
   // 计算当前行号
   const lines = textBeforeCursor.split('\n');
   const currentLine = lines.length - 1;
   const currentLineText = lines[currentLine];
-  
+
   // 创建临时 span 计算文本宽度
   const span = document.createElement('span');
   span.style.font = style.font;
@@ -2188,12 +2659,12 @@ const calculateCursorPosition = (textarea: HTMLTextAreaElement) => {
   document.body.appendChild(span);
   const textWidth = span.offsetWidth;
   document.body.removeChild(span);
-  
+
   const scrollTop = textarea.scrollTop;
   const top = textareaRect.top + paddingTop + (currentLine * lineHeight) - scrollTop + lineHeight + 4;
   const scrollLeft = textarea.scrollLeft;
   const left = textareaRect.left + paddingLeft + textWidth - scrollLeft;
-  
+
   return { top, left };
 };
 
@@ -2201,10 +2672,10 @@ const calculateCursorPosition = (textarea: HTMLTextAreaElement) => {
 const checkAndShowPlaceholderPopup = () => {
   const textarea = getTextareaElement();
   if (!textarea) return;
-  
+
   const cursorPos = textarea.selectionStart;
   const textBeforeCursor = formData.value.config.system_prompt.substring(0, cursorPos);
-  
+
   // 查找最近的 {{ 位置
   let lastOpenPos = -1;
   for (let i = textBeforeCursor.length - 1; i >= 1; i--) {
@@ -2216,16 +2687,16 @@ const checkAndShowPlaceholderPopup = () => {
       }
     }
   }
-  
+
   if (lastOpenPos === -1) {
     showPlaceholderPopup.value = false;
     placeholderPrefix.value = '';
     return;
   }
-  
+
   const textAfterOpen = textBeforeCursor.substring(lastOpenPos + 2);
   placeholderPrefix.value = textAfterOpen;
-  
+
   const filtered = filteredPlaceholders.value;
   if (filtered.length > 0) {
     nextTick(() => {
@@ -2256,17 +2727,17 @@ const handlePromptInput = () => {
 const insertPlaceholder = (placeholderName: string, fromPopup: boolean = false) => {
   const textarea = getTextareaElement();
   if (!textarea) return;
-  
+
   showPlaceholderPopup.value = false;
   placeholderPrefix.value = '';
   selectedPlaceholderIndex.value = 0;
-  
+
   nextTick(() => {
     const cursorPos = textarea.selectionStart;
     const currentValue = formData.value.config.system_prompt || '';
     const textBeforeCursor = currentValue.substring(0, cursorPos);
     const textAfterCursor = currentValue.substring(cursorPos);
-    
+
     // 只有从下拉列表选择时才查找 {{ 并替换
     if (fromPopup) {
       let lastOpenPos = -1;
@@ -2276,12 +2747,12 @@ const insertPlaceholder = (placeholderName: string, fromPopup: boolean = false) 
           break;
         }
       }
-      
+
       if (lastOpenPos !== -1) {
         const textBeforeOpen = currentValue.substring(0, lastOpenPos);
         const newValue = textBeforeOpen + `{{${placeholderName}}}` + textAfterCursor;
         formData.value.config.system_prompt = newValue;
-        
+
         nextTick(() => {
           const newCursorPos = textBeforeOpen.length + placeholderName.length + 4;
           textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2290,11 +2761,11 @@ const insertPlaceholder = (placeholderName: string, fromPopup: boolean = false) 
         return;
       }
     }
-    
+
     // 直接在光标位置插入完整占位符
     const newValue = textBeforeCursor + `{{${placeholderName}}}` + textAfterCursor;
     formData.value.config.system_prompt = newValue;
-    
+
     nextTick(() => {
       const newCursorPos = cursorPos + placeholderName.length + 4;
       textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2320,18 +2791,18 @@ const getContextTemplateTextareaElement = (): HTMLTextAreaElement | null => {
 const calculateContextCursorPosition = (textarea: HTMLTextAreaElement) => {
   const cursorPos = textarea.selectionStart;
   const textBeforeCursor = formData.value.config.context_template.substring(0, cursorPos);
-  
+
   const style = window.getComputedStyle(textarea);
   const textareaRect = textarea.getBoundingClientRect();
-  
+
   const lineHeight = parseFloat(style.lineHeight) || 20;
   const paddingTop = parseFloat(style.paddingTop) || 0;
   const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  
+
   const lines = textBeforeCursor.split('\n');
   const currentLine = lines.length - 1;
   const currentLineText = lines[currentLine];
-  
+
   const span = document.createElement('span');
   span.style.font = style.font;
   span.style.visibility = 'hidden';
@@ -2341,12 +2812,12 @@ const calculateContextCursorPosition = (textarea: HTMLTextAreaElement) => {
   document.body.appendChild(span);
   const textWidth = span.offsetWidth;
   document.body.removeChild(span);
-  
+
   const scrollTop = textarea.scrollTop;
   const top = textareaRect.top + paddingTop + (currentLine * lineHeight) - scrollTop + lineHeight + 4;
   const scrollLeft = textarea.scrollLeft;
   const left = textareaRect.left + paddingLeft + textWidth - scrollLeft;
-  
+
   return { top, left };
 };
 
@@ -2354,10 +2825,10 @@ const calculateContextCursorPosition = (textarea: HTMLTextAreaElement) => {
 const checkAndShowContextPlaceholderPopup = () => {
   const textarea = getContextTemplateTextareaElement();
   if (!textarea) return;
-  
+
   const cursorPos = textarea.selectionStart;
   const textBeforeCursor = formData.value.config.context_template.substring(0, cursorPos);
-  
+
   let lastOpenPos = -1;
   for (let i = textBeforeCursor.length - 1; i >= 1; i--) {
     if (textBeforeCursor[i] === '{' && textBeforeCursor[i - 1] === '{') {
@@ -2368,16 +2839,16 @@ const checkAndShowContextPlaceholderPopup = () => {
       }
     }
   }
-  
+
   if (lastOpenPos === -1) {
     showContextPlaceholderPopup.value = false;
     contextPlaceholderPrefix.value = '';
     return;
   }
-  
+
   const textAfterOpen = textBeforeCursor.substring(lastOpenPos + 2);
   contextPlaceholderPrefix.value = textAfterOpen;
-  
+
   const filtered = filteredContextPlaceholders.value;
   if (filtered.length > 0) {
     nextTick(() => {
@@ -2408,17 +2879,17 @@ const handleContextTemplateInput = () => {
 const insertContextPlaceholder = (placeholderName: string, fromPopup: boolean = false) => {
   const textarea = getContextTemplateTextareaElement();
   if (!textarea) return;
-  
+
   showContextPlaceholderPopup.value = false;
   contextPlaceholderPrefix.value = '';
   selectedContextPlaceholderIndex.value = 0;
-  
+
   nextTick(() => {
     const cursorPos = textarea.selectionStart;
     const currentValue = formData.value.config.context_template || '';
     const textBeforeCursor = currentValue.substring(0, cursorPos);
     const textAfterCursor = currentValue.substring(cursorPos);
-    
+
     // 只有从下拉列表选择时才查找 {{ 并替换
     if (fromPopup) {
       let lastOpenPos = -1;
@@ -2428,12 +2899,12 @@ const insertContextPlaceholder = (placeholderName: string, fromPopup: boolean = 
           break;
         }
       }
-      
+
       if (lastOpenPos !== -1) {
         const textBeforeOpen = currentValue.substring(0, lastOpenPos);
         const newValue = textBeforeOpen + `{{${placeholderName}}}` + textAfterCursor;
         formData.value.config.context_template = newValue;
-        
+
         nextTick(() => {
           const newCursorPos = textBeforeOpen.length + placeholderName.length + 4;
           textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2442,11 +2913,11 @@ const insertContextPlaceholder = (placeholderName: string, fromPopup: boolean = 
         return;
       }
     }
-    
+
     // 直接在光标位置插入完整占位符
     const newValue = textBeforeCursor + `{{${placeholderName}}}` + textAfterCursor;
     formData.value.config.context_template = newValue;
-    
+
     nextTick(() => {
       const newCursorPos = cursorPos + placeholderName.length + 4;
       textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2481,13 +2952,13 @@ const calculateGenericCursorPosition = (textarea: HTMLTextAreaElement, fieldValu
   const lines = textBeforeCursor.split('\n');
   const currentLine = lines.length - 1;
   const currentLineText = lines[currentLine];
-  
+
   const textareaRect = textarea.getBoundingClientRect();
   const style = window.getComputedStyle(textarea);
   const lineHeight = parseFloat(style.lineHeight) || 20;
   const paddingTop = parseFloat(style.paddingTop) || 0;
   const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  
+
   const span = document.createElement('span');
   span.style.font = style.font;
   span.style.visibility = 'hidden';
@@ -2497,12 +2968,12 @@ const calculateGenericCursorPosition = (textarea: HTMLTextAreaElement, fieldValu
   document.body.appendChild(span);
   const textWidth = span.offsetWidth;
   document.body.removeChild(span);
-  
+
   const scrollTop = textarea.scrollTop;
   const top = textareaRect.top + paddingTop + (currentLine * lineHeight) - scrollTop + lineHeight + 4;
   const scrollLeft = textarea.scrollLeft;
   const left = textareaRect.left + paddingLeft + textWidth - scrollLeft;
-  
+
   return { top, left };
 };
 
@@ -2515,11 +2986,11 @@ const checkAndShowGenericPlaceholderPopup = (
 ) => {
   const textarea = getGenericTextareaElement(type);
   if (!textarea) return;
-  
+
   const cursorPos = textarea.selectionStart;
   const fieldValue = String(formData.value.config[fieldKey] || '');
   const textBeforeCursor = fieldValue.substring(0, cursorPos);
-  
+
   let lastOpenPos = -1;
   for (let i = textBeforeCursor.length - 1; i >= 1; i--) {
     if (textBeforeCursor[i] === '{' && textBeforeCursor[i - 1] === '{') {
@@ -2530,16 +3001,16 @@ const checkAndShowGenericPlaceholderPopup = (
       }
     }
   }
-  
+
   if (lastOpenPos === -1) {
     popup.value.show = false;
     popup.value.prefix = '';
     return;
   }
-  
+
   const textAfterOpen = textBeforeCursor.substring(lastOpenPos + 2);
   popup.value.prefix = textAfterOpen;
-  
+
   if (filteredPlaceholders.length > 0) {
     nextTick(() => {
       const position = calculateGenericCursorPosition(textarea, fieldValue);
@@ -2589,7 +3060,7 @@ const handleFallbackPromptInput = () => {
 const insertGenericPlaceholder = (type: 'rewriteSystem' | 'rewriteUser' | 'fallback', placeholderName: string, fromPopup: boolean = false) => {
   const textarea = getGenericTextareaElement(type);
   if (!textarea) return;
-  
+
   const popupMap = {
     rewriteSystem: rewriteSystemPopup,
     rewriteUser: rewriteUserPopup,
@@ -2600,20 +3071,20 @@ const insertGenericPlaceholder = (type: 'rewriteSystem' | 'rewriteUser' | 'fallb
     rewriteUser: 'rewrite_prompt_user',
     fallback: 'fallback_prompt',
   };
-  
+
   const popup = popupMap[type];
   const fieldKey = fieldKeyMap[type];
-  
+
   popup.value.show = false;
   popup.value.prefix = '';
   popup.value.selectedIndex = 0;
-  
+
   nextTick(() => {
     const cursorPos = textarea.selectionStart;
     const currentValue = String(formData.value.config[fieldKey] || '');
     const textBeforeCursor = currentValue.substring(0, cursorPos);
     const textAfterCursor = currentValue.substring(cursorPos);
-    
+
     // 只有从下拉列表选择时才查找 {{ 并替换
     if (fromPopup) {
       let lastOpenPos = -1;
@@ -2623,12 +3094,12 @@ const insertGenericPlaceholder = (type: 'rewriteSystem' | 'rewriteUser' | 'fallb
           break;
         }
       }
-      
+
       if (lastOpenPos !== -1) {
         const textBeforeOpen = currentValue.substring(0, lastOpenPos);
         const newValue = textBeforeOpen + `{{${placeholderName}}}` + textAfterCursor;
         (formData.value.config as any)[fieldKey] = newValue;
-        
+
         nextTick(() => {
           const newCursorPos = textBeforeOpen.length + placeholderName.length + 4;
           textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2637,11 +3108,11 @@ const insertGenericPlaceholder = (type: 'rewriteSystem' | 'rewriteUser' | 'fallb
         return;
       }
     }
-    
+
     // 直接在光标位置插入完整占位符
     const newValue = textBeforeCursor + `{{${placeholderName}}}` + textAfterCursor;
     (formData.value.config as any)[fieldKey] = newValue;
-    
+
     nextTick(() => {
       const newCursorPos = cursorPos + placeholderName.length + 4;
       textarea.setSelectionRange(newCursorPos, newCursorPos);
@@ -2810,6 +3281,30 @@ const handleSystemPromptTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.system_prompt = template.content;
 };
 
+// Agent 系统提示词的"恢复默认"：
+// 当前选中了非 custom 的智能体类型时，"默认"应当是该类型预设绑定的提示词
+// （比如 Wiki 问答 → wiki_researcher），而不是 agent_system_prompt 模板表里
+// 全局 default: true 的那一条。只有当类型为 custom 或找不到预设绑定的模板时，
+// 才回退到 PromptTemplateSelector 传来的全局默认模板。
+const handleAgentSystemPromptResetDefault = (fallback: PromptTemplate) => {
+  const typeId = agentType.value;
+  if (typeId && typeId !== 'custom') {
+    const preset = agentTypePresets.value.find(p => p.id === typeId);
+    const presetPromptId = preset?.config?.system_prompt_id;
+    if (presetPromptId) {
+      const tmpl = agentSystemPromptTemplates.value.find(t => t.id === presetPromptId);
+      if (tmpl && typeof tmpl.content === 'string') {
+        formData.value.config.system_prompt = tmpl.content;
+        formData.value.config.system_prompt_id = tmpl.id;
+        return;
+      }
+    }
+  }
+  // Fallback：没有合适的类型预设，用 PromptTemplateSelector 找到的全局默认
+  formData.value.config.system_prompt = fallback.content;
+  formData.value.config.system_prompt_id = fallback.id;
+};
+
 const handleContextTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.context_template = template.content;
 };
@@ -2901,12 +3396,9 @@ const handleSave = async () => {
     return;
   }
 
-  // 校验 ReRank 模型（当需要时必填）
-  if (needsRerankModel.value && !formData.value.config.rerank_model_id) {
-    MessagePlugin.error(t('agent.editor.rerankModelRequired'));
-    currentSection.value = 'knowledge';
-    return;
-  }
+  // ReRank 模型（可选）
+  // 运行时若 rerank_model_id 为空会自动跳过 rerank，无需在保存时强制要求。
+  // 仅当用户已选择 rerank 模型时，才校验相关参数。
 
   // 过滤空推荐问题
   if (formData.value.config.suggested_prompts) {
@@ -3007,7 +3499,7 @@ const handleSave = async () => {
 
 .sidebar-title {
   margin: 0;
-  font-family: "PingFang SC";
+  font-family: var(--app-font-family);
   font-size: 18px;
   font-weight: 600;
   color: var(--td-text-color-primary);
@@ -3027,7 +3519,7 @@ const handleSave = async () => {
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
-  font-family: "PingFang SC";
+  font-family: var(--app-font-family);
   font-size: 14px;
   color: var(--td-text-color-secondary);
 
@@ -3090,24 +3582,8 @@ const handleSave = async () => {
     margin: 0;
     line-height: 1.5;
 
-    .section-doc-link {
+    .doc-link {
       margin-left: 8px;
-      color: var(--td-brand-color);
-      text-decoration: none;
-      font-weight: 500;
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      transition: color 0.2s ease;
-
-      .link-icon {
-        font-size: 14px;
-      }
-
-      &:hover {
-        color: var(--td-brand-color-hover);
-        text-decoration: underline;
-      }
     }
   }
 }
@@ -3133,10 +3609,32 @@ const handleSave = async () => {
   &.setting-row-vertical {
     flex-direction: column;
     gap: 12px;
-    
+
     .setting-info {
       max-width: 100%;
       padding-right: 0;
+    }
+  }
+
+  // 强调行：用于"智能体类型"这类对用户影响最大、需要突出的关键配置。
+  // 视觉上只做极轻度强调 —— 左侧 3px 品牌色竖条 + label 加粗。
+  &.setting-row--emphasize {
+    position: relative;
+    padding-left: 14px;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 22px;
+      bottom: 22px;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--td-brand-color, #0052d9);
+    }
+
+    .setting-info label {
+      font-weight: 600;
     }
   }
 }
@@ -3156,7 +3654,7 @@ const handleSave = async () => {
     align-items: center;
     justify-content: space-between;
     margin-bottom: 4px;
-    
+
     label {
       margin-bottom: 0;
     }
@@ -3180,6 +3678,10 @@ const handleSave = async () => {
     color: var(--td-text-color-secondary);
     margin: 0;
     line-height: 1.5;
+
+    .hint {
+      color: var(--td-warning-color, var(--td-text-color-placeholder));
+    }
   }
 }
 
@@ -3221,6 +3723,7 @@ const handleSave = async () => {
   color: var(--td-brand-color);
   margin-top: 4px;
   text-decoration: none;
+
   &:hover {
     text-decoration: underline;
   }
@@ -3290,7 +3793,7 @@ const handleSave = async () => {
 .slider-value {
   width: 40px;
   text-align: right;
-  font-family: monospace;
+  font-family: var(--app-font-family-mono);
   font-size: 14px;
   color: var(--td-text-color-primary);
 }
@@ -3313,109 +3816,348 @@ const handleSave = async () => {
   }
 }
 
-// Radio-group 样式优化，符合项目主题风格
-:deep(.t-radio-group) {
-  .t-radio-group--filled {
-    background: var(--td-bg-color-secondarycontainer);
+// ===== 工具配置：overview 面板 =====
+.tools-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 10px;
+  border: 1px solid var(--td-component-stroke);
+}
+
+.tools-overview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+
+  &--preset {
+    border-top: 1px dashed var(--td-component-stroke);
+    padding-top: 10px;
+    justify-content: space-between;
   }
-  .t-radio-button {
-    border-color: var(--td-component-stroke);
+}
 
-    &:hover:not(.t-is-disabled) {
-      border-color: var(--td-brand-color);
-      color: var(--td-brand-color);
+.tools-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-container);
+  border-radius: 999px;
+  border: 1px solid var(--td-component-stroke);
+
+  .t-icon {
+    color: var(--td-text-color-secondary);
+    font-size: 14px;
+  }
+
+  .tools-status-metric {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+
+    strong {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--td-text-color-primary);
     }
+  }
 
-    &.t-is-checked {
-      background: var(--td-brand-color);
-      border-color: var(--td-brand-color);
-      color: var(--td-text-color-anti);
+  .tools-status-sep {
+    color: var(--td-text-color-placeholder);
+  }
 
-      &:hover:not(.t-is-disabled) {
-        background: var(--td-brand-color);
-        border-color: var(--td-brand-color-active);
-        color: var(--td-text-color-anti);
-      }
-    }
+  &--warn {
+    color: var(--td-warning-color);
+    background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    border-color: var(--td-warning-color-light, #fcd7b6);
 
-    // 禁用状态样式
-    &.t-is-disabled {
-      background: var(--td-bg-color-secondarycontainer);
-      border-color: var(--td-component-stroke);
-      color: var(--td-text-color-placeholder);
-      cursor: not-allowed;
-      opacity: 0.6;
-
-      &.t-is-checked {
-        background: var(--td-bg-color-secondarycontainer);
-        border-color: var(--td-component-stroke);
-        color: var(--td-text-color-disabled);
-      }
+    .t-icon {
+      color: var(--td-warning-color);
     }
   }
 }
 
-// 工具选择样式
-.tools-checkbox-group {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+// ===== 按组的卡片网格 =====
+.tool-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
   width: 100%;
 }
 
-.tool-checkbox-item {
+.tool-group {
   display: flex;
-  align-items: flex-start;
-  padding: 12px 16px;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
-  border: 1px solid var(--td-component-stroke);
-  transition: all 0.2s ease;
+  flex-direction: column;
+  gap: 10px;
+}
 
-  &:hover {
-    border-color: var(--td-brand-color);
-    background: var(--td-success-color-light);
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+
+  .tool-group-bar {
+    display: inline-block;
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--td-brand-color);
   }
 
+  .tool-group-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+    letter-spacing: 0.2px;
+  }
+
+  .tool-group-count {
+    min-width: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+    color: var(--td-text-color-secondary);
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 999px;
+    text-align: center;
+    line-height: 18px;
+  }
+
+  .tool-group-warning {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: var(--td-warning-color);
+    background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    border: 1px solid var(--td-warning-color-light, #fcd7b6);
+    border-radius: 999px;
+
+    .t-icon {
+      font-size: 13px;
+    }
+  }
+}
+
+// 不同分组的左侧色条
+.tool-group--base .tool-group-bar {
+  background: var(--td-gray-color-6, #a0a7ab);
+}
+
+.tool-group--rag .tool-group-bar {
+  background: var(--td-brand-color);
+}
+
+.tool-group--wiki_read .tool-group-bar {
+  background: var(--td-success-color, #2ba471);
+}
+
+.tool-group--wiki_edit .tool-group-bar {
+  background: var(--td-warning-color, #ed7b2f);
+}
+
+.tool-group--wiki_issue .tool-group-bar {
+  background: var(--td-purple-5, #8e56dd);
+}
+
+.tool-group--data .tool-group-bar {
+  background: var(--td-cyan-6, #09a3b7);
+}
+
+// 统一两列网格；小屏退化单列
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+
+  @media (max-width: 720px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+// ===== 工具卡片（基于 t-checkbox 的 label 结构） =====
+.tool-card {
+  margin: 0; // 清掉 TDesign checkbox 默认外边距
+  padding: 12px 14px;
+  background: var(--td-bg-color-container);
+  border-radius: 8px;
+  border: 1px solid var(--td-component-stroke);
+  transition: border-color .2s, background .2s;
+  cursor: pointer;
+  overflow: hidden;
+
+  &:hover:not(.tool-card--disabled) {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color-1, rgba(0, 82, 217, 0.04));
+  }
+
+  // checkbox 的勾选框 + label 改造
   :deep(.t-checkbox__input) {
     margin-top: 2px;
+    flex-shrink: 0;
   }
 
   :deep(.t-checkbox__label) {
     flex: 1;
+    min-width: 0;
+    padding-left: 10px;
+  }
+
+  &.t-is-checked {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color-1, rgba(0, 82, 217, 0.06));
+  }
+
+  &--disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  &--danger {
+    border-color: var(--td-warning-color-light, #fcd7b6);
+
+    &:hover:not(.tool-card--disabled) {
+      border-color: var(--td-warning-color);
+      background: var(--td-warning-color-1, rgba(237, 118, 20, 0.06));
+    }
+
+    &.t-is-checked {
+      border-color: var(--td-warning-color);
+      background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    }
   }
 }
 
-.tool-item-content {
+.tool-card-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
-.tool-name {
-  font-size: 14px;
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-card-name {
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--td-text-color-primary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.tool-desc {
+.tool-card-badge {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  color: var(--td-warning-color);
+  background: transparent;
+  border: 1px solid var(--td-warning-color-light, #fcd7b6);
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+
+.tool-card-desc {
   font-size: 12px;
   color: var(--td-text-color-secondary);
   line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.tool-disabled-hint {
+.tool-card-hint {
   font-size: 11px;
   color: var(--td-warning-color);
   font-style: italic;
+  line-height: 1.4;
 }
 
-.tool-disabled {
-  opacity: 0.6;
-  
-  .tool-name, .tool-desc {
+.tool-card--disabled {
+
+  .tool-card-name,
+  .tool-card-desc {
     color: var(--td-text-color-placeholder);
   }
+}
+
+// ===== 有效工具预览（芯片组）=====
+.effective-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px;
+  background: var(--td-bg-color-container);
+  border-radius: 8px;
+  border: 1px dashed var(--td-component-stroke);
+  min-height: 52px;
+  align-items: flex-start;
+}
+
+.effective-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-1, rgba(0, 82, 217, 0.08));
+  border: 1px solid var(--td-brand-color-2, rgba(0, 82, 217, 0.16));
+  border-radius: 999px;
+  max-width: 100%;
+}
+
+.effective-chip-label {
+  font-weight: 500;
+}
+
+.effective-chip-reason {
+  font-size: 11px;
+  color: var(--td-warning-color);
+  font-style: normal;
+
+  &::before {
+    content: "· ";
+    color: var(--td-text-color-placeholder);
+    margin-right: 2px;
+  }
+}
+
+.effective-chip--inactive {
+  color: var(--td-text-color-placeholder);
+  background: var(--td-bg-color-secondarycontainer);
+  border-color: var(--td-component-stroke);
+
+  .effective-chip-label {
+    text-decoration: line-through;
+  }
+}
+
+.effective-tools-empty {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  font-style: italic;
 }
 
 // Skills 选择样式
@@ -3508,65 +4250,6 @@ const handleSave = async () => {
   font-style: italic;
 }
 
-// Checkbox 选中样式
-:deep(.t-checkbox) {
-  &.t-is-checked {
-    .t-checkbox__input {
-      border-color: var(--td-brand-color);
-      background-color: var(--td-brand-color);
-    }
-  }
-  
-  &:hover:not(.t-is-disabled) {
-    .t-checkbox__input {
-      border-color: var(--td-brand-color);
-    }
-  }
-}
-
-// Switch 样式
-:deep(.t-switch) {
-  &.t-is-checked {
-    background-color: var(--td-brand-color);
-    
-    &:hover:not(.t-is-disabled) {
-      background-color: var(--td-brand-color-active);
-    }
-  }
-}
-
-// Slider 样式
-:deep(.t-slider) {
-  .t-slider__track {
-    background-color: var(--td-brand-color);
-  }
-  
-  .t-slider__button {
-    border-color: var(--td-brand-color);
-  }
-}
-
-// Button 主题样式
-:deep(.t-button--theme-primary) {
-  background-color: var(--td-brand-color);
-  border-color: var(--td-brand-color);
-  
-  &:hover:not(.t-is-disabled) {
-    background-color: var(--td-brand-color-active);
-    border-color: var(--td-brand-color-active);
-  }
-}
-
-// Input/Select focus 样式
-:deep(.t-input),
-:deep(.t-textarea),
-:deep(.t-select) {
-  &.t-is-focused,
-  &:focus-within {
-    border-color: var(--td-brand-color);
-    box-shadow: 0 0 0 2px rgba(7, 192, 95, 0.1);
-  }
-}
 
 // textarea 与模板选择器容器
 .textarea-with-template {
@@ -3577,7 +4260,7 @@ const handleSave = async () => {
 // 系统提示词输入框样式
 .system-prompt-textarea {
   width: 100%;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-family: var(--app-font-family-mono);
   font-size: 13px;
 
   :deep(textarea) {
@@ -3597,12 +4280,14 @@ const handleSave = async () => {
   overflow-x: auto;
   white-space: nowrap;
   padding-bottom: 4px;
-  
+
   // 隐藏滚动条但保持可滚动
   scrollbar-width: thin;
+
   &::-webkit-scrollbar {
     height: 4px;
   }
+
   &::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.1);
     border-radius: 2px;
@@ -3625,7 +4310,7 @@ const handleSave = async () => {
     align-items: center;
     padding: 1px 5px;
     border-radius: 3px;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-family: var(--app-font-family-mono);
     font-size: 11px;
     color: var(--td-text-color-primary, #333);
     background-color: var(--td-bg-color-secondarycontainer, #f3f3f3);
@@ -3682,7 +4367,7 @@ const handleSave = async () => {
       background: var(--td-bg-color-container-hover, #f5f7fa);
       padding: 2px 5px;
       border-radius: 3px;
-      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-family: var(--app-font-family-mono);
       font-size: 11px;
       color: var(--td-brand-color, #0052d9);
     }
@@ -3722,12 +4407,12 @@ const handleSave = async () => {
   height: 48px;
   border-radius: 12px;
   flex-shrink: 0;
-  
+
   &.normal {
     background: linear-gradient(135deg, rgba(7, 192, 95, 0.15) 0%, rgba(7, 192, 95, 0.08) 100%);
     color: var(--td-brand-color-active);
   }
-  
+
   &.agent {
     background: linear-gradient(135deg, rgba(124, 77, 255, 0.15) 0%, rgba(124, 77, 255, 0.08) 100%);
     color: var(--td-brand-color);
@@ -3785,13 +4470,13 @@ const handleSave = async () => {
   height: 24px;
   border-radius: 6px;
   font-size: 14px;
-  
+
   // Document KB
   &.doc-icon {
     background: rgba(16, 185, 129, 0.1);
     color: var(--td-success-color);
   }
-  
+
   // FAQ KB
   &.faq-icon {
     background: rgba(0, 82, 217, 0.1);
@@ -3821,6 +4506,32 @@ const handleSave = async () => {
   white-space: nowrap;
 }
 
+.kb-option-disabled-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--td-warning-color-6, #d46b08);
+  background: var(--td-warning-color-1, #fff7e6);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-type-preset-desc {
+  margin-top: 4px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-type-select {
+  width: 100%;
+  min-width: 240px;
+  max-width: 360px;
+}
+
 .kb-option-count {
   flex-shrink: 0;
   font-size: 11px;
@@ -3828,6 +4539,25 @@ const handleSave = async () => {
   background: var(--td-bg-color-secondarycontainer);
   padding: 1px 6px;
   border-radius: 4px;
+}
+
+.kb-option-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 18px;
+}
+
+.tag-rag {
+  color: #165dff;
+  background: rgba(22, 93, 255, 0.1);
+}
+
+.tag-wiki {
+  color: #00b42a;
+  background: rgba(0, 180, 42, 0.1);
 }
 
 // FAQ 策略区域样式
@@ -3847,11 +4577,11 @@ const handleSave = async () => {
   font-size: 14px;
   font-weight: 600;
   color: var(--td-brand-color);
-  
+
   .faq-icon {
     font-size: 18px;
   }
-  
+
   .help-icon {
     font-size: 14px;
     color: var(--td-text-color-placeholder);
@@ -3862,14 +4592,52 @@ const handleSave = async () => {
 .faq-strategy-section .setting-row {
   padding: 12px 0;
   border-bottom: 1px solid rgba(0, 82, 217, 0.1);
-  
+
   &:last-child {
     border-bottom: none;
     padding-bottom: 0;
   }
-  
+
   &:first-of-type {
     padding-top: 0;
   }
+}
+</style>
+
+<!-- Non-scoped styles: TDesign teleports the popup outside this component, so
+     scoped selectors can't reach .agent-type-popup .t-select-option. -->
+<style lang="less">
+.agent-type-popup {
+  .t-select-option {
+    // 默认 option 是 32px 单行；我们要双行显示，取消固定高度并放宽 padding
+    height: auto !important;
+    min-height: 48px;
+    line-height: 1.4;
+    padding: 8px 12px;
+    white-space: normal;
+  }
+}
+
+.agent-type-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.agent-type-option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+  line-height: 1.4;
+}
+
+.agent-type-option-desc {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 </style>

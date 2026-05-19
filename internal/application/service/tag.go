@@ -10,6 +10,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
 	werrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ type knowledgeTagService struct {
 	knowledgeRepo  interfaces.KnowledgeRepository
 	chunkRepo      interfaces.ChunkRepository
 	retrieveEngine interfaces.RetrieveEngineRegistry
+	ownership      retriever.TenantStoreOwnership
 	modelService   interfaces.ModelService
 	task           interfaces.TaskEnqueuer
 	kbShareService interfaces.KBShareService
@@ -36,6 +38,7 @@ func NewKnowledgeTagService(
 	knowledgeRepo interfaces.KnowledgeRepository,
 	chunkRepo interfaces.ChunkRepository,
 	retrieveEngine interfaces.RetrieveEngineRegistry,
+	ownership retriever.TenantStoreOwnership,
 	modelService interfaces.ModelService,
 	task interfaces.TaskEnqueuer,
 	kbShareService interfaces.KBShareService,
@@ -46,6 +49,7 @@ func NewKnowledgeTagService(
 		knowledgeRepo:  knowledgeRepo,
 		chunkRepo:      chunkRepo,
 		retrieveEngine: retrieveEngine,
+		ownership:      ownership,
 		modelService:   modelService,
 		task:           task,
 		kbShareService: kbShareService,
@@ -80,10 +84,11 @@ func (s *knowledgeTagService) ListTags(
 		if userIDVal == nil {
 			return nil, werrors.NewForbiddenError("无权访问该知识库")
 		}
-		userID := userIDVal.(string)
+		_ = userIDVal.(string)
+		callerTenantRole := types.TenantRoleFromContext(ctx)
 
-		// Check if user has at least viewer permission through organization sharing
-		hasPermission, err := s.kbShareService.HasKBPermission(ctx, kbID, userID, types.OrgRoleViewer)
+		// Check whether the caller's tenant has at least viewer permission via org sharing.
+		hasPermission, err := s.kbShareService.HasTenantKBPermission(ctx, kbID, tenantID, callerTenantRole, types.OrgRoleViewer)
 		if err != nil || !hasPermission {
 			return nil, werrors.NewForbiddenError("无权访问该知识库")
 		}
@@ -256,7 +261,7 @@ func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bo
 
 		// Enqueue async index deletion task for the deleted chunks
 		if len(deletedIDs) > 0 {
-			s.enqueueIndexDeleteTask(ctx, tenantID, kb.ID, kb.EmbeddingModelID, string(kb.Type), deletedIDs, tenantInfo.GetEffectiveEngines())
+			s.enqueueIndexDeleteTask(ctx, tenantID, kb.ID, kb.EmbeddingModelID, string(kb.Type), deletedIDs, tenantInfo.GetEffectiveEngines(), kb.VectorStoreID)
 		}
 
 		logger.Infof(ctx, "Deleted %d chunks under tag %s", len(deletedIDs), tag.ID)
@@ -282,6 +287,7 @@ func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bo
 			TenantID:     tenantID,
 			KnowledgeIDs: knowledgeIDs,
 		}
+		langfuse.InjectTracing(ctx, &payload)
 		payloadBytes, err := json.Marshal(payload)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to marshal knowledge list delete payload: %v", err)
@@ -339,9 +345,14 @@ func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bo
 	return s.repo.Delete(ctx, tenantID, id)
 }
 
-// enqueueIndexDeleteTask enqueues an async task for index deletion (low priority)
+// enqueueIndexDeleteTask enqueues an async task for index deletion (low priority).
+//
+// vectorStoreID is captured from the owning KB at enqueue time and snapshotted
+// into the payload so the worker can route to the correct store even if the
+// KB is deleted or rebound before the task runs.
 func (s *knowledgeTagService) enqueueIndexDeleteTask(ctx context.Context,
-	tenantID uint64, kbID, embeddingModelID, kbType string, chunkIDs []string, effectiveEngines []types.RetrieverEngineParams,
+	tenantID uint64, kbID, embeddingModelID, kbType string, chunkIDs []string,
+	effectiveEngines []types.RetrieverEngineParams, vectorStoreID *string,
 ) {
 	payload := types.IndexDeletePayload{
 		TenantID:         tenantID,
@@ -350,7 +361,9 @@ func (s *knowledgeTagService) enqueueIndexDeleteTask(ctx context.Context,
 		KBType:           kbType,
 		ChunkIDs:         chunkIDs,
 		EffectiveEngines: effectiveEngines,
+		VectorStoreID:    vectorStoreID,
 	}
+	langfuse.InjectTracing(ctx, &payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to marshal index delete payload: %v", err)
@@ -379,8 +392,20 @@ func (s *knowledgeTagService) ProcessIndexDelete(ctx context.Context, t *asynq.T
 
 	logger.Infof(ctx, "Processing index delete task for %d chunks in KB %s", len(payload.ChunkIDs), payload.KnowledgeBaseID)
 
-	// Create retrieve engine
-	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, payload.EffectiveEngines)
+	// Create retrieve engine.
+	// The factory verifies the payload's tenant owns the bound store, so a
+	// tampered queue entry cannot reach a cross-tenant store.
+	// Forbidden/NotFound are non-retryable — SkipRetry prevents burning the
+	// full retry budget on an unrecoverable task.
+	retrieveEngine, err := retriever.CreateRetrieveEngineFromPayload(
+		ctx, s.retrieveEngine, s.ownership,
+		payload.TenantID, payload.EffectiveEngines, payload.VectorStoreID,
+	)
+	if errors.Is(err, retriever.ErrVectorStoreForbidden) ||
+		errors.Is(err, retriever.ErrVectorStoreNotFound) {
+		logger.Errorf(ctx, "Index delete task aborted: %v (tenant=%d, kb=%s)", err, payload.TenantID, payload.KnowledgeBaseID)
+		return asynq.SkipRetry
+	}
 	if err != nil {
 		logger.Warnf(ctx, "Failed to create retrieve engine for index cleanup: %v", err)
 		return err

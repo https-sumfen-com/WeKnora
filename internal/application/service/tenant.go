@@ -17,6 +17,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/Tencent/WeKnora/internal/utils"
+	werrors "github.com/Tencent/WeKnora/internal/errors"
 )
 
 var apiKeySecret = func() []byte {
@@ -58,6 +59,13 @@ func (s *tenantService) CreateTenant(ctx context.Context, tenant *types.Tenant) 
 	tenant.CreatedAt = time.Now()
 	tenant.UpdatedAt = time.Now()
 
+	if err := s.validateStorageBucketUniqueness(ctx, tenant); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"tenant_name": tenant.Name,
+		})
+		return nil, err
+	}
+
 	logger.Info(ctx, "Saving tenant information to database")
 	if err := s.repo.CreateTenant(ctx, tenant); err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
@@ -67,7 +75,8 @@ func (s *tenantService) CreateTenant(ctx context.Context, tenant *types.Tenant) 
 	}
 
 	logger.Infof(ctx, "Tenant created successfully, ID: %d, generating official API Key", tenant.ID)
-	tenant.APIKey = s.generateApiKey(tenant.ID)
+	plaintextAPIKey := s.generateApiKey(tenant.ID)
+	tenant.APIKey = plaintextAPIKey
 
 	// Manually encrypt APIKey before update, because db.Updates() does not trigger BeforeSave hook
 	if key := utils.GetAESKey(); key != nil && tenant.APIKey != "" {
@@ -83,6 +92,9 @@ func (s *tenantService) CreateTenant(ctx context.Context, tenant *types.Tenant) 
 		})
 		return nil, err
 	}
+
+	// Restore plaintext for the response so callers don't see enc:v1: ciphertext.
+	tenant.APIKey = plaintextAPIKey
 
 	logger.Infof(ctx, "Tenant creation and update completed, ID: %d, name: %s", tenant.ID, tenant.Name)
 	return tenant, nil
@@ -106,6 +118,11 @@ func (s *tenantService) GetTenantByID(ctx context.Context, id uint64) (*types.Te
 	return tenant, nil
 }
 
+// GetTenantsByIDs batches GetTenantByID; returns a map keyed by tenant ID.
+func (s *tenantService) GetTenantsByIDs(ctx context.Context, ids []uint64) (map[uint64]*types.Tenant, error) {
+	return s.repo.GetTenantsByIDs(ctx, ids)
+}
+
 // ListTenants retrieves a list of all tenants
 func (s *tenantService) ListTenants(ctx context.Context) ([]*types.Tenant, error) {
 	tenants, err := s.repo.ListTenants(ctx)
@@ -126,6 +143,13 @@ func (s *tenantService) UpdateTenant(ctx context.Context, tenant *types.Tenant) 
 	}
 
 	logger.Infof(ctx, "Updating tenant, ID: %d, name: %s", tenant.ID, tenant.Name)
+
+	if err := s.validateStorageBucketUniqueness(ctx, tenant); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"tenant_id": tenant.ID,
+		})
+		return nil, err
+	}
 
 	// Generate new API key if empty
 	if tenant.APIKey == "" {
@@ -203,7 +227,8 @@ func (s *tenantService) UpdateAPIKey(ctx context.Context, id uint64) (string, er
 	}
 
 	logger.Infof(ctx, "Generating new API Key for tenant, ID: %d", id)
-	tenant.APIKey = s.generateApiKey(tenant.ID)
+	plaintextAPIKey := s.generateApiKey(tenant.ID)
+	tenant.APIKey = plaintextAPIKey
 
 	// Manually encrypt APIKey before update, because db.Updates() does not trigger BeforeSave hook
 	if key := utils.GetAESKey(); key != nil && tenant.APIKey != "" {
@@ -220,7 +245,7 @@ func (s *tenantService) UpdateAPIKey(ctx context.Context, id uint64) (string, er
 	}
 
 	logger.Infof(ctx, "Tenant API Key updated successfully, ID: %d", id)
-	return tenant.APIKey, nil
+	return plaintextAPIKey, nil
 }
 
 // generateApiKey generates a secure API key for tenant authentication
@@ -343,40 +368,101 @@ func (s *tenantService) GetTenantByIDForUser(ctx context.Context, tenantID uint6
 	return tenant, nil
 }
 
-func (s *tenantService) GetDocreaderCredentials(ctx context.Context) *types.DocreaderCredentials {
-	// Try to get tenant info directly first
+func (s *tenantService) GetWeKnoraCloudCredentials(ctx context.Context) *types.WeKnoraCloudCredentials {
+	// Try to get tenant info from context first (already loaded by middleware).
+	// CredentialsConfig.Scan handles decryption, so credentials are ready to use.
 	if tenant, ok := types.TenantInfoFromContext(ctx); ok {
-		if tenant.ParserEngineConfig != nil {
-			appID := strings.TrimSpace(tenant.ParserEngineConfig.DocreaderAppID)
-			if appID == "" || tenant.ParserEngineConfig.DocreaderAPIKey == "" {
-				return nil
-			}
-			if key := utils.GetAESKey(); key != nil {
-				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
-					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
-				}
-			}
-			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
+		if creds := tenant.Credentials.GetWeKnoraCloud(); creds != nil {
+			return creds
 		}
 	}
 
-	// If no tenant info in context, try to get tenant ID and load tenant
+	// Fallback: load tenant from repo by tenantID
 	tenantID, ok := types.TenantIDFromContext(ctx)
 	if !ok {
 		return nil
 	}
 
-	// Load tenant from repo if we only have tenantID
 	tenant, err := s.repo.GetTenantByID(ctx, tenantID)
-	if err == nil && tenant != nil && tenant.ParserEngineConfig != nil {
-		appID := strings.TrimSpace(tenant.ParserEngineConfig.DocreaderAppID)
-		if appID != "" && tenant.ParserEngineConfig.DocreaderAPIKey != "" {
-			if key := utils.GetAESKey(); key != nil {
-				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
-					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
-				}
+	if err != nil || tenant == nil {
+		return nil
+	}
+	return tenant.Credentials.GetWeKnoraCloud()
+}
+
+func (s *tenantService) validateStorageBucketUniqueness(ctx context.Context, tenant *types.Tenant) error {
+	if tenant.StorageEngineConfig == nil {
+		return nil
+	}
+
+	// Fetch existing tenant from DB to compare
+	var oldTenant *types.Tenant
+	if tenant.ID != 0 {
+		var err error
+		oldTenant, err = s.repo.GetTenantByID(ctx, tenant.ID)
+		if err != nil && err.Error() != "tenant not found" && err.Error() != "record not found" {
+			return err
+		}
+	}
+
+	// Fetch ALL tenants to check for collision.
+	allTenants, err := s.repo.ListTenants(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Helper to get bucket names from a StorageEngineConfig
+	getBuckets := func(cfg *types.StorageEngineConfig) map[string]string {
+		if cfg == nil {
+			return nil
+		}
+		res := make(map[string]string)
+		if cfg.MinIO != nil && cfg.MinIO.BucketName != "" {
+			res["minio"] = cfg.MinIO.BucketName
+		}
+		if cfg.COS != nil && cfg.COS.BucketName != "" {
+			res["cos"] = cfg.COS.BucketName
+		}
+		if cfg.TOS != nil && cfg.TOS.BucketName != "" {
+			res["tos"] = cfg.TOS.BucketName
+		}
+		if cfg.S3 != nil && cfg.S3.BucketName != "" {
+			res["s3"] = cfg.S3.BucketName
+		}
+		if cfg.OSS != nil && cfg.OSS.BucketName != "" {
+			res["oss"] = cfg.OSS.BucketName
+		}
+		return res
+	}
+
+	var oldBuckets map[string]string
+	if oldTenant != nil {
+		oldBuckets = getBuckets(oldTenant.StorageEngineConfig)
+	}
+	newBuckets := getBuckets(tenant.StorageEngineConfig)
+
+	// Collect buckets used by other tenants
+	usedByOthers := make(map[string]map[string]bool) // provider -> set of bucket names
+	for _, t := range allTenants {
+		if t.ID == tenant.ID {
+			continue
+		}
+		tb := getBuckets(t.StorageEngineConfig)
+		for p, b := range tb {
+			if usedByOthers[p] == nil {
+				usedByOthers[p] = make(map[string]bool)
 			}
-			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
+			usedByOthers[p][b] = true
+		}
+	}
+
+	// Check if any NEW bucket is already used by someone else, AND it's different from the OLD bucket
+	for p, b := range newBuckets {
+		oldB := oldBuckets[p]
+		if b != oldB { // User is trying to change their bucket name or set a new one
+			if usedByOthers[p] != nil && usedByOthers[p][b] {
+				return werrors.NewBadRequestError("存储桶名称「" + b + "」已被其他租户使用，为保证数据隔离，请使用其他名称")
+			}
 		}
 	}
 

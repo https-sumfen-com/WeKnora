@@ -148,7 +148,7 @@
     </div>
     
     <div v-if="items.length === 0 && !loading" class="empty">
-      {{ $t('common.noResult') }}
+      {{ emptyHint || $t('common.noResult') }}
     </div>
   </div>
 </template>
@@ -170,6 +170,8 @@ const props = defineProps<{
   activeIndex: number;
   hasMore?: boolean;
   loading?: boolean;
+  // 空态下替换默认 "无结果" 文案，用于给上游（如"被智能体工具兼容性过滤掉了"）透传具体原因
+  emptyHint?: string;
 }>();
 
 const emit = defineEmits(['select', 'update:activeIndex', 'loadMore']);
@@ -335,7 +337,7 @@ const scrollToItem = (index: number) => {
   border-radius: var(--td-radius-default, 3px);
   color: var(--td-text-color-primary, #333);
   font-size: var(--td-font-size-body-medium, 14px);
-  font-family: var(--td-font-family, "PingFang SC");
+  font-family: var(--app-font-family);
   transition: background 0.2s cubic-bezier(0.38, 0, 0.24, 1);
 }
 

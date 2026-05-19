@@ -37,20 +37,18 @@ instance.interceptors.request.use(
     // 添加用户语言偏好
     config.headers["Accept-Language"] = getCurrentLanguage();
     
-    // 添加跨租户访问请求头（如果选择了其他租户）
+    // 添加跨租户访问请求头：只要 setSelectedTenant 写过激活租户，
+    // 每个请求都要附 X-Tenant-ID。早期版本会 short-circuit
+    // "selectedTenantId === defaultTenantId 时不附"以减少 header 体积，
+    // 但这条优化会被任何把 weknora_tenant 写成激活租户的代码（OIDC
+    // 回调、UserMenu loadUserInfo、router hydrate）触发，导致后续请求
+    // 静默丢失 header，前端"切换了"但实际仍跑在 home 租户里——把"切
+    // 换之后只有第一批请求带 X-Tenant-ID"调成永久状态。
+    // 后端 IsTenantAccessible 已经允许 header 指向 home 租户（自家），
+    // 所以无脑附不会引入新风险。
     const selectedTenantId = localStorage.getItem('weknora_selected_tenant_id');
-    const defaultTenantId = localStorage.getItem('weknora_tenant');
     if (selectedTenantId) {
-      try {
-        const defaultTenant = defaultTenantId ? JSON.parse(defaultTenantId) : null;
-        const defaultId = defaultTenant?.id ? String(defaultTenant.id) : null;
-        // 如果选择的租户ID与默认租户ID不同，添加请求头
-        if (selectedTenantId !== defaultId) {
-          config.headers["X-Tenant-ID"] = selectedTenantId;
-        }
-      } catch (e) {
-        console.error('Failed to parse tenant info', e);
-      }
+      config.headers["X-Tenant-ID"] = selectedTenantId;
     }
     
     config.headers["X-Request-ID"] = `${generateRandomString(12)}`;
@@ -64,7 +62,13 @@ instance.interceptors.request.use(
 // Token刷新标志，防止多个请求同时刷新token
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: Function; reject: Function }> = [];
-let hasRedirectedOn401 = false;
+
+const PUBLIC_AUTH_PATHS = ['/auth/auto-setup', '/auth/login', '/auth/register', '/auth/oidc/'];
+
+function isPublicAuthRequest(url?: string): boolean {
+  if (!url) return false;
+  return PUBLIC_AUTH_PATHS.some(p => url.includes(p));
+}
 
 // 处理队列中的请求
 const processQueue = (error: any, token: string | null = null) => {
@@ -78,6 +82,12 @@ const processQueue = (error: any, token: string | null = null) => {
   
   failedQueue = [];
 };
+
+function redirectToLogin() {
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname === '/login') return;
+  window.location.href = '/login';
+}
 
 instance.interceptors.response.use(
   (response) => {
@@ -96,13 +106,11 @@ instance.interceptors.response.use(
       return Promise.reject({ message: t('error.networkError') });
     }
     
-    // 如果是登录接口的401，直接返回错误以便页面展示toast，不做跳转
+    // 公开接口（auto-setup / login / register / oidc）的 401 不走 refresh 逻辑，直接返回错误
     // 注意：includes('/auth/login') 也会匹配 /auth/iframe-login，需排除以保留其 code 字段
-    if (error.response.status === 401
-        && originalRequest?.url?.includes('/auth/login')
-        && !originalRequest?.url?.includes('/auth/iframe-login')) {
+    if (error.response.status === 401 && isPublicAuthRequest(originalRequest?.url)) {
       const { status, data } = error.response;
-      return Promise.reject({ status, message: (typeof data === 'object' ? data?.message : data) || t('error.invalidCredentials') });
+      return Promise.reject({ status, message: (typeof data === 'object' ? (data?.error?.message || data?.message) : data) || t('error.invalidCredentials') });
     }
 
     // 如果是401错误且不是刷新token的请求，尝试刷新token
@@ -156,11 +164,7 @@ instance.interceptors.response.use(
           
           processQueue(refreshError, null);
           
-          // 跳转到登录页
-          if (!hasRedirectedOn401 && typeof window !== 'undefined') {
-            hasRedirectedOn401 = true;
-            window.location.href = '/login';
-          }
+          redirectToLogin();
           
           return Promise.reject(refreshError);
         } finally {
@@ -172,10 +176,7 @@ instance.interceptors.response.use(
         localStorage.removeItem('weknora_user');
         localStorage.removeItem('weknora_tenant');
         
-        if (!hasRedirectedOn401 && typeof window !== 'undefined') {
-          hasRedirectedOn401 = true;
-          window.location.href = '/login';
-        }
+        redirectToLogin();
         
         return Promise.reject({ message: t('error.pleaseRelogin') });
       }

@@ -1,6 +1,8 @@
 // @ts-nocheck
 <script setup lang="ts">
 import { marked } from "marked";
+import markedKatex from 'marked-katex-extension';
+import 'katex/dist/katex.min.css';
 
 import hljs from "highlight.js";
 import "highlight.js/styles/github.css";
@@ -8,12 +10,24 @@ import mermaid from "mermaid";
 import { onMounted, ref, nextTick, onUnmounted, watch, computed } from "vue";
 import { downKnowledgeDetails, deleteGeneratedQuestion, getChunkByIdOnly, previewKnowledgeFile } from "@/api/knowledge-base/index";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
-import { sanitizeHTML, safeMarkdownToHTML, createSafeImage, isValidImageURL, hydrateProtectedFileImages } from '@/utils/security';
+import { sanitizeHTML, safeMarkdownToHTML, createSafeImage, isValidImageURL, hydrateProtectedFileImages, isValidURL } from '@/utils/security';
 import { openMermaidFullscreen } from '@/utils/mermaidViewer';
 import { useI18n } from 'vue-i18n';
+import { useAuthStore } from '@/stores/auth';
 import DocumentPreview from '@/components/document-preview.vue';
 
 const { t } = useI18n();
+const authStore = useAuthStore();
+
+// canDeleteGeneratedQuestion 对应后端 DELETE /chunks/by-id/:id/questions
+// 的 OwnedChunkKBOrAdminFromChunkID 守卫——KB 创建者或租户 Admin+
+// 才允许删除。父组件 KnowledgeBase.vue 通过 :canEditKB 把 KB 级权限
+// 传下来（包含 KB creator / Admin / 组织分享 editor 三种来源），未
+// 传时按更严格的 Admin 兜底，避免 Viewer 看到一个会 403 的入口。
+const canDeleteGeneratedQuestion = computed(() => {
+  if (props.canEditKB === true) return true;
+  return authStore.hasRole('admin');
+});
 
 // Mermaid 初始化计数器，用于生成唯一ID
 let mermaidRenderCount = 0;
@@ -46,13 +60,23 @@ mermaid.initialize({
     topPadding: 50
   }
 });
-const props = defineProps(["visible", "details", "knowledgeType", "sourceInfo"]);
+const props = defineProps(["visible", "details", "knowledgeType", "sourceInfo", "canEditKB"]);
 const emit = defineEmits(["closeDoc", "getDoc", "questionDeleted"]);
 
 marked.use({
   breaks: true,      // 启用单行换行转 <br>
   gfm: true,         // 启用 GitHub Flavored Markdown
 });
+marked.use(markedKatex({ throwOnError: false, nonStandard: true }));
+
+const preprocessMathDelimiters = (rawText: string): string => {
+  if (!rawText || typeof rawText !== 'string') {
+    return '';
+  }
+  return rawText
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+};
 const renderer = new marked.Renderer();
 let page = 1;
 let loadingChunks = false;
@@ -427,12 +451,13 @@ const processMarkdown = (markdownText) => {
 
   // 保留表格单元格中的 <br>，不转成换行，避免打散表格；其他区域原样交给 marked 处理
 
-  // 安全预处理
-  const safeMarkdown = safeMarkdownToHTML(processedText);
+  // 先预处理数学定界符，再做安全预处理
+  const mathSafeText = preprocessMathDelimiters(processedText);
+  const safeMarkdown = safeMarkdownToHTML(mathSafeText);
 
   // 使用标记渲染
   marked.use({ renderer });
-  let html = marked.parse(safeMarkdown);
+  let html = marked.parse(safeMarkdown) as string;
 
   // 还原被转义的 <br>
   html = html.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
@@ -778,7 +803,7 @@ const handleDetailsScroll = () => {
       <div v-else-if="details.type === 'url'" class="url_box">
         <span class="label">{{ $t('knowledgeBase.urlSource') }}</span>
         <div class="url_link_box">
-          <a :href="details.source" target="_blank" class="url_link">
+          <a :href="isValidURL(details.source) ? details.source : 'javascript:void(0)'" :target="isValidURL(details.source) ? '_blank' : undefined" class="url_link">
             <t-icon name="link" size="14px" />
             <span class="url_text">{{ details.source }}</span>
             <t-icon name="jump" size="14px" class="jump-icon" />
@@ -942,9 +967,10 @@ const handleDetailsScroll = () => {
                 >
                   <t-icon name="help-circle" size="14px" class="question-icon" />
                   <span class="question-text">{{ question.question }}</span>
-                  <t-button 
-                    theme="default" 
-                    variant="text" 
+                  <t-button
+                    v-if="canDeleteGeneratedQuestion"
+                    theme="default"
+                    variant="text"
                     size="small"
                     class="delete-question-btn"
                     :loading="isDeleting(index, question.id)"

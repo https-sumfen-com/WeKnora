@@ -13,16 +13,22 @@
 </p>
 <p align="center">
     <a href="https://weknora.weixin.qq.com" target="_blank">
-        <img alt="官方网站" src="https://img.shields.io/badge/官方网站-WeKnora-4e6b99">
+        <img alt="Official Website" src="https://img.shields.io/badge/Official Website-WeKnora-4e6b99">
     </a>
     <a href="https://chatbot.weixin.qq.com" target="_blank">
-        <img alt="微信对话开放平台" src="https://img.shields.io/badge/微信对话开放平台-5ac725">
+        <img alt="WeChat Dialog Open Platform" src="https://img.shields.io/badge/WeChat Dialog Open Platform-5ac725">
+    </a>
+    <a href="https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd" target="_blank">
+        <img alt="Chrome Extension" src="https://img.shields.io/badge/Chrome Extension-WeKnora-4285F4">
+    </a>
+    <a href="https://clawhub.ai/lyingbug/weknora" target="_blank">
+        <img alt="ClawHub Skill" src="https://img.shields.io/badge/ClawHub Skill-WeKnora-ff6b35">
     </a>
     <a href="https://github.com/Tencent/WeKnora/blob/main/LICENSE">
         <img src="https://img.shields.io/badge/License-MIT-ffffff?labelColor=d4eaf7&color=2e6cc4" alt="License">
     </a>
     <a href="./CHANGELOG.md">
-        <img alt="Version" src="https://img.shields.io/badge/version-0.3.6-2e6cc4?labelColor=d4eaf7">
+        <img alt="Version" src="https://img.shields.io/badge/version-0.5.2-2e6cc4?labelColor=d4eaf7">
     </a>
 </p>
 
@@ -38,19 +44,50 @@
   </h4>
 </p>
 
-# 💡 WeKnora - LLM-Powered Document Understanding & Retrieval Framework
+# 💡 WeKnora — Turn Documents into Living Knowledge with RAG, Agents and Auto-Wiki
 
 ## 📌 Overview
 
-[**WeKnora**](https://weknora.weixin.qq.com) is an LLM-powered intelligent knowledge management and Q&A framework built for enterprise-grade document understanding and semantic retrieval.
+[**WeKnora**](https://weknora.weixin.qq.com) is an open-source, LLM-powered knowledge framework built for enterprise-grade document understanding, semantic retrieval, and autonomous reasoning.
 
-WeKnora offers two Q&A modes — **Quick Q&A** and **Intelligent Reasoning**. Quick Q&A uses a **RAG (Retrieval-Augmented Generation)** pipeline to rapidly retrieve relevant chunks and generate answers, ideal for everyday knowledge queries. Intelligent Reasoning is powered by a **ReACT Agent** engine that employs a **progressive strategy** to autonomously orchestrate knowledge retrieval, MCP tools, and web search, iteratively reasoning and reflecting to arrive at a final conclusion — suited for multi-source synthesis and complex tasks. Custom agents are also supported, allowing flexible configuration of dedicated knowledge bases, tool sets, and system prompts. Choose the right mode for the task, balancing response speed with reasoning depth.
+It is organized around three core capabilities: **RAG-based Quick Q&A** for everyday lookups, a **ReAct Agent** that autonomously orchestrates retrieval, MCP tools and web search to handle complex multi-step tasks, and a brand-new **Wiki Mode** in which agents distill raw documents into a self-maintaining, interlinked markdown knowledge base with an interactive knowledge graph. Combined with multi-source ingestion (Feishu / Notion / Yuque, and growing), 20+ LLM provider integrations, full Langfuse observability, and a fully self-hostable modular architecture, WeKnora turns scattered documents into a queryable, reasoning-capable, continuously evolving knowledge asset.
 
-The framework supports auto-syncing knowledge from Feishu (more data sources coming soon), handles 10+ document formats including PDF, Word, images, and Excel, and can serve Q&A directly through IM channels like WeCom, Feishu, Slack, and Telegram. It is compatible with major LLM providers including OpenAI, DeepSeek, Qwen (Alibaba Cloud), Zhipu, Hunyuan, Gemini, MiniMax, NVIDIA, and Ollama. Its fully modular design allows swapping LLMs, vector databases, and storage backends, with support for local and private cloud deployment ensuring complete data sovereignty.
+The framework supports auto-syncing knowledge from Feishu, Notion, and Yuque (more data sources coming soon), handles 10+ document formats including PDF, Word, images, and Excel, and can serve Q&A directly through IM channels like WeCom, Feishu, Slack, and Telegram. It is compatible with major LLM providers including OpenAI, DeepSeek, Qwen (Alibaba Cloud), Zhipu, Hunyuan, Gemini, MiniMax, NVIDIA, and Ollama. Its fully modular design allows swapping LLMs, vector databases, and storage backends, with support for local and private cloud deployment ensuring complete data sovereignty. WeKnora also integrates with **Langfuse** for comprehensive observability into agent reasoning, token usage, and pipeline tracing.
 
-**Website:** https://weknora.weixin.qq.com
 
 ## ✨ Latest Updates
+
+**v0.5.2 Highlights:**
+
+- **Wiki Mode at Scale**: Wiki ingest now handles tens-of-thousands-document KBs via a generic task queue with dead-letter handling; the page-link graph gains a subgraph API + interactive exploration UI.
+- **MCP Human-in-the-Loop Approval**: Sensitive MCP tool calls pause the agent and wait for explicit user approval in the chat UI.
+- **More LLM / Vector DB / Storage / Search**: Anthropic (Claude), Apache Doris 4.1, Tencent VectorDB, Kingsoft Cloud KS3, and SearXNG are all new backends — pairing with the Vector Store management UI and per-KB indexing strategy toggles.
+- **Deeper Observability**: Langfuse spans expanded across retrieval / rerank / agent stages; end-to-end TTFB logged on both ends of the chat stream; LLM call timeouts hardened to keep worker pools healthy.
+- **Adaptive 3-Tier Chunking**: Documents are auto-routed to heading-aware / heuristic / recursive strategies, with a live preview panel in the KB editor. See [`docs/CHUNKING.md`](./docs/CHUNKING.md).
+- **Global Command Palette**: A ⌘K palette replaces the standalone search page and can start a new chat directly from any result.
+- **More Connectors & Mobile**: Yuque connector (full + incremental sync) joins Feishu / Notion; lightweight WeChat Mini Program client under `miniprogram/`.
+- **`weknora` CLI (Preview)**: An early version of the official command-line client lives under `cli/` — feedback welcome.
+- **Other Improvements**: Per-tenant RRF tuning, a dedicated query-understanding model, batch KB management, user-scoped session pinning, a tenant-wide IM channels overview, per-user font / theme preferences, a new OpenMaiC Classroom agent skill, and a full API-docs / Swagger / Client-SDK overhaul.
+- **Bug Fixes**: Embedder `(nil, nil)` SIGSEGV fixed; Mimo / DeepSeek `reasoning_content` round-trip restored; multi-turn agent history rebuilt from DB (with attachment replay); OIDC login fixed; many Wiki ingest reliability fixes; FAQ no longer hallucinates summaries from filenames on empty PDFs.
+
+<details>
+<summary><b>Earlier Releases</b></summary>
+
+**v0.4.0 Highlights:**
+
+- **[Knowledge Assistant](https://weknora.weixin.qq.com/platform)**: Cloud-hosted knowledge assistant service for quick onboarding without local deployment
+- **WeKnora Cloud**: WeKnora Cloud provider with hosted LLM models and document parsing service, credential management and status checks
+- **[Chrome Extension](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd)**: Browser extension for web page knowledge capture
+- **[ClawHub Skill](https://clawhub.ai/lyingbug/weknora)**: ClawHub Skill marketplace integration for one-click agent skill installation
+- **WeChat IM Integration**: WeChat channel adapter with QR code login and long-polling message support
+- **Attachment Processing**: File attachment support in chat pipeline with content formatting and metadata injection
+- **Azure OpenAI Provider**: Full Azure OpenAI support for chat, VLM, and embedding models with deployment name preservation and dimensions parameter
+- **Alibaba Cloud OSS Storage**: Object storage support via S3-compatible mode with configuration UI, connectivity test, and multi-language i18n
+- **Notion Connector**: Notion data source integration with API client, markdown renderer, and Connector interface
+- **Baidu & Ollama Web Search**: Added Baidu and Ollama as web search providers
+- **VectorStore Management**: Full VectorStore CRUD with entity, repository, service layer, connection testing, and API endpoints
+- **Bug Fixes**: Fixed Azure OpenAI endpoint handling, embedding truncation, IM citation tag stripping, neo4j Go 1.24 Windows compatibility, and OSS signature issues
+
 
 **v0.3.6 Highlights:**
 
@@ -77,8 +114,6 @@ The framework supports auto-syncing knowledge from Feishu (more data sources com
 - **Channel Tracking**: Knowledge entries and messages record source channel (web/api/im/browser_extension) for traceability
 - **Bug Fixes**: Fixed agent empty response when no knowledge base is configured, UTF-8 truncation in summaries for Chinese/emoji documents, API key encryption loss on tenant settings update, vLLM streaming reasoning content propagation, and rerank empty passage errors
 
-<details>
-<summary><b>Earlier Releases</b></summary>
 
 **v0.3.4 Highlights:**
 
@@ -146,6 +181,25 @@ The framework supports auto-syncing knowledge from Feishu (more data sources com
 </details>
 
 
+## 📱 Interface Showcase
+
+<table>
+  <tr>
+    <td colspan="2" align="center"><b>💬 Intelligent Q&A Conversation</b><br/><img src="./docs/images/qa.png" alt="Intelligent Q&A Conversation" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>📖 Wiki Browser</b><br/><img src="./docs/images/wiki-browser.png" alt="Wiki Browser" width="100%"></td>
+    <td width="50%" align="center"><b>🕸️ Wiki Knowledge Graph</b><br/><img src="./docs/images/wiki-graph.png" alt="Wiki Knowledge Graph" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><b>🤖 Agent Mode · Tool Call Process</b><br/><img src="./docs/images/agent-qa.png" alt="Agent Mode Tool Call Process" width="100%"></td>
+    <td width="50%" align="center"><b>⚙️ Conversation Settings</b><br/><img src="./docs/images/settings.png" alt="Conversation Settings" width="100%"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><b>🔭 Observability · Langfuse Tracing</b><br/><img src="./docs/images/langfuse.png" alt="Observability Langfuse Tracing" width="100%"></td>
+  </tr>
+</table>
+
 ## 🏗️ Architecture
 
 ![weknora-architecture.png](./docs/images/architecture.png)
@@ -154,147 +208,127 @@ Fully modular pipeline from document parsing, vectorization, and retrieval to LL
 
 ## 🧩 Feature Overview
 
-**🤖 Intelligent Conversation**
+**Intelligent Conversation**
 
 | Capability | Details |
 |------------|---------|
 | Intelligent Reasoning | ReACT progressive multi-step reasoning, autonomously orchestrating knowledge retrieval, MCP tools, and web search; custom agent support |
 | Quick Q&A | RAG-based Q&A over knowledge bases for fast and accurate answers |
+| Wiki Mode | Agent-driven auto-generation of structured, interlinked markdown Wiki pages from raw documents |
 | Tool Calling | Built-in tools, MCP tools, web search |
 | Conversation Strategy | Online Prompt editing, retrieval threshold tuning, multi-turn context awareness |
 | Suggested Questions | Auto-generated question suggestions based on knowledge base content |
 
-**📚 Knowledge Management**
+**Knowledge Management**
 
 | Capability | Details |
 |------------|---------|
-| Knowledge Base Types | FAQ / Document with folder import, URL import, tag management, and online entry |
-| Data Source Import | Auto-sync from Feishu (more data sources coming soon); incremental and full sync |
+| Knowledge Base Types | FAQ / Document / Wiki with folder import, URL import, tag management, and online entry |
+| Data Source Import | Auto-sync from Feishu / Notion / Yuque (more data sources coming soon); incremental and full sync |
 | Document Formats | PDF / Word / Txt / Markdown / HTML / Images / CSV / Excel / PPT / JSON |
 | Retrieval Strategies | BM25 sparse / Dense retrieval / GraphRAG / parent-child chunking / multi-dimensional indexing |
 | E2E Testing | Full-pipeline visualization with recall hit rate, BLEU / ROUGE metric evaluation |
 
-**🔌 Integrations & Extensions**
+**Integrations & Extensions**
 
 | Capability | Details |
 |------------|---------|
-| LLMs | OpenAI / DeepSeek / Qwen (Alibaba Cloud) / Zhipu / Hunyuan / Doubao (Volcengine) / Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
+| LLMs | OpenAI / Azure OpenAI / Anthropic (Claude) / DeepSeek / Qwen (Alibaba Cloud) / Zhipu / Hunyuan / Doubao (Volcengine) / Gemini / MiniMax / NVIDIA / Novita AI / SiliconFlow / OpenRouter / Ollama |
 | Embeddings | Ollama / BGE / GTE / OpenAI-compatible APIs |
-| Vector DBs | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant |
-| Object Storage | Local / MinIO / AWS S3 / Volcengine TOS / Alibaba Cloud OSS |
-| IM Channels | WeCom / Feishu / Slack / Telegram / DingTalk / Mattermost |
-| Web Search | DuckDuckGo / Bing / Google / Tavily |
+| Vector DBs | PostgreSQL (pgvector) / Elasticsearch / Milvus / Weaviate / Qdrant / Apache Doris / Tencent VectorDB |
+| Object Storage | Local / MinIO / AWS S3 / Volcengine TOS / Alibaba Cloud OSS / Kingsoft Cloud KS3 |
+| IM Channels | WeCom / Feishu / Slack / Telegram / DingTalk / Mattermost / WeChat |
+| Web Search | DuckDuckGo / Bing / Google / Tavily / Baidu / Ollama / SearXNG |
 
-**🛡️ Platform**
+**Platform**
 
 | Capability | Details |
 |------------|---------|
 | Deployment | Local / Docker / Kubernetes (Helm) with private and offline support |
-| UI | Web UI / RESTful API / Chrome Extension |
+| UI | Web UI / RESTful API / CLI (`weknora`) / Chrome Extension / WeChat Mini Program |
+| Observability | Integrated Langfuse for ReAct loops, token tracking, tool calls, and pipeline tracing |
 | Task Management | MQ async tasks, automatic database migration on version upgrade |
-| Model Management | Centralized config, per-knowledge-base model selection, multi-tenant built-in model sharing |
+| Model Management | Centralized config, per-knowledge-base model selection, multi-tenant built-in model sharing, WeKnora Cloud hosted models and parsing |
+
+## 🧩 Chrome Extension
+
+[**WeKnora Chrome Extension**](https://chromewebstore.google.com/detail/jpemjbopikggjlmikmclgbmkhhopjdgd) lets you capture web content directly into your WeKnora knowledge base. Select text, images, or entire pages in the browser and save them as knowledge entries with one click — no copy-paste or file upload needed.
+
+
+## 📱 WeChat Mini Program
+
+The [WeKnora Mini Program](./miniprogram/README.md) provides a lightweight mobile client for configuring WeKnora API access, selecting knowledge bases, importing URLs, and asking knowledge chat from WeChat.
+
+
+## 🦞 ClawHub Skill
+
+[**WeKnora ClawHub Skill**](https://clawhub.ai/lyingbug/weknora) is a WeKnora skill published on the ClawHub platform. Once installed, it enables document import (file / URL / Markdown), hybrid search (vector + keyword) across knowledge bases, and knowledge entry management — all through the WeKnora REST API.
+
+- **Document Import** — Upload files, import web pages, or write Markdown knowledge via the agent
+- **Hybrid Search** — Search within or across knowledge bases with vector + keyword retrieval
+- **Knowledge Management** — List, browse, edit, and delete knowledge entries programmatically
+
+## ⌨️ Command-Line Interface
+
+`weknora` is the official CLI for driving the API from a terminal or AI agent.
+The command surface mirrors `gh` CLI's `<noun> <verb>` convention; output is
+human-readable by default and switches to a stable JSON envelope with `--json`.
+
+```bash
+weknora auth login --host https://kb.example.com
+weknora kb list
+weknora link --kb my-knowledge-base    # bind the current directory
+weknora doc upload notes.md
+weknora chat "summarise the design doc"
+```
+
+See [`cli/README.md`](./cli/README.md) for install + 5-minute quickstart
+and [`cli/AGENTS.md`](./cli/AGENTS.md) for the operational contract that
+AI agents (Claude Code, Cursor, Aider, …) can rely on.
 
 ## 🚀 Getting Started
 
 ### 🛠 Prerequisites
 
-Make sure the following tools are installed on your system:
+- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
+- [Git](https://git-scm.com/)
 
-* [Docker](https://www.docker.com/)
-* [Docker Compose](https://docs.docker.com/compose/)
-* [Git](https://git-scm.com/)
-
-### 📦 Installation
-
-#### ① Clone the repository
+### 📦 Installation & Launch
 
 ```bash
-# Clone the main repository
 git clone https://github.com/Tencent/WeKnora.git
 cd WeKnora
+cp .env.example .env   # Edit .env as needed, see comments in the file
+docker compose up -d   # Start core services
 ```
 
-#### ② Configure environment variables
+Once started, visit **http://localhost** to get started.
 
-```bash
-# Copy example env file
-cp .env.example .env
+> To use a local Ollama model, run `ollama serve > /dev/null 2>&1 &` first.
 
-# Edit .env and set required values
-# All variables are documented in the .env.example comments
-```
+### 🔧 Optional Services (Docker Compose Profiles)
 
-#### ③ Start the core services
+Add `--profile` flags to enable additional components. Multiple profiles can be combined:
 
-#### Start Ollama separately (Optional)
+| Profile | Description | Command |
+|---------|-------------|---------|
+| _(default)_ | Core services | `docker compose up -d` |
+| `full` | All features | `docker compose --profile full up -d` |
+| `neo4j` | Knowledge Graph (Neo4j) | `docker compose --profile neo4j up -d` |
+| `minio` | Object Storage (MinIO) | `docker compose --profile minio up -d` |
+| `langfuse` | Tracing (Langfuse) | `docker compose --profile langfuse up -d` |
 
-If you configured a local Ollama model in `.env`, start the Ollama service separately:
+Combine profiles: `docker compose --profile neo4j --profile minio up -d`
 
-```bash
-ollama serve > /dev/null 2>&1 &
-```
+Stop services: `docker compose down`
 
-#### Activate different combinations of features
+### 🌐 Service URLs
 
-- Minimum core services
-```bash
-docker compose up -d
-```
-
-- All features enabled
-```bash
-docker compose --profile full up -d
-```
-
-- Tracing logs required
-```bash
-docker compose --profile jaeger up -d
-```
-
-- Neo4j knowledge graph required
-```bash
-docker compose --profile neo4j up -d
-```
-
-- Minio file storage service required
-```bash
-docker compose --profile minio up -d
-```
-
-- Multiple options combination
-```bash
-docker compose --profile neo4j --profile minio up -d
-```
-
-#### ④ Stop the services
-
-```bash
-docker compose down
-```
-
-### 🌐 Access Services
-
-Once started, services will be available at:
-
-* Web UI: `http://localhost`
-* Backend API: `http://localhost:8080`
-* Jaeger Tracing: `http://localhost:16686`
-
-## 📱 Interface Showcase
-
-<table>
-  <tr>
-    <td colspan="2"><b>Intelligent Q&A Conversation</b><br/><img src="./docs/images/qa.png" alt="Intelligent Q&A Conversation"></td>
-  </tr>
-  <tr>
-    <td colspan="2"><b>Agent Mode Tool Call Process</b><br/><img src="./docs/images/agent-qa.png" alt="Agent Mode Tool Call Process"></td>
-  </tr>
-    <tr>
-    <td><b>Knowledge Base Management</b><br/><img src="./docs/images/knowledgebases.png" alt="Knowledge Base Management"></td>
-    <td><b>Conversation Settings</b><br/><img src="./docs/images/settings.png" alt="Conversation Settings"></td>
-  </tr>
-</table>
-
+| Service | URL |
+|---------|-----|
+| Web UI | `http://localhost` |
+| Backend API | `http://localhost:8080` |
+| Langfuse Tracing | `http://localhost:3000` |
 
 ## MCP Server
 
@@ -362,42 +396,11 @@ WeKnora/
 
 ## 🤝 Contributing
 
-We welcome community contributions! For suggestions, bugs, or feature requests, please submit an [Issue](https://github.com/Tencent/WeKnora/issues) or directly create a Pull Request.
+Welcome to submit [Issues](https://github.com/Tencent/WeKnora/issues) or Pull Requests.
 
-### 🎯 How to Contribute
+**Process:** Fork → Create branch → Commit changes → Open PR
 
-- 🐛 **Bug Fixes**: Discover and fix system defects
-- ✨ **New Features**: Propose and implement new capabilities
-- 📚 **Documentation**: Improve project documentation
-- 🧪 **Test Cases**: Write unit and integration tests
-- 🎨 **UI/UX Enhancements**: Improve user interface and experience
-
-### 📋 Contribution Process
-
-1. **Fork the project** to your GitHub account
-2. **Create a feature branch** `git checkout -b feature/amazing-feature`
-3. **Commit changes** `git commit -m 'Add amazing feature'`
-4. **Push branch** `git push origin feature/amazing-feature`
-5. **Create a Pull Request** with detailed description of changes
-
-### 🎨 Code Standards
-
-- Follow [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
-- Format code using `gofmt`
-- Add necessary unit tests
-- Update relevant documentation
-
-### 📝 Commit Guidelines
-
-Use [Conventional Commits](https://www.conventionalcommits.org/) standard:
-
-```
-feat: Add document batch upload functionality
-fix: Resolve vector retrieval precision issue
-docs: Update API documentation
-test: Add retrieval engine test cases
-refactor: Restructure document parsing module
-```
+**Standards:** Format code with `gofmt`, follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:` / `fix:` / `docs:` / `test:` / `refactor:`)
 
 ## 🔒 Security Notice
 

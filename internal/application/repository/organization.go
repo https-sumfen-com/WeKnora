@@ -18,7 +18,12 @@ var (
 	ErrInviteCodeExpired      = errors.New("invite code has expired")
 )
 
-// organizationRepository implements OrganizationRepository interface
+// organizationRepository implements OrganizationRepository.
+//
+// Plan 3 of #1303 lifts membership from per-user to per-tenant (see
+// migration 000045). All "member" methods on this repo now operate on
+// the (org, tenant) tuple; the underlying table is
+// organization_tenant_members.
 type organizationRepository struct {
 	db *gorm.DB
 }
@@ -60,14 +65,13 @@ func (r *organizationRepository) GetByInviteCode(ctx context.Context, inviteCode
 	return &org, nil
 }
 
-// ListByUserID lists organizations that a user belongs to
-func (r *organizationRepository) ListByUserID(ctx context.Context, userID string) ([]*types.Organization, error) {
+// ListByTenantID lists organizations whose tenant participates as a member.
+func (r *organizationRepository) ListByTenantID(ctx context.Context, tenantID uint64) ([]*types.Organization, error) {
 	var orgs []*types.Organization
 
-	// Get organizations where user is a member
 	err := r.db.WithContext(ctx).
-		Joins("JOIN organization_members ON organization_members.organization_id = organizations.id").
-		Where("organization_members.user_id = ?", userID).
+		Joins("JOIN organization_tenant_members otm ON otm.organization_id = organizations.id").
+		Where("otm.tenant_id = ?", tenantID).
 		Order("organizations.created_at DESC").
 		Find(&orgs).Error
 
@@ -86,7 +90,6 @@ func (r *organizationRepository) ListSearchable(ctx context.Context, query strin
 	q := r.db.WithContext(ctx).Where("searchable = ?", true)
 	if query != "" {
 		pattern := "%" + query + "%"
-		// 支持按名称、描述或空间 ID 搜索，便于区分同名空间
 		q = q.Where("name ILIKE ? OR description ILIKE ? OR id::text ILIKE ?", pattern, pattern, pattern)
 	}
 	err := q.Order("created_at DESC").Limit(limit).Find(&orgs).Error
@@ -108,12 +111,12 @@ func (r *organizationRepository) Delete(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&types.Organization{}).Error
 }
 
-// AddMember adds a member to an organization
-func (r *organizationRepository) AddMember(ctx context.Context, member *types.OrganizationMember) error {
-	// Check if member already exists
+// AddTenantMember inserts a new (org, tenant) membership row. Returns
+// ErrOrgMemberAlreadyExists if a row already exists for this tuple.
+func (r *organizationRepository) AddTenantMember(ctx context.Context, member *types.OrganizationTenantMember) error {
 	var count int64
-	r.db.WithContext(ctx).Model(&types.OrganizationMember{}).
-		Where("organization_id = ? AND user_id = ?", member.OrganizationID, member.UserID).
+	r.db.WithContext(ctx).Model(&types.OrganizationTenantMember{}).
+		Where("organization_id = ? AND tenant_id = ?", member.OrganizationID, member.TenantID).
 		Count(&count)
 
 	if count > 0 {
@@ -123,11 +126,11 @@ func (r *organizationRepository) AddMember(ctx context.Context, member *types.Or
 	return r.db.WithContext(ctx).Create(member).Error
 }
 
-// RemoveMember removes a member from an organization
-func (r *organizationRepository) RemoveMember(ctx context.Context, orgID string, userID string) error {
+// RemoveTenantMember removes the (org, tenant) membership row.
+func (r *organizationRepository) RemoveTenantMember(ctx context.Context, orgID string, tenantID uint64) error {
 	result := r.db.WithContext(ctx).
-		Where("organization_id = ? AND user_id = ?", orgID, userID).
-		Delete(&types.OrganizationMember{})
+		Where("organization_id = ? AND tenant_id = ?", orgID, tenantID).
+		Delete(&types.OrganizationTenantMember{})
 
 	if result.Error != nil {
 		return result.Error
@@ -138,11 +141,11 @@ func (r *organizationRepository) RemoveMember(ctx context.Context, orgID string,
 	return nil
 }
 
-// UpdateMemberRole updates a member's role in an organization
-func (r *organizationRepository) UpdateMemberRole(ctx context.Context, orgID string, userID string, role types.OrgMemberRole) error {
+// UpdateTenantMemberRole updates the role for a (org, tenant) membership.
+func (r *organizationRepository) UpdateTenantMemberRole(ctx context.Context, orgID string, tenantID uint64, role types.OrgMemberRole) error {
 	result := r.db.WithContext(ctx).
-		Model(&types.OrganizationMember{}).
-		Where("organization_id = ? AND user_id = ?", orgID, userID).
+		Model(&types.OrganizationTenantMember{}).
+		Where("organization_id = ? AND tenant_id = ?", orgID, tenantID).
 		Update("role", role)
 
 	if result.Error != nil {
@@ -154,11 +157,11 @@ func (r *organizationRepository) UpdateMemberRole(ctx context.Context, orgID str
 	return nil
 }
 
-// ListMembers lists all members of an organization
-func (r *organizationRepository) ListMembers(ctx context.Context, orgID string) ([]*types.OrganizationMember, error) {
-	var members []*types.OrganizationMember
+// ListTenantMembers lists all tenant memberships for an organization.
+func (r *organizationRepository) ListTenantMembers(ctx context.Context, orgID string) ([]*types.OrganizationTenantMember, error) {
+	var members []*types.OrganizationTenantMember
 	err := r.db.WithContext(ctx).
-		Preload("User").
+		Preload("RepresentativeUser").
 		Where("organization_id = ?", orgID).
 		Order("created_at ASC").
 		Find(&members).Error
@@ -169,11 +172,11 @@ func (r *organizationRepository) ListMembers(ctx context.Context, orgID string) 
 	return members, nil
 }
 
-// GetMember gets a specific member of an organization
-func (r *organizationRepository) GetMember(ctx context.Context, orgID string, userID string) (*types.OrganizationMember, error) {
-	var member types.OrganizationMember
+// GetTenantMember returns the (org, tenant) membership row, or ErrOrgMemberNotFound when missing.
+func (r *organizationRepository) GetTenantMember(ctx context.Context, orgID string, tenantID uint64) (*types.OrganizationTenantMember, error) {
+	var member types.OrganizationTenantMember
 	err := r.db.WithContext(ctx).
-		Where("organization_id = ? AND user_id = ?", orgID, userID).
+		Where("organization_id = ? AND tenant_id = ?", orgID, tenantID).
 		First(&member).Error
 
 	if err != nil {
@@ -185,19 +188,19 @@ func (r *organizationRepository) GetMember(ctx context.Context, orgID string, us
 	return &member, nil
 }
 
-// ListMembersByUserForOrgs returns one member record per org where the user is a member (batch).
-func (r *organizationRepository) ListMembersByUserForOrgs(ctx context.Context, userID string, orgIDs []string) (map[string]*types.OrganizationMember, error) {
+// ListTenantMembersByTenantForOrgs returns one membership row per org where the tenant participates (batch).
+func (r *organizationRepository) ListTenantMembersByTenantForOrgs(ctx context.Context, tenantID uint64, orgIDs []string) (map[string]*types.OrganizationTenantMember, error) {
 	if len(orgIDs) == 0 {
-		return make(map[string]*types.OrganizationMember), nil
+		return make(map[string]*types.OrganizationTenantMember), nil
 	}
-	var members []*types.OrganizationMember
+	var members []*types.OrganizationTenantMember
 	err := r.db.WithContext(ctx).
-		Where("user_id = ? AND organization_id IN ?", userID, orgIDs).
+		Where("tenant_id = ? AND organization_id IN ?", tenantID, orgIDs).
 		Find(&members).Error
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]*types.OrganizationMember, len(members))
+	out := make(map[string]*types.OrganizationTenantMember, len(members))
 	for _, m := range members {
 		if m != nil {
 			out[m.OrganizationID] = m
@@ -206,11 +209,11 @@ func (r *organizationRepository) ListMembersByUserForOrgs(ctx context.Context, u
 	return out, nil
 }
 
-// CountMembers counts the number of members in an organization
-func (r *organizationRepository) CountMembers(ctx context.Context, orgID string) (int64, error) {
+// CountTenantMembers counts the number of tenant members in an organization.
+func (r *organizationRepository) CountTenantMembers(ctx context.Context, orgID string) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
-		Model(&types.OrganizationMember{}).
+		Model(&types.OrganizationTenantMember{}).
 		Where("organization_id = ?", orgID).
 		Count(&count).Error
 	return count, err
@@ -223,6 +226,49 @@ func (r *organizationRepository) UpdateInviteCode(ctx context.Context, orgID str
 		Model(&types.Organization{}).
 		Where("id = ?", orgID).
 		Updates(updates).Error
+}
+
+// ----------------
+// iframe support
+// ----------------
+
+// GetByExternalID finds an organization by external iframe identifier (cid).
+func (r *organizationRepository) GetByExternalID(ctx context.Context, externalID string) (*types.Organization, error) {
+	var org types.Organization
+	if err := r.db.WithContext(ctx).
+		Where("external_id = ?", externalID).
+		First(&org).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrOrganizationNotFound
+		}
+		return nil, err
+	}
+	return &org, nil
+}
+
+// UpdateOwner sets the organization's owner user ID.
+func (r *organizationRepository) UpdateOwner(ctx context.Context, orgID, userID string) error {
+	return r.db.WithContext(ctx).
+		Model(&types.Organization{}).
+		Where("id = ?", orgID).
+		Updates(map[string]interface{}{"owner_id": userID, "updated_at": time.Now()}).Error
+}
+
+// UpdateIframeSecret sets or clears the plaintext iframe secret for an org.
+// Non-empty values are AES-GCM encrypted by the BeforeSave hook via Save.
+func (r *organizationRepository) UpdateIframeSecret(ctx context.Context, orgID, plaintextSecret string) error {
+	if plaintextSecret == "" {
+		return r.db.WithContext(ctx).
+			Model(&types.Organization{}).
+			Where("id = ?", orgID).
+			Update("iframe_secret", "").Error
+	}
+	var org types.Organization
+	if err := r.db.WithContext(ctx).Where("id = ?", orgID).First(&org).Error; err != nil {
+		return err
+	}
+	org.IframeSecret = plaintextSecret
+	return r.db.WithContext(ctx).Save(&org).Error
 }
 
 // ----------------
@@ -252,11 +298,11 @@ func (r *organizationRepository) GetJoinRequestByID(ctx context.Context, id stri
 	return &request, nil
 }
 
-// GetPendingJoinRequest gets a pending join request for a user in an organization (any type)
-func (r *organizationRepository) GetPendingJoinRequest(ctx context.Context, orgID string, userID string) (*types.OrganizationJoinRequest, error) {
+// GetPendingJoinRequestByTenant returns a pending request for the given (org, tenant).
+func (r *organizationRepository) GetPendingJoinRequestByTenant(ctx context.Context, orgID string, tenantID uint64) (*types.OrganizationJoinRequest, error) {
 	var request types.OrganizationJoinRequest
 	err := r.db.WithContext(ctx).
-		Where("organization_id = ? AND user_id = ? AND status = ?", orgID, userID, types.JoinRequestStatusPending).
+		Where("organization_id = ? AND tenant_id = ? AND status = ?", orgID, tenantID, types.JoinRequestStatusPending).
 		First(&request).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -267,11 +313,11 @@ func (r *organizationRepository) GetPendingJoinRequest(ctx context.Context, orgI
 	return &request, nil
 }
 
-// GetPendingRequestByType gets a pending request for a user filtered by request type
-func (r *organizationRepository) GetPendingRequestByType(ctx context.Context, orgID string, userID string, requestType types.JoinRequestType) (*types.OrganizationJoinRequest, error) {
+// GetPendingRequestByTenantAndType narrows the (org, tenant) pending dedup query to a specific request_type.
+func (r *organizationRepository) GetPendingRequestByTenantAndType(ctx context.Context, orgID string, tenantID uint64, requestType types.JoinRequestType) (*types.OrganizationJoinRequest, error) {
 	var request types.OrganizationJoinRequest
 	err := r.db.WithContext(ctx).
-		Where("organization_id = ? AND user_id = ? AND status = ? AND request_type = ?", orgID, userID, types.JoinRequestStatusPending, requestType).
+		Where("organization_id = ? AND tenant_id = ? AND status = ? AND request_type = ?", orgID, tenantID, types.JoinRequestStatusPending, requestType).
 		First(&request).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -322,45 +368,4 @@ func (r *organizationRepository) UpdateJoinRequestStatus(ctx context.Context, id
 			"reviewed_at":    gorm.Expr("NOW()"),
 			"review_message": reviewMessage,
 		}).Error
-}
-
-// GetByExternalID finds an organization by external iframe identifier (cid).
-// Returns (nil, gorm.ErrRecordNotFound) when absent — same convention as GetByID.
-func (r *organizationRepository) GetByExternalID(ctx context.Context, externalID string) (*types.Organization, error) {
-	var org types.Organization
-	if err := r.db.WithContext(ctx).
-		Where("external_id = ?", externalID).
-		First(&org).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrOrganizationNotFound
-		}
-		return nil, err
-	}
-	return &org, nil
-}
-
-// UpdateOwner sets the organization's owner user ID.
-func (r *organizationRepository) UpdateOwner(ctx context.Context, orgID, userID string) error {
-	return r.db.WithContext(ctx).
-		Model(&types.Organization{}).
-		Where("id = ?", orgID).
-		Updates(map[string]interface{}{"owner_id": userID, "updated_at": time.Now()}).Error
-}
-
-// UpdateIframeSecret sets or clears the plaintext iframe secret for an org.
-// Non-empty values are AES-GCM encrypted by the BeforeSave hook via Save.
-// Empty string clears the column bypassing the hook (hook skips empty values).
-func (r *organizationRepository) UpdateIframeSecret(ctx context.Context, orgID, plaintextSecret string) error {
-	if plaintextSecret == "" {
-		return r.db.WithContext(ctx).
-			Model(&types.Organization{}).
-			Where("id = ?", orgID).
-			Update("iframe_secret", "").Error
-	}
-	var org types.Organization
-	if err := r.db.WithContext(ctx).Where("id = ?", orgID).First(&org).Error; err != nil {
-		return err
-	}
-	org.IframeSecret = plaintextSecret
-	return r.db.WithContext(ctx).Save(&org).Error
 }

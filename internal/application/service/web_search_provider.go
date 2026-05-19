@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -60,8 +61,63 @@ func (s *webSearchProviderService) UpdateProvider(ctx context.Context, provider 
 		}
 	}
 
+	if provider.Provider != "" {
+		if err := validateProviderParameters(provider.Provider, provider.Parameters); err != nil {
+			return err
+		}
+	}
+
 	logger.Infof(ctx, "Updating web search provider: tenant=%d, id=%s", provider.TenantID, provider.ID)
 	return s.repo.Update(ctx, provider)
+}
+
+// UpdateProviderCredentials writes the api_key credential field. Web search
+// providers are stateless from our side — every search call rebuilds a
+// transport from current Parameters — so no cache invalidation is required.
+func (s *webSearchProviderService) UpdateProviderCredentials(
+	ctx context.Context, tenantID uint64, id string, apiKey *string,
+) (*types.WebSearchProviderEntity, error) {
+	existing, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("web search provider not found")
+	}
+
+	if apiKey != nil && *apiKey != "" && *apiKey != existing.Parameters.APIKey {
+		existing.Parameters.APIKey = *apiKey
+		if err := s.repo.Update(ctx, existing); err != nil {
+			return nil, err
+		}
+		logger.Infof(ctx, "WebSearch provider credentials updated: tenant=%d id=%s", tenantID, id)
+	}
+	return existing, nil
+}
+
+// ClearProviderCredential clears the api_key credential. Idempotent.
+func (s *webSearchProviderService) ClearProviderCredential(
+	ctx context.Context, tenantID uint64, id, field string,
+) error {
+	if field != "api_key" {
+		return fmt.Errorf("unknown credential field: %s", field)
+	}
+	existing, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("web search provider not found")
+	}
+	if existing.Parameters.APIKey == "" {
+		return nil
+	}
+	existing.Parameters.APIKey = ""
+	if err := s.repo.Update(ctx, existing); err != nil {
+		return err
+	}
+	logger.Infof(ctx, "WebSearch provider credential cleared by user: tenant=%d id=%s field=%s", tenantID, id, field)
+	return nil
 }
 
 // DeleteProvider deletes a provider by tenant + id.
@@ -78,7 +134,8 @@ func isValidProviderType(provider types.WebSearchProviderType) bool {
 		types.WebSearchProviderTypeDuckDuckGo,
 		types.WebSearchProviderTypeTavily,
 		types.WebSearchProviderTypeOllama,
-		types.WebSearchProviderTypeBaidu:
+		types.WebSearchProviderTypeBaidu,
+		types.WebSearchProviderTypeSearxng:
 		return true
 	default:
 		return false
@@ -113,6 +170,17 @@ func validateProviderParameters(provider types.WebSearchProviderType, params typ
 		}
 	case types.WebSearchProviderTypeDuckDuckGo:
 		// No API key required
+	case types.WebSearchProviderTypeSearxng:
+		if err := infra_web_search.ValidateSearxngBaseURL(params.BaseURL); err != nil {
+			return err
+		}
+	}
+	if err := validateOptionalProxyURL(params.ProxyURL); err != nil {
+		return err
 	}
 	return nil
+}
+
+func validateOptionalProxyURL(proxyURL string) error {
+	return infra_web_search.ValidateProxyURL(proxyURL)
 }

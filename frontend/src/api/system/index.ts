@@ -11,51 +11,16 @@ export interface SystemInfo {
   graph_database_engine?: string
   minio_enabled?: boolean
   db_version?: string
-}
-
-export interface ToolDefinition {
-  name: string
-  label: string
-  description: string
+  /** Human-readable error message when the startup migration failed.
+   *  When non-empty, the system info view should surface a troubleshooting
+   *  banner (see docs/migration-troubleshooting.md). */
+  db_migration_error?: string
 }
 
 export interface PlaceholderDefinition {
   name: string
   label: string
   description: string
-}
-
-export interface AgentConfig {
-  max_iterations: number
-  reflection_enabled: boolean
-  allowed_tools: string[]
-  temperature: number
-  knowledge_bases?: string[]
-  system_prompt?: string  // Unified system prompt (uses {{web_search_status}} placeholder)
-  available_tools?: ToolDefinition[]  // GET 响应中包含，POST/PUT 不需要
-  available_placeholders?: PlaceholderDefinition[]  // GET 响应中包含，POST/PUT 不需要
-}
-
-export interface ConversationConfig {
-  prompt: string
-  context_template: string
-  temperature: number
-  max_completion_tokens: number
-  max_rounds: number
-  embedding_top_k: number
-  keyword_threshold: number
-  vector_threshold: number
-  rerank_top_k: number
-  rerank_threshold: number
-  enable_rewrite: boolean
-  fallback_strategy: string
-  fallback_response: string
-  fallback_prompt?: string
-  summary_model_id?: string
-  rerank_model_id?: string
-  rewrite_prompt_system?: string
-  rewrite_prompt_user?: string
-  enable_query_expansion?: boolean
 }
 
 export interface PromptTemplate {
@@ -89,38 +54,8 @@ export function getSystemInfo(): Promise<{ data: SystemInfo }> {
   return get('/api/v1/system/info')
 }
 
-export function getAgentConfig(): Promise<{ data: AgentConfig }> {
-  return get('/api/v1/tenants/kv/agent-config')
-}
-
-export function updateAgentConfig(config: AgentConfig): Promise<{ data: AgentConfig }> {
-  return put('/api/v1/tenants/kv/agent-config', config)
-}
-
-export function getConversationConfig(): Promise<{ data: ConversationConfig }> {
-  return get('/api/v1/tenants/kv/conversation-config')
-}
-
-export function updateConversationConfig(config: ConversationConfig): Promise<{ data: ConversationConfig }> {
-  return put('/api/v1/tenants/kv/conversation-config', config)
-}
-
 export function getPromptTemplates(): Promise<{ data: PromptTemplatesConfig }> {
   return get('/api/v1/tenants/kv/prompt-templates')
-}
-
-export interface MinioBucketInfo {
-  name: string
-  policy: 'public' | 'private' | 'custom'
-  created_at?: string
-}
-
-export interface ListMinioBucketsResponse {
-  buckets: MinioBucketInfo[]
-}
-
-export function listMinioBuckets(): Promise<{ data: ListMinioBucketsResponse }> {
-  return get('/api/v1/system/minio/buckets')
 }
 
 export interface ParserEngineInfo {
@@ -183,10 +118,10 @@ export function reconnectDocReader(addr: string): Promise<ParserEnginesResponse 
 // ---- 存储引擎配置（租户级，供文档/图片存储与 docreader 使用） ----
 
 export interface StorageEngineConfig {
-  default_provider: string // "local" | "minio" | "cos" | "tos" | "s3" | "oss"
-  local?: { path_prefix: string }
-  minio?: { mode: string; endpoint: string; access_key_id: string; secret_access_key: string; bucket_name: string; use_ssl: boolean; path_prefix: string }
-  cos?: {
+  default_provider: string // "local" | "minio" | "cos" | "tos" | "s3" | "oss" | "ks3" | "obs"
+  local: { path_prefix: string }
+  minio: { mode: string; endpoint: string; access_key_id: string; secret_access_key: string; bucket_name: string; use_ssl: boolean; path_prefix: string }
+  cos: {
     secret_id: string
     secret_key: string
     region: string
@@ -194,7 +129,7 @@ export interface StorageEngineConfig {
     app_id: string
     path_prefix: string
   }
-  tos?: {
+  tos: {
     endpoint: string
     region: string
     access_key: string
@@ -202,7 +137,7 @@ export interface StorageEngineConfig {
     bucket_name: string
     path_prefix: string
   }
-  s3?: {
+  s3: {
     endpoint: string
     region: string
     access_key: string
@@ -210,7 +145,7 @@ export interface StorageEngineConfig {
     bucket_name: string
     path_prefix: string
   }
-  oss?: {
+  oss: {
     endpoint: string
     region: string
     access_key: string
@@ -221,16 +156,34 @@ export interface StorageEngineConfig {
     temp_bucket_name: string
     temp_region: string
   }
+  ks3: {
+    endpoint: string
+    region: string
+    access_key: string
+    secret_key: string
+    bucket_name: string
+    path_prefix: string
+  }
+  obs: {
+    endpoint: string
+    region: string
+    access_key: string
+    secret_key: string
+    bucket_name: string
+    path_prefix: string
+  }
 }
 
 export interface StorageEngineStatusItem {
   name: string
+  allowed?: boolean
   available: boolean
   description: string
 }
 
 export interface GetStorageEngineStatusResponse {
   engines: StorageEngineStatusItem[]
+  allowed_providers?: string[]
   minio_env_available: boolean
 }
 
@@ -247,12 +200,14 @@ export function getStorageEngineStatus(): Promise<{ data: GetStorageEngineStatus
 }
 
 export interface StorageCheckRequest {
-  provider: string // "minio" | "cos" | "tos" | "s3" | "oss"
+  provider: string // "minio" | "cos" | "tos" | "s3" | "oss" | "ks3" | "obs"
   minio?: StorageEngineConfig['minio']
   cos?: StorageEngineConfig['cos']
   tos?: StorageEngineConfig['tos']
   s3?: StorageEngineConfig['s3']
   oss?: StorageEngineConfig['oss']
+  ks3?: StorageEngineConfig['ks3']
+  obs?: StorageEngineConfig['obs']
 }
 
 export interface StorageCheckResponse {
