@@ -1437,7 +1437,7 @@ func (s *userService) IframeLogin(
 		}
 		// 6.1 Provision a default shared KB on the org's very first member login.
 		// Failure here must not block login — caller can still create KBs manually later.
-		if count, cntErr := s.organizationRepo.CountMembers(ctx, org.ID); cntErr == nil && count == 1 {
+		if count, cntErr := s.organizationRepo.CountTenantMembers(ctx, org.ID); cntErr == nil && count == 1 {
 			s.maybeCreateDefaultSharedKB(ctx, org, user)
 		}
 	} else {
@@ -1446,7 +1446,7 @@ func (s *userService) IframeLogin(
 		}
 		// Parent system is authoritative: sync role if changed.
 		if member != nil && string(member.Role) != string(role) {
-			if err := s.organizationRepo.UpdateMemberRole(ctx, org.ID, member.UserID, role); err != nil {
+			if err := s.organizationRepo.UpdateTenantMemberRole(ctx, org.ID, member.TenantID, role); err != nil {
 				// Log but don't fail — keep existing member role as fallback.
 				logger.Warnf(ctx, "iframe_login role sync failed: %v", err)
 			}
@@ -1472,10 +1472,13 @@ func (s *userService) IframeLogin(
 	logger.Infof(ctx, "iframe_login.success org_id=%s user_id=%s mobile_suffix=%s role=%s",
 		org.ID, user.ID, iframeMobileSuffix(req.Mobile), role)
 
+	memberships := s.BuildLoginMemberships(ctx, user, tenant)
+
 	return &types.LoginResponse{
 		Success:      true,
 		User:         user,
-		Tenant:       tenant,
+		ActiveTenant: tenant,
+		Memberships:  memberships,
 		Token:        accessToken,
 		RefreshToken: refreshToken,
 	}, nil
@@ -1486,32 +1489,21 @@ func (s *userService) IframeLogin(
 // (nil, nil, err) on DB failure.
 func (s *userService) findIframeUser(
 	ctx context.Context, orgID, mobile string,
-) (*types.User, *types.OrganizationMember, error) {
-	members, err := s.organizationRepo.ListMembers(ctx, orgID)
+) (*types.User, *types.OrganizationTenantMember, error) {
+	members, err := s.organizationRepo.ListTenantMembers(ctx, orgID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(members) == 0 {
-		return nil, nil, nil
-	}
-	userIDs := make([]string, 0, len(members))
 	for _, m := range members {
-		userIDs = append(userIDs, m.UserID)
-	}
-	// Fetch users in batch, filter by mobile.
-	user, err := s.userRepo.FindOneByUserIDsAndMobile(ctx, userIDs, mobile)
-	if err != nil {
-		return nil, nil, err
-	}
-	if user == nil {
-		return nil, nil, nil
-	}
-	for i := range members {
-		if members[i].UserID == user.ID {
-			return user, members[i], nil
+		user, err := s.userRepo.GetUserByTenantAndMobile(ctx, m.TenantID, mobile)
+		if err != nil {
+			continue
+		}
+		if user != nil {
+			return user, m, nil
 		}
 	}
-	return user, nil, nil
+	return nil, nil, nil
 }
 
 // maybeCreateDefaultSharedKB creates a `{org.Name}共享知识库` in the first member's
@@ -1566,7 +1558,7 @@ func (s *userService) maybeCreateDefaultSharedKB(
 // createIframeUserInOrg provisions (personal tenant, user, org member) as one atomic iframe flow.
 func (s *userService) createIframeUserInOrg(
 	ctx context.Context, org *types.Organization, mobile string, role types.OrgMemberRole,
-) (*types.User, *types.OrganizationMember, error) {
+) (*types.User, *types.OrganizationTenantMember, error) {
 	// Random bcrypt placeholder (never used for login)
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
@@ -1605,23 +1597,25 @@ func (s *userService) createIframeUserInOrg(
 		return nil, nil, fmt.Errorf("create user: %w", err)
 	}
 
-	// 3. Organization member
-	member := &types.OrganizationMember{
-		ID:             uuid.New().String(),
-		OrganizationID: org.ID,
-		UserID:         user.ID,
-		TenantID:       createdTenant.ID,
-		Role:           role,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+	// 3. Organization tenant member (Plan 3: membership is per-tenant)
+	now := time.Now()
+	member := &types.OrganizationTenantMember{
+		ID:                   uuid.New().String(),
+		OrganizationID:       org.ID,
+		TenantID:             createdTenant.ID,
+		Role:                 role,
+		RepresentativeUserID: user.ID,
+		JoinedAt:             &now,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
-	if err := s.organizationRepo.AddMember(ctx, member); err != nil {
-		return nil, nil, fmt.Errorf("add org member: %w", err)
+	if err := s.organizationRepo.AddTenantMember(ctx, member); err != nil {
+		return nil, nil, fmt.Errorf("add org tenant member: %w", err)
 	}
 
 	// If org has no owner yet, first admin becomes owner.
 	if org.OwnerID == "" && role == types.OrgRoleAdmin {
-		if err := s.organizationRepo.UpdateOwner(ctx, org.ID, user.ID); err != nil {
+		if err := s.organizationRepo.UpdateOwner(ctx, org.ID, user.ID, createdTenant.ID); err != nil {
 			logger.Warnf(ctx, "iframe_login update owner failed: %v", err)
 		}
 	}

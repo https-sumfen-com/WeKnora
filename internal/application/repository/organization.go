@@ -246,12 +246,12 @@ func (r *organizationRepository) GetByExternalID(ctx context.Context, externalID
 	return &org, nil
 }
 
-// UpdateOwner sets the organization's owner user ID.
-func (r *organizationRepository) UpdateOwner(ctx context.Context, orgID, userID string) error {
+// UpdateOwner sets the organization's owner user ID and owner tenant ID.
+func (r *organizationRepository) UpdateOwner(ctx context.Context, orgID, userID string, tenantID uint64) error {
 	return r.db.WithContext(ctx).
 		Model(&types.Organization{}).
 		Where("id = ?", orgID).
-		Updates(map[string]interface{}{"owner_id": userID, "updated_at": time.Now()}).Error
+		Updates(map[string]interface{}{"owner_id": userID, "owner_tenant_id": tenantID, "updated_at": time.Now()}).Error
 }
 
 // UpdateIframeSecret sets or clears the plaintext iframe secret for an org.
