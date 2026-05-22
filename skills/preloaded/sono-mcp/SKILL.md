@@ -1,11 +1,11 @@
 ---
 name: call-mcp-tools
-description: "Use when the server-side Agent must precisely choose and call currently registered service-support MCP tools: get_plot_info, get_weather, get_summary_base, or get_plot_device_info."
+description: "Use when the server-side Agent must precisely choose and call currently registered SONO-MCP tools: get_plot_info, get_weather, get_summary_base, or get_plot_device_info."
 ---
 
 # 服务端 Agent 精确调用本服务 MCP 工具
 
-本 skill 用于指导服务端 Agent 根据用户意图，准确选择并调用 `service-support` 当前已注册的 MCP 工具。
+本 skill 用于指导服务端 Agent 根据用户意图，准确选择并调用 `SONO-MCP` 当前已注册的 MCP 工具。
 
 目标：少调用、准调用、不猜参数、不把空结果当错误。
 
