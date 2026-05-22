@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { autoSetup, getCurrentUser } from '@/api/auth'
+import { autoSetup, getCurrentUser, sumfenAutoLogin } from '@/api/auth'
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
 const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
@@ -36,6 +36,20 @@ function hasPendingOIDCCallback() {
   if (typeof window === 'undefined') return false
   const hash = window.location.hash || ''
   return hash.includes('oidc_result=') || hash.includes('oidc_error=')
+}
+
+const SUMFEN_QUERY_KEYS = ['cid', 'token', 'terminal_id', 'entity_id', 'entity_info_id']
+
+const SUMFEN_PARAM_MAP: Record<string, string> = {
+  cid: 'cid',
+  token: 'token',
+  terminal_id: 'terminal-id',
+  entity_id: 'entity-id',
+  entity_info_id: 'entity-info-id',
+}
+
+function hasPendingSumfenParams(to: RouteLocationNormalized): boolean {
+  return SUMFEN_QUERY_KEYS.some(k => to.query[k])
 }
 
 const router = createRouter({
@@ -248,13 +262,14 @@ async function hydrateSessionFromToken(authStore: ReturnType<typeof useAuthStore
 
 let autoSetupAttempted = false
 let liteDeepLinkRestoreDone = false
+let sumfenAutoLoginAttempted = false
 
 // 路由守卫：检查认证状态和系统初始化状态
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
 
   // OIDC 回跳登录结果依赖 App.vue 在挂载后消费 URL hash。
-  // 如果这里先按“未登录”拦截到 /login，会导致回调结果没有机会落盘。
+  // 如果这里先按”未登录”拦截到 /login，会导致回调结果没有机会落盘。
   if (hasPendingOIDCCallback()) {
     next()
     return
@@ -288,6 +303,26 @@ router.beforeEach(async (to, from, next) => {
   // 检查用户认证状态
   if (to.meta.requiresAuth !== false) {
     if (!authStore.isLoggedIn) {
+      // Sumfen 渠道自动登录：在守卫里阻塞完成，避免组件挂载后发起 API 调用触发 401 重定向
+      if (!sumfenAutoLoginAttempted && hasPendingSumfenParams(to)) {
+        sumfenAutoLoginAttempted = true
+        const headers: Record<string, string> = {}
+        for (const qk of SUMFEN_QUERY_KEYS) {
+          const val = to.query[qk]
+          if (val) headers[SUMFEN_PARAM_MAP[qk]] = String(val)
+        }
+        const result = await sumfenAutoLogin(headers as any)
+        if (result.success && result.loginData) {
+          persistLoginResponse(authStore, result.loginData)
+          authStore.setSelectedTenant(null, null)
+          // next() 不 next(location)：next(location) 重触发守卫，Pinia computed 尚未刷新会再次走到 /login
+          // URL 渠道参数由 App.vue 用 history.replaceState 清理（不触发导航）
+          next()
+          return
+        }
+        // Sumfen 登录失败，继续走常规认证流程
+      }
+
       const restored = await hydrateSessionFromToken(authStore)
       if (restored) {
         next(to.fullPath)

@@ -14,7 +14,10 @@ const FRONTEND_VERSION = pkg.version ?? 'unknown'
 const DEV_PROXY_TARGET =
   process.env.VITE_DEV_PROXY_TARGET ||
   process.env.FRONTEND_BACKEND_URL ||
-  'http://localhost:8080'
+  'https://sono.sumfen.com'
+
+// Sumfen 渠道登录 API 代理，走 Vite 代理避免浏览器 CORS preflight 拦截自定义 header
+const SUMFEN_DEV_API_TARGET = process.env.VITE_SUMFEN_API_URL || 'https://api.demo.sumfen.com'
 
 function resolveVueOfficePptxEntry(): string {
   try {
@@ -59,7 +62,15 @@ export default defineConfig({
         target: DEV_PROXY_TARGET,
         changeOrigin: true,
         secure: false,
-      }
+      },
+      // Sumfen 渠道登录代理：/sumfen-api/* → https://api.demo.sumfen.com/*
+      // 让 fetch 走同源路径，避免浏览器因自定义 header 触发 CORS preflight 失败
+      '/sumfen-api': {
+        target: SUMFEN_DEV_API_TARGET,
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path: string) => path.replace(/^\/sumfen-api/, ''),
+      },
     }
   }
 })

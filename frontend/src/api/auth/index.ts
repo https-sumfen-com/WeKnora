@@ -372,6 +372,91 @@ export async function validateToken(): Promise<{ success: boolean; valid?: boole
   }
 }
 
+// URL 参数名 → 请求 header 名的映射
+export interface SumfenLoginHeaders {
+  cid?: string;
+  'entity-id'?: string;
+  'entity-info-id'?: string;
+  'terminal-id'?: string;
+  token?: string;
+}
+
+// raw 字段内嵌的完整 WeKnora 登录数据，结构与 persistLoginResponse 期望的一致
+export interface SumfenRawLoginData {
+  token: string;
+  refresh_token: string;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+    avatar?: string;
+    tenant_id: number;
+    can_access_all_tenants?: boolean;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+  };
+  tenant: {
+    id: number;
+    name: string;
+    api_key: string;
+    description?: string;
+    status?: string;
+    business?: string;
+    storage_quota?: number;
+    storage_used?: number;
+    created_at: string;
+    updated_at: string;
+  };
+}
+
+interface SumfenLoginResponse {
+  code: number;
+  data?: {
+    api_key: string;
+    email: string;
+    raw: SumfenRawLoginData;
+    refresh_token: string;
+    token: string;
+    user_id: string;
+  };
+  msg: string;
+}
+
+// dev 走 Vite 代理路径（/sumfen-api → api.demo.sumfen.com），避免自定义 header 触发 CORS preflight 失败
+const SUMFEN_LOGIN_URL = import.meta.env.DEV
+  ? '/sumfen-api/api/support/llm/weknora/login'
+  : 'http://api.sumfen.com/api/support/llm/weknora/login'
+
+/**
+ * 通过 Sumfen 渠道参数自动登录。
+ * headers 里的字段原样带入请求头供后端验签。
+ * 成功时返回 raw 里的完整 WeKnora 登录数据，调用方直接填充 store，无需再请求 /auth/me。
+ * 注：实测接口 code=1 表示成功，故只校验 token 是否存在。
+ */
+export async function sumfenAutoLogin(
+  headers: SumfenLoginHeaders
+): Promise<{ success: boolean; loginData?: SumfenRawLoginData }> {
+  try {
+    const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (headers.cid) reqHeaders['cid'] = headers.cid
+    if (headers.token) reqHeaders['token'] = headers.token
+    if (headers['terminal-id']) reqHeaders['terminal-id'] = headers['terminal-id']
+    if (headers['entity-id']) reqHeaders['entity-id'] = headers['entity-id']
+    if (headers['entity-info-id']) reqHeaders['entity-info-id'] = headers['entity-info-id']
+
+    const res = await fetch(SUMFEN_LOGIN_URL, { method: 'POST', headers: reqHeaders, body: '{}' })
+    const data: SumfenLoginResponse = await res.json()
+    // code 非零且含 token/user/tenant 时视为成功（实测 code=1 表示成功）
+    if (data.data?.token && data.data.raw?.user && data.data.raw?.tenant) {
+      return { success: true, loginData: data.data.raw }
+    }
+    return { success: false }
+  } catch {
+    return { success: false }
+  }
+}
+
 
 
 

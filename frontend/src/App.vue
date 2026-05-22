@@ -160,6 +160,30 @@ const handleGlobalOIDCCallback = async () => {
   }
 }
 
+// Sumfen 渠道自动登录，同 OIDC 模式：守卫放行后在此完成。
+// 完整镜像 Login.vue 的 persistLoginResponse，确保 setSelectedTenant / setMemberships
+// 等都正确调用，再通过 nextTick + router.replace 完成导航。
+const SUMFEN_PARAM_MAP: Record<string, string> = {
+  cid: 'cid',
+  token: 'token',
+  terminal_id: 'terminal-id',
+  entity_id: 'entity-id',
+  entity_info_id: 'entity-info-id',
+}
+const SUMFEN_QUERY_KEYS = Object.keys(SUMFEN_PARAM_MAP)
+
+// Sumfen 渠道登录已在 router guard 里阻塞完成；这里只负责清理 URL 里的渠道参数，
+// 避免用户看到带参数的地址栏，且不触发导航（history.replaceState 不重跑守卫）。
+const handleSumfenAutoLogin = () => {
+  const params = new URLSearchParams(window.location.search)
+  const hasSumfenParams = SUMFEN_QUERY_KEYS.some(k => params.get(k))
+  if (!hasSumfenParams) return
+  SUMFEN_QUERY_KEYS.forEach(k => params.delete(k))
+  const newSearch = params.toString()
+  const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash
+  window.history.replaceState({}, '', newUrl)
+}
+
 let updateCheckTimer: ReturnType<typeof setInterval> | null = null
 
 // Pending invitations poll: fires once on mount (logged-in case) and
@@ -228,6 +252,7 @@ const showPendingTenantSwitchToast = () => {
 }
 
 onMounted(() => {
+  handleSumfenAutoLogin()
   handleGlobalOIDCCallback()
   showPendingTenantSwitchToast()
 
