@@ -168,13 +168,15 @@ const router = createRouter({
 
 // 持久化 auto-setup / login 返回的认证信息到 store
 function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, response: any) {
-  if (response.user && response.tenant && response.token) {
+  // alert('Persisting login response: ' + JSON.stringify(response))
+  const activeTenant = response.active_tenant || response.tenant
+  if (response.user && activeTenant && response.token) {
     authStore.setUser({
       id: response.user.id || '',
       username: response.user.username || '',
       email: response.user.email || '',
       avatar: response.user.avatar,
-      tenant_id: String(response.tenant.id) || '',
+      tenant_id: String(activeTenant.id) || '',
       can_access_all_tenants: response.user.can_access_all_tenants || false,
       preferences: response.user.preferences,
       created_at: response.user.created_at || new Date().toISOString(),
@@ -185,12 +187,12 @@ function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, respon
       authStore.setRefreshToken(response.refresh_token)
     }
     authStore.setTenant({
-      id: String(response.tenant.id) || '',
-      name: response.tenant.name || '',
-      api_key: response.tenant.api_key || '',
+      id: String(activeTenant.id) || '',
+      name: activeTenant.name || '',
+      api_key: activeTenant.api_key || '',
       owner_id: response.user.id || '',
-      created_at: response.tenant.created_at || new Date().toISOString(),
-      updated_at: response.tenant.updated_at || new Date().toISOString()
+      created_at: activeTenant.created_at || new Date().toISOString(),
+      updated_at: activeTenant.updated_at || new Date().toISOString()
     })
   }
 }
