@@ -426,7 +426,7 @@ interface SumfenLoginResponse {
 // dev 走 Vite 代理路径（/sumfen-api → api.demo.sumfen.com），避免自定义 header 触发 CORS preflight 失败
 const SUMFEN_LOGIN_URL = import.meta.env.DEV
   ? '/sumfen-api/api/support/llm/weknora/login'
-  : 'http://api.sumfen.com/api/support/llm/weknora/login'
+  : 'https://api.sumfen.com/api/support/llm/weknora/login'
 
 /**
  * 通过 Sumfen 渠道参数自动登录。
