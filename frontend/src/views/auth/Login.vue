@@ -179,6 +179,11 @@
       </div>
     </div>
 
+    <!-- ICP Footer -->
+    <div class="icp-footer">
+      <a href="https://beian.miit.gov.cn/" target="_blank" class="icp-link">Copyright © 2020-2026 版权所有 粤ICP备15038210号</a>
+    </div>
+
     <!-- Right Form Section -->
     <div class="form-section">
       <div class="form-panel">
@@ -1303,6 +1308,28 @@ onMounted(async () => {
     .feature-text {
       line-height: 1.4;
     }
+  }
+}
+
+.icp-footer {
+  position: fixed;
+  bottom: 16px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.icp-link {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  pointer-events: all;
+
+  &:hover {
+    color: rgba(255, 255, 255, 0.9);
+    text-decoration: underline;
   }
 }
 
