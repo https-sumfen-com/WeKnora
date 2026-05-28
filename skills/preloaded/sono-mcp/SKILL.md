@@ -31,9 +31,9 @@ description: "Use when the server-side Agent must precisely choose and call curr
 | `dept_id` | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门 |
 | `base_id` | 仅 `get_summary_base`；有值时优先于 `dept_id` |
 | `plot_id` | `get_plot_info`、`get_weather` |
-| `keyword` | `get_plot_info`、`get_weather`；传地块名/区域名，不传天气词/时间词 |
+| `keyword` | `get_plot_info`、`get_weather`：传地块名/区域名，不传天气词/时间词；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
 | `device_id` | 仅 `get_plot_device_info` |
-| `days` | 仅 `get_weather`；传未来天数，MCP 支持后生效 |
+| `days` | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`） |
 
 ## 工具选择
 
@@ -48,7 +48,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 触发：用户查天气、气象、降雨温湿风，或问"适不适合打药/喷灌/作业"。
 
-- `days` 参数：明确要求未来 N 天预报时传入，当前只返回实时天气。
+- **`days=7`**（传入条件）：用户意图为**未来天气分析、未来预警、明天/这周/几天后天气**时传入 `days=7`；仅问当前/今天天气时不传。
 - 不要把"今天""下雨""适合打药"当作 `keyword`。
 - 有 `plot_id` 或 `keyword` 直接调用，不要先查地块。
 
@@ -58,6 +58,9 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 - `dept_id=0` 直接传，表示全部门权限。
 - `dept_id=-1` 且无 `base_id` 时先追问。
+- **`keyword` 传入条件（严格）**：
+  - 用户在问题中明确提到了基地名称（如"查一下苏沁基地"）**且**上下文中没有对应的 `base_id` → 才传 `keyword`
+  - 其他所有情况（默认汇总、按 dept_id/base_id 查询、用户未提基地名）→ **不传 `keyword`**，让服务端按 `dept_id`/`base_id` 处理
 - 返回成功后**必须按用户角色定向提取字段**，详见 `references/tool-summary-base.md`。
 
 ### get_plot_device_info
@@ -83,7 +86,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 ```
 
 - `plot_id <= 0` 且 `keyword` 为空 → 返回空成功（`source=default`，`payload={}`）。
-- `get_weather` 额外支持 `"days": 7`（MCP 支持后生效）。
+- `get_weather` 未来预报：追加 `"days": 7`，返回 `payload.days[]`；不传则仅返回 `payload.now`。
 
 ### get_summary_base
 
@@ -101,6 +104,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - `deptId` / `baseId` 为兼容别名；snake_case 优先。
 - `cid <= 0` 或无有效 `dept_id`/`base_id` → 返回空成功（`payload=[]`）。
 - `base_id > 0` 时忽略 `dept_id`，按基地查。
+- **默认不传 `keyword`**；仅用户明确说出基地名称且无 `base_id` 时才追加 `"keyword": "基地名"`。
 
 ### get_plot_device_info
 

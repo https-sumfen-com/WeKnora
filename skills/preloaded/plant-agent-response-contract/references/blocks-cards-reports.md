@@ -125,6 +125,41 @@ metric -> chart/table/map -> recommendation -> retrospect/phase-summary
 
 `priority` 只使用 `high`、`mid`、`low`。
 
+**`title` 为必需字段**，不能省略、不能为空字符串。每条 item 也必须有 `reason`（引用具体数值或字段值）。
+
+```json
+{
+  "type": "recommendation",
+  "cardId": "rec_plot22253_20260528",
+  "data": {
+    "title": "农事建议",
+    "items": [
+      {
+        "title": "水分含量偏低，建议尽快灌溉",
+        "priority": "high",
+        "reason": "长势评级中水分含量=低，当前处于幼苗期，需保持土壤湿润",
+        "action": "安排喷灌作业"
+      },
+      {
+        "title": "当前阶段注意事项",
+        "priority": "low",
+        "reason": "幼苗期注意事项：及时间苗，保持行距均匀，防止徒长"
+      }
+    ]
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `data.title` | **必需** | 整张卡片的标题，如"农事建议"、"设备异常建议"、"天气预警" |
+| `items[].title` | **必需** | 单条建议的标题，不能省略，不能为空 |
+| `items[].priority` | **必需** | `high` / `mid` / `low` |
+| `items[].reason` | **必需** | 引用具体字段值，不写通用模板语句 |
+| `items[].action` | 可选 | 前端动作描述 |
+
 ### retrospect
 
 用于历史作业、告警、任务、变化复盘。必须有时间线来源。

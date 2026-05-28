@@ -81,3 +81,4 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 - 卡片类型只用：`metric`、`chart`、`map`、`table`、`recommendation`、`retrospect`、`phase-summary`
 - 数字放 `value`，单位放 `unit`；禁止把 `"15.2%"` 当数值
 - `focusEntities.kind` 只用 `plot`、`device`、`machinery`；企业和基地写进 Markdown 或 report 标题
+- `recommendation` 卡片：`data.title` 和每条 `items[].title` 均为**必需**，不能省略也不能为空字符串
