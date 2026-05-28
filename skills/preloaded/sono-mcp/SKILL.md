@@ -25,15 +25,15 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 **字段映射速查**：
 
-| 参数 | 说明 |
-|---|---|
-| `cid` | 四个工具均需要，企业标识 |
-| `dept_id` | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门 |
-| `base_id` | 仅 `get_summary_base`；有值时优先于 `dept_id` |
-| `plot_id` | `get_plot_info`、`get_weather` |
-| `keyword` | `get_plot_info`、`get_weather`：传地块名/区域名，不传天气词/时间词；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
-| `device_id` | 仅 `get_plot_device_info` |
-| `days` | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`） |
+| 参数        | 说明                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cid`       | 四个工具均需要，企业标识                                                                                                                                |
+| `dept_id`   | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                        |
+| `base_id`   | 仅 `get_summary_base`；有值时优先于 `dept_id`                                                                                                           |
+| `plot_id`   | `get_plot_info`、`get_weather`                                                                                                                          |
+| `keyword`   | `get_plot_info`、`get_weather`：传地块名/区域名，不传天气词/时间词；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
+| `device_id` | 仅 `get_plot_device_info`                                                                                                                               |
+| `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
 
 ## 工具选择
 
