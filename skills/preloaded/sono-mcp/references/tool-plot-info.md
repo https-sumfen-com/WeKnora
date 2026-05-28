@@ -9,19 +9,39 @@
 | 地块基础 | `name`、`area`、`area_unit`、`base.name`、`plot_type.name`、`business_type` | 面积、所属基地、地块类型 |
 | 当前种植 | `plot_crop.crop.name`、`plot_crop.batch.title`、`plot_crop.start_time`、`plot_crop.end_time` | 作物名、批次、播种/预计收获日期 |
 | 生长进度 | `plot_crop.already_days`、`plot_crop.progress`、`plot_crop.current_crop_model_cycle.name` | 已生长天数、阶段进度%、当前阶段名称 |
-| 阶段说明 | `plot_crop.current_crop_model_cycle.remark` | 含"生长状态"和"注意事项"两段，注意事项是农事建议的主要来源 |
+| 阶段说明 | `plot_crop.current_crop_model_cycle.remark` | 含"生长状态："和"注意事项："两段，格式通常为 `"生长状态：...\n注意事项：..."` |
 | 长势评级 | `grade[]`（title + value） | 作物长势、土壤类型、土壤含量、光照条件、水分含量、土壤肥力 |
 | 积温积雨 | `accumulated_tp.temp`、`last_temp`、`rainfall`、`last_rainfall`、`valid_temp`、`last_valid_temp`、`start_date`、`end_date`、`analyze` | 含同比文字 |
 | 设备状态 | `iot_device.online`、`offline`、`fault`、`long_term_offline` | online>0 或 fault>0 时才展示 |
 
-## 空值跳过规则
+## 空值跳过规则（重要）
 
-- `available_nitrogen`/`available_phosphorus`/`available_potassium`/`organic`/`ph` 均为空字符串 → 整个土壤化验板块跳过，用一行 Markdown 说明"土壤化验数据暂缺"
+`plot_crop` 为 null 或 `plot_crop.crop` 为 null：
+- 作物名、已生长天数、生长阶段、播种日期、预计收获 **全部跳过**，不能用 "0" 占位
+- 在 metric 卡片后写 Markdown：`"暂无种植批次数据。"`
+
+字段级跳过（值为 `0`、`"0"`、null、空字符串时，直接跳过该字段，不输出）：
+- `plot_crop.start_time` = `"0"` 或 `"0000-00-00"` → 播种日期跳过
+- `plot_crop.already_days` = 0 → 已生长天数跳过
+- `plot_crop.crop.name` 为空或 null → 作物跳过
+- `available_nitrogen`/`available_phosphorus`/`available_potassium`/`organic`/`ph` 均为空 → 整个土壤化验板块跳过
 - `plot_crop.target_output = 0` → 不展示目标产量
-- `soil_type = null` → 不展示土壤类型
-- `sowing_status = 0` → 不展示播种状态
 - `grade[].value` 为 "0" 或空 → 该评级项跳过
-- `accumulated_tp` 整体为空 → 跳过积温积雨卡片
+- `accumulated_tp` 整体为空或全字段为 0 → 跳过积温积雨卡片
+
+## remark 字段解析方法
+
+`plot_crop.current_crop_model_cycle.remark` 通常格式为：
+
+```
+生长状态：{当前阶段的生长描述文字}
+注意事项：{农事建议文字}
+```
+
+提取规则：
+- "生长状态："到"注意事项："之间的文字 → metric 卡片后 Markdown 补充说明
+- "注意事项："之后的文字 → recommendation 基础建议（priority: `low`）
+- 若 remark 不含上述关键词，整体作为生长状态说明
 
 ## 禁止展示的字段
 
@@ -29,6 +49,7 @@
 - `tgzn_*`、`sync_id`、`member_id`、`use_id` 等系统内部字段
 - `crop_model_cycle` 全部阶段列表（只用 `current_crop_model_cycle`）
 - 土壤化验为空时不生成占位卡片
+- **不从 `get_plot_info` 结果中提取天气字段**，天气数据须调用 `get_weather`
 
 ## 农事建议生成规则
 
