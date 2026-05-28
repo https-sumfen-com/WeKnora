@@ -54,7 +54,13 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ### get_summary_base
 
-触发：用户查基地汇总、基地看板、基地统计、发起"基地报告"。
+触发：用户查基地汇总、基地看板、基地统计、发起"基地报告"；**以及以下全局概览意图**：
+
+- "今天有哪些值得关注的事情" / "今天情况怎么样" / "最近有什么需要关注的"
+- "整体情况" / "每日动态" / "今日概览" / "有什么异常" / "有什么需要处理的"
+- 用户进入系统后的首条打招呼式问询，且上下文无特定 `plot_id` / `device_id`
+
+**全局概览意图专属规则**：上下文中无明确 `plot_id`、`device_id` 时，**只调用 `get_summary_base`，不调用其他工具**。`get_summary_base` 响应已内嵌实时天气和7天预报（`summary.weather`/`summary.weather_7days`），**不需要额外调用 `get_weather`**。
 
 - `dept_id=0` 直接传，表示全部门权限。
 - `dept_id=-1` 且无 `base_id` 时先追问。
@@ -134,6 +140,8 @@ description: "Use when the server-side Agent must precisely choose and call curr
 **单工具优先**：能用一个工具回答就只调一个。
 
 **禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查基地汇总不联动其他工具。
+
+**禁止全量扫描**：不得在单次用户问题中同时调用多个工具"以防遗漏"。特别是全局概览意图（如"今天有哪些值得关注"）触发 `get_summary_base` 后，**禁止再追加调用 `get_weather`、`get_plot_info`、`get_plot_device_info`**。
 
 ## 返回结果处理
 
