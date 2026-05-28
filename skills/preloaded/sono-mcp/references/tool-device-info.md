@@ -24,18 +24,27 @@ device_detail
 └── last_device_data # 原始键值对，含 电池电压_null 等隐藏字段
 ```
 
+## 空值/零值跳过规则
+
+- `device_detail = null` → Markdown 说明"暂无设备详情数据"，跳过所有设备卡片
+- metric 卡片 item：值为 `null`、`""`、`"0"`、`"0000-00-00 00:00:00"` → **跳过该 item**，不展示为"0"
+- `device_detail.deviceType.name` 为 null/空 → 跳过"设备类型"item
+- `plot.name` 为 null/空 → 跳过"所属地块"item
+- `device_detail.last_device_time` 为 null/空/"0"/"0000-00-00 00:00:00" → 跳过"最后通信"item
+- `device_detail.is_online` 为 null → 跳过"在线状态"item；若为 `0` → 展示为文字"离线"；若为 `1` → 展示为"在线"；**禁止把 `0` 或 `1` 当数字展示**
+
 ## 必须提取的字段
 
-| 关注维度 | 字段路径 |
-|---|---|
-| 设备型号 | `device_detail.deviceType.name` |
-| 设备完整名称 | `device_detail.name` |
-| 所属分组 | `device_detail.deviceGroup.title` |
-| 关联地块 | `plot.name` + `plot_id` |
-| 在线状态 | `device_detail.is_online`（0=离线，1=在线） |
-| 最后通信 | `device_detail.last_device_time` |
-| 遥测读数 | `device_detail.device_data[]`（见下方提取规则） |
-| 电池电压 | `device_detail.last_device_data.电池电压_null`（若存在） |
+| 关注维度 | 字段路径 | 空值处理 |
+|---|---|---|
+| 设备型号 | `device_detail.deviceType.name` | null/空 → 跳过 |
+| 设备完整名称 | `device_detail.name` | null/空 → 跳过 |
+| 所属分组 | `device_detail.deviceGroup.title` | null/空 → 跳过 |
+| 关联地块 | `plot.name` + `plot_id` | null/空 → 跳过 |
+| 在线状态 | `device_detail.is_online`：0→"离线"，1→"在线" | null → 跳过；禁止展示原始数字 |
+| 最后通信 | `device_detail.last_device_time` | null/"0"/"0000-..." → 跳过 |
+| 遥测读数 | `device_detail.device_data[]`（见下方提取规则） | 空数组 → 跳过 table 卡片 |
+| 电池电压 | `device_detail.last_device_data.电池电压_null`（若存在） | null → 不追加 |
 
 ## 遥测数组提取规则（device_detail.device_data）
 

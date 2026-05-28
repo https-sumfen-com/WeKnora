@@ -8,18 +8,23 @@
 
 ## 卡片顺序（2-3 张）
 
+### 前置检查
+
+- `device_detail = null` → Markdown "暂无设备详情数据"，跳过全部卡片，只生成 quick-reply
+- 各 item 空值判断：`null`、`""`、`"0"`、`"0000-00-00 00:00:00"` 均视为**无效值**，跳过该 item，不得展示为 "0"
+
 ### 1. metric — 设备状态快照
 
 来源：`device_detail`
 
-items 按序：
+items 按序（每项先检查空值，无效则跳过）：
 
-| label | value 来源 | 说明 |
+| label | value 来源 | 空值/零值处理 |
 |---|---|---|
-| 设备类型 | `device_detail.deviceType.name` | 如"气象站" |
-| 所属地块 | `plot.name` | — |
-| 在线状态 | `is_online=1` → "在线"；`=0` → "离线" | 离线时加 `trend: "down"` |
-| 最后通信 | `device_detail.last_device_time` | — |
+| 设备类型 | `device_detail.deviceType.name` | null/空 → **跳过** |
+| 所属地块 | `plot.name` | null/空 → **跳过** |
+| 在线状态 | `is_online=1` → "在线"；`=0` → "离线" | null → **跳过**；**禁止展示原始数字 0/1** |
+| 最后通信 | `device_detail.last_device_time` | null/"0"/"0000-..." → **跳过** |
 
 如果 `is_online=0`，在 Markdown 第一行标注：`⚠ 设备当前离线，以下为最后上报数据`
 
