@@ -174,11 +174,14 @@ const SUMFEN_QUERY_KEYS = Object.keys(SUMFEN_PARAM_MAP)
 
 // Sumfen 渠道登录已在 router guard 里阻塞完成；这里只负责清理 URL 里的渠道参数，
 // 避免用户看到带参数的地址栏，且不触发导航（history.replaceState 不重跑守卫）。
+// hide_chat 同理：router guard 已读取并落盘到 uiStore，这里只做 URL 清理。
+const IFRAME_CLEANUP_PARAMS = [...SUMFEN_QUERY_KEYS, 'hide_chat']
+
 const handleSumfenAutoLogin = () => {
   const params = new URLSearchParams(window.location.search)
-  const hasSumfenParams = SUMFEN_QUERY_KEYS.some(k => params.get(k))
-  if (!hasSumfenParams) return
-  SUMFEN_QUERY_KEYS.forEach(k => params.delete(k))
+  const hasIframeParams = IFRAME_CLEANUP_PARAMS.some(k => params.get(k))
+  if (!hasIframeParams) return
+  IFRAME_CLEANUP_PARAMS.forEach(k => params.delete(k))
   const newSearch = params.toString()
   const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash
   window.history.replaceState({}, '', newUrl)

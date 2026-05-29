@@ -20,7 +20,8 @@ export const useUIStore = defineStore('ui', {
     manualEditorInitialContent: '',
     manualEditorInitialStatus: 'draft' as 'draft' | 'publish',
     manualEditorOnSuccess: null as null | ((payload: { kbId: string; knowledgeId: string; status: 'draft' | 'publish' }) => void),
-    sidebarCollapsed: localStorage.getItem('sidebar_collapsed') === 'true'
+    sidebarCollapsed: localStorage.getItem('sidebar_collapsed') === 'true',
+    hideChatMode: false
   }),
 
   actions: {
@@ -124,6 +125,10 @@ export const useUIStore = defineStore('ui', {
     expandSidebar() {
       this.sidebarCollapsed = false
       localStorage.setItem('sidebar_collapsed', 'false')
+    },
+
+    setHideChatMode(value: boolean) {
+      this.hideChatMode = value
     }
   }
 })
