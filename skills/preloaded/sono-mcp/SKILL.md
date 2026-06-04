@@ -1,6 +1,6 @@
 ---
 name: call-mcp-tools
-description: "Use when the server-side Agent must precisely choose and call currently registered SONO-MCP tools: get_plot_info, get_weather, get_summary_base, or get_plot_device_info."
+description: "Use when the server-side Agent must precisely choose and call currently registered SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, or get_wofost_report."
 ---
 
 # 服务端 Agent 精确调用本服务 MCP 工具
@@ -9,9 +9,9 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ## 核心原则
 
-- 只调用已注册工具：`get_plot_info`、`get_weather`、`get_summary_base`、`get_plot_device_info`。
+- 只调用已注册工具：`get_plot_info`、`get_weather`、`get_summary_base`、`get_plot_device_info`、`get_wofost_report`。
 - 禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
-- 不猜测 `plot_id`、`device_id`、`dept_id`、`base_id`、token；能从上下文取到的不要让用户重复填。
+- 不猜测 `plot_id`、`device_id`、`dept_id`、`base_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
 - 用户意图不清晰或缺少关键 ID 时，先追问，不盲目调用。
 - `isError=false` 且文本为空 = 空结果，不是错误。
 - 有数据时基于 `payload` 简洁回答，不原样倾倒 JSON。
@@ -27,12 +27,13 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 | 参数        | 说明                                                                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cid`       | 四个工具均需要，企业标识                                                                                                                                |
+| `cid`       | 各工具均需要，企业标识                                                                                                                                  |
 | `dept_id`   | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                        |
 | `base_id`   | 仅 `get_summary_base`；有值时优先于 `dept_id`                                                                                                           |
-| `plot_id`   | `get_plot_info`、`get_weather`                                                                                                                          |
+| `plot_id`   | `get_plot_info`、`get_weather`、`get_wofost_report`                                                                                                     |
 | `keyword`   | `get_plot_info`、`get_weather`：传地块名/区域名，不传天气词/时间词；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
 | `device_id` | 仅 `get_plot_device_info`                                                                                                                               |
+| `report_date` | 仅 `get_wofost_report`；报告日期，格式 `YYYY-MM-DD`；不传时服务端默认当天                                                                           |
 | `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
 
 ## 工具选择
@@ -51,6 +52,14 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - **`days=7`**（传入条件）：用户意图为**未来天气分析、未来预警、明天/这周/几天后天气**时传入 `days=7`；仅问当前/今天天气时不传。
 - 不要把"今天""下雨""适合打药"当作 `keyword`。
 - 有 `plot_id` 或 `keyword` 直接调用，不要先查地块。
+
+### get_wofost_report
+
+触发：用户查 WOFOST、作物模型/生长模拟报告、模型预测产量、生育进程、模拟生物量、LAI、根深、氮吸收、水分平衡，或明确要求某地块的 WOFOST 报告。
+
+- 必须有明确 `cid` 和 `plot_id`；缺任一项时先追问，不用地块工具替代。
+- `report_date` 仅在用户指定报告日期时传；未指定则不传，让服务端默认当天。
+- 返回成功后聚焦报告摘要、关键生育日期、产量/生物量、水分平衡和报告链接，详见 `references/tool-wofost-report.md`。
 
 ### get_summary_base
 
@@ -93,6 +102,22 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 - `plot_id <= 0` 且 `keyword` 为空 → 返回空成功（`source=default`，`payload={}`）。
 - `get_weather` 未来预报：追加 `"days": 7`，返回 `payload.days[]`；不传则仅返回 `payload.now`。
+
+### get_wofost_report
+
+```json
+{
+  "plot_id": 123,
+  "cid": 2007,
+  "report_date": "2026-06-03",
+  "token": "optional-token",
+  "entity_id": 1,
+  "entity_info_id": 0
+}
+```
+
+- 必须传有效 `cid` 和 `plot_id`；`report_date` 可省略。
+- `report_date` 只接受明确日期语义，不要把“今天/最新”等词原样传入。
 
 ### get_summary_base
 
@@ -139,9 +164,9 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 **单工具优先**：能用一个工具回答就只调一个。
 
-**禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查基地汇总不联动其他工具。
+**禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查 WOFOST 报告不自动查地块/天气；查基地汇总不联动其他工具。
 
-**禁止全量扫描**：不得在单次用户问题中同时调用多个工具"以防遗漏"。特别是全局概览意图（如"今天有哪些值得关注"）触发 `get_summary_base` 后，**禁止再追加调用 `get_weather`、`get_plot_info`、`get_plot_device_info`**。
+**禁止全量扫描**：不得在单次用户问题中同时调用多个工具"以防遗漏"。特别是全局概览意图（如"今天有哪些值得关注"）触发 `get_summary_base` 后，**禁止再追加调用 `get_weather`、`get_plot_info`、`get_plot_device_info`、`get_wofost_report`**。
 
 ## 返回结果处理
 
@@ -161,3 +186,4 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - `get_weather` 返回处理 → `references/tool-weather.md`
 - `get_summary_base` 返回处理 → `references/tool-summary-base.md`
 - `get_plot_device_info` 返回处理 → `references/tool-device-info.md`
+- `get_wofost_report` 返回处理 → `references/tool-wofost-report.md`
