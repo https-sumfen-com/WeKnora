@@ -84,7 +84,104 @@
 }
 ```
 
-## 地块详情示例
+## 地块 WOFOST 报告示例
+
+```json
+{
+  "schemaVersion": "plant-agent.message.v1",
+  "markdown": "B-07 的 WOFOST 报告日期为 2026-06-03，当前模型重点风险是土壤含水量偏低。[WOFOST PDF 报告](https://example.com/report.pdf)",
+  "blocks": [
+    {
+      "kind": "report",
+      "title": "B-07 地块 WOFOST 生长模拟报告",
+      "cards": [
+        {
+          "type": "metric",
+          "cardId": "metric_wofost_b07_20260603",
+          "data": {
+            "items": [
+              { "label": "发育阶段 DVS", "value": 1.18 },
+              { "label": "最大叶面积指数", "value": 3.42 },
+              { "label": "根深", "value": 82.5, "unit": "cm" },
+              { "label": "地上总生物量", "value": 6420, "unit": "kg/ha" },
+              { "label": "贮藏器官干物质", "value": 2180, "unit": "kg/ha" }
+            ]
+          }
+        },
+        {
+          "type": "chart",
+          "cardId": "chart_wofost_b07_growth_20260603",
+          "data": {
+            "title": "WOFOST 生育进程与生物量趋势",
+            "chartType": "line",
+            "option": {
+              "title": { "text": "WOFOST 生育进程与生物量趋势" },
+              "tooltip": { "trigger": "axis" },
+              "legend": { "top": 28 },
+              "grid": { "left": 48, "right": 32, "top": 72, "bottom": 36 },
+              "dataset": {
+                "source": [
+                  { "day": "序列1", "DVS": 0.82, "TAGP": 4100, "LAI": 2.7 },
+                  { "day": "序列2", "DVS": 1.02, "TAGP": 5280, "LAI": 3.1 },
+                  { "day": "序列3", "DVS": 1.18, "TAGP": 6420, "LAI": 3.3 }
+                ]
+              },
+              "xAxis": { "type": "category" },
+              "yAxis": [
+                { "type": "value", "name": "DVS/LAI" },
+                { "type": "value", "name": "TAGP kg/ha" }
+              ],
+              "series": [
+                { "name": "DVS", "type": "line", "encode": { "x": "day", "y": "DVS" } },
+                { "name": "LAI", "type": "line", "encode": { "x": "day", "y": "LAI" } },
+                { "name": "TAGP", "type": "line", "yAxisIndex": 1, "encode": { "x": "day", "y": "TAGP" } }
+              ]
+            },
+            "sourceSummary": "数据来自 get_wofost_report.csv_content 的有效模型日序列，表示模型模拟结果。"
+          }
+        },
+        {
+          "type": "chart",
+          "cardId": "chart_wofost_b07_water_20260603",
+          "data": {
+            "title": "WOFOST 水分平衡",
+            "chartType": "bar",
+            "option": {
+              "title": { "text": "WOFOST 水分平衡" },
+              "tooltip": { "trigger": "axis" },
+              "xAxis": { "type": "category", "data": ["降雨", "灌溉", "入渗", "渗漏", "蒸腾", "土壤蒸发"] },
+              "yAxis": { "type": "value", "name": "mm" },
+              "series": [
+                { "type": "bar", "name": "水分量", "data": [62, 0, 48, 8, 96, 21] }
+              ]
+            },
+            "sourceSummary": "数据来自 get_wofost_report.terminal_report_json，表示模型期水分平衡模拟。"
+          }
+        },
+        {
+          "type": "recommendation",
+          "cardId": "rec_wofost_b07_water_20260603",
+          "data": {
+            "title": "模型建议",
+            "items": [
+              {
+                "title": "模型土壤含水量偏低，建议关注补水",
+                "priority": "high",
+                "reason": "WOFOST 日序列最后有效 SM=0.18，低于 0.20 风险阈值"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "focusEntities": [
+    { "kind": "plot", "id": "plot-b07", "name": "B-07 地块" }
+  ]
+}
+```
+
+## 地块基础快照示例
 
 ```json
 {
@@ -334,6 +431,8 @@
 - card 类型是否只用了当前注册类型？
 - `chart` 卡片是否包含纯 JSON `data.option`？复杂图表是否按需补充了 `chartRequest`？
 - 是否在可视化数据场景优先生成了 `chart`，没有把趋势、对比、占比、分布、多指标对比默认做成 `table`？
+- 地块情况/地块分析/地块报告是否把 `get_wofost_report` 作为重点分析来源，而不是只输出 `get_plot_info` 基础快照？
+- WOFOST 模型值是否明确表述为“模型模拟/预测”，没有写成实际测产或实测结果？
 - 所有数字、坐标、对象 ID、状态、任务结果是否都有来源？
 - 数据不足时是否说明缺口，而不是生成占位卡片？
 - 后端即使只校验不修复，当前输出是否仍然可用？

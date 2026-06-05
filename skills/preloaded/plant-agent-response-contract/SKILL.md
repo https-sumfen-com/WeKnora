@@ -14,7 +14,7 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 以下意图触发本约束：
 
 - **报告类**：生成报告、查看报告、基地报告、地块分析报告、设备运行报告、企业经营报告
-- **分析类**：综合分析、种植分析、长势分析、效益分析、对比分析、多维度分析
+- **分析类**：综合分析、种植分析、长势分析、地块情况、地块状态综合分析、效益分析、对比分析、多维度分析
 - **统计类**：汇总数据、统计情况、整体情况、全局情况、各基地对比
 - **建议类**：农事建议、作业建议、管理建议（需要多个指标联合支撑的）
 - **多维展示**：同时涉及 2 个以上指标/对象的综合展示
@@ -52,10 +52,11 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 
 1. 确定范围：企业、基地、地块、设备、农机。
 2. 需要事实数据时先调用 SONO-MCP，不凭模型常识补指标、面积、状态、坐标。
-3. 识别用户角色（见各工具报告参考），从 payload 定向提取该角色关注的字段。
-4. MCP 成功且意图是报告/分析/建议 → block-first：先生成 `report` 或 `card`，再生成 `quick-reply`。Markdown 不得作为主输出。
-5. Markdown 只用于：1-2 句总览、必要数据缺口、block 无法表达的边界说明。
-6. MCP 返回数据不足时 → Markdown 说明缺口，只生成有数据支撑的 block。
+3. 地块情况、地块分析、地块报告类意图中，若上下文已有 `cid` 和 `plot_id`，`get_wofost_report` 是重点分析来源；先提取 WOFOST 生育进程、产量/生物量、水分/养分平衡和模型建议，再补充 `get_plot_info` 基础快照。
+4. 识别用户角色（见各工具报告参考），从 payload 定向提取该角色关注的字段。
+5. MCP 成功且意图是报告/分析/建议 → block-first：先生成 `report` 或 `card`，再生成 `quick-reply`。Markdown 不得作为主输出。
+6. Markdown 只用于：1-2 句总览、必要数据缺口、block 无法表达的边界说明。
+7. MCP 返回数据不足时 → Markdown 说明缺口，只生成有数据支撑的 block。
 
 ## 懒加载参考
 
@@ -68,7 +69,8 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 | ECharts chart option 规范         | `references/echarts-options.md`                               |
 | 返回示例、反例、自检              | `references/response-examples.md`                             |
 | 企业/基地报告（get_summary_base） | `references/report-summary-base.md`                           |
-| 地块报告（get_plot_info）         | `references/report-plot-info.md`                              |
+| 地块基础快照（get_plot_info）     | `references/report-plot-info.md`                              |
+| 地块 WOFOST 报告（get_wofost_report） | `references/report-wofost-report.md`                       |
 | 天气报告（get_weather）           | `references/report-weather.md`                                |
 | 设备报告（get_plot_device_info）  | `references/report-device-info.md`                            |
 | 后端校验规范                      | `packages/plant-agent/docs/backend-message-block-contract.md` |
@@ -87,3 +89,4 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 - 数字放 `value`，单位放 `unit`；禁止把 `"15.2%"` 当数值
 - `focusEntities.kind` 只用 `plot`、`device`、`machinery`；企业和基地写进 Markdown 或 report 标题
 - `recommendation` 卡片：`data.title` 和每条 `items[].title` 均为**必需**，不能省略也不能为空字符串
+- WOFOST 模型输出必须表述为“模型模拟/预测”，不能写成实际测产、实测产量或已发生结果
