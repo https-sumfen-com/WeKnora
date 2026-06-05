@@ -25,19 +25,34 @@
           }
         },
         {
-          "type": "table",
-          "cardId": "table_enterprise_risks_20260514",
+          "type": "chart",
+          "cardId": "chart_enterprise_risks_20260514",
           "data": {
-            "title": "重点风险",
-            "columns": [
-              { "key": "target", "label": "对象" },
-              { "key": "risk", "label": "风险" },
-              { "key": "priority", "label": "优先级" }
-            ],
-            "rows": [
-              { "target": "东区基地", "risk": "3 台设备离线", "priority": "高" },
-              { "target": "B-07 地块", "risk": "墒情低于阈值", "priority": "高" }
-            ]
+            "title": "重点风险强度",
+            "chartType": "bar",
+            "option": {
+              "title": { "text": "重点风险强度" },
+              "tooltip": { "trigger": "axis" },
+              "xAxis": {
+                "type": "category",
+                "data": ["东区基地", "B-07 地块"]
+              },
+              "yAxis": {
+                "type": "value",
+                "name": "风险等级",
+                "min": 0,
+                "max": 3
+              },
+              "series": [
+                {
+                  "type": "bar",
+                  "name": "风险强度",
+                  "data": [3, 3],
+                  "label": { "show": true, "position": "top" }
+                }
+              ]
+            },
+            "sourceSummary": "高风险按 3 分映射，仅用于风险强度可视化；风险事实来自 SONO-MCP 返回的设备离线和地块墒情异常。"
           }
         },
         {
@@ -94,10 +109,44 @@
           "type": "chart",
           "cardId": "chart_plot_b07_soil_14d",
           "data": {
-            "title": "B-07 近 14 天墒情",
-            "variant": "line",
-            "xAxis": ["05-01", "05-02"],
-            "series": [{ "name": "墒情", "data": [18.2, 17.6] }]
+            "title": "B-07 近 14 天墒情趋势",
+            "chartType": "line",
+            "chartRequest": {
+              "title": "B-07 近 14 天墒情趋势",
+              "goal": "trend",
+              "chartType": "line",
+              "dataset": [
+                { "day": "05-01", "soilMoisture": 18.2 },
+                { "day": "05-02", "soilMoisture": 17.6 }
+              ],
+              "xField": "day",
+              "yField": "soilMoisture",
+              "series": [{ "name": "墒情", "field": "soilMoisture" }],
+              "reason": "day 是连续日期字段，soilMoisture 是同一地块连续数值，适合用 line 展示趋势。"
+            },
+            "option": {
+              "title": { "text": "B-07 近 14 天墒情趋势" },
+              "tooltip": { "trigger": "axis" },
+              "legend": { "top": 28 },
+              "grid": { "left": 40, "right": 24, "top": 72, "bottom": 36 },
+              "dataset": {
+                "source": [
+                  { "day": "05-01", "soilMoisture": 18.2 },
+                  { "day": "05-02", "soilMoisture": 17.6 }
+                ]
+              },
+              "xAxis": { "type": "category" },
+              "yAxis": { "type": "value", "name": "墒情（%）" },
+              "series": [
+                {
+                  "name": "墒情",
+                  "type": "line",
+                  "encode": { "x": "day", "y": "soilMoisture" },
+                  "smooth": true
+                }
+              ]
+            },
+            "sourceSummary": "数据来自 SONO-MCP 返回的 B-07 地块近 14 天墒情序列。"
           }
         },
         {
@@ -135,17 +184,12 @@
     {
       "kind": "card",
       "card": {
-        "type": "table",
-        "cardId": "table_device_weather_001_status",
+        "type": "metric",
+        "cardId": "metric_device_weather_001_status",
         "data": {
-          "title": "运行状态",
-          "columns": [
-            { "key": "item", "label": "项目" },
-            { "key": "value", "label": "状态/数值" }
-          ],
-          "rows": [
-            { "item": "当前状态", "value": "在线" },
-            { "item": "24 小时中断", "value": "25 分钟" }
+          "items": [
+            { "label": "当前状态", "value": "在线" },
+            { "label": "24 小时中断", "value": 25, "unit": "分钟" }
           ]
         }
       }
@@ -167,16 +211,11 @@
     {
       "kind": "card",
       "card": {
-        "type": "table",
-        "cardId": "table_machinery_m12_status",
+        "type": "metric",
+        "cardId": "metric_machinery_m12_status",
         "data": {
-          "title": "农机状态",
-          "columns": [
-            { "key": "item", "label": "项目" },
-            { "key": "value", "label": "状态/数值" }
-          ],
-          "rows": [
-            { "item": "当前状态", "value": "在线" }
+          "items": [
+            { "label": "当前状态", "value": "在线" }
           ]
         }
       }
@@ -256,6 +295,35 @@
 
 错误，除非前后端已经扩展 `focusEntities.kind`。企业和基地作为分析范围写入 Markdown、report 标题或卡片数据。
 
+### chart 缺少 option
+
+```json
+{
+  "type": "chart",
+  "cardId": "chart_plot_b07_soil_14d",
+  "data": {
+    "title": "B-07 近 14 天墒情",
+    "variant": "line",
+    "xAxis": ["05-01", "05-02"],
+    "series": [{ "name": "墒情", "data": [18.2, 17.6] }]
+  }
+}
+```
+
+错误。`chart` 卡片必须输出完整纯 JSON `data.option`。只给 `variant/xAxis/series` 不能作为合规输出。
+
+### ECharts option 包含函数
+
+```json
+{
+  "tooltip": {
+    "formatter": "(params) => params[0].value + '%'"
+  }
+}
+```
+
+错误。`option` 必须是纯 JSON，不写函数字段；需要格式化时使用 ECharts 字符串模板或默认格式。
+
 ## 最终自检
 
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
@@ -264,6 +332,8 @@
 - `blocks[].kind` 是否只包含 `card`、`report`、`quick-reply`？
 - 是否完全避免了 `text` block 和 `reasoning` block？
 - card 类型是否只用了当前注册类型？
+- `chart` 卡片是否包含纯 JSON `data.option`？复杂图表是否按需补充了 `chartRequest`？
+- 是否在可视化数据场景优先生成了 `chart`，没有把趋势、对比、占比、分布、多指标对比默认做成 `table`？
 - 所有数字、坐标、对象 ID、状态、任务结果是否都有来源？
 - 数据不足时是否说明缺口，而不是生成占位卡片？
 - 后端即使只校验不修复，当前输出是否仍然可用？

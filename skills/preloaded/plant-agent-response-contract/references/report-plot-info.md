@@ -30,24 +30,25 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 **metric 卡片后补一行 Markdown**（若 `current_crop_model_cycle.remark` 含"生长状态"段）：
 > 当前阶段说明：{remark 中"生长状态："之后的内容，截取到"注意事项："之前}
 
-### 2. table — 长势与环境评级
+### 2. chart — 长势与环境评级
 
 来源：`grade[]`
 
 - 标题："长势与环境评级"
-- 列：评估项 | 评级
+- 图表优先：能把评级映射为有序分值时生成 ECharts `chart`，常见选择为 `radar` 或 `bar`
+- 评级映射仅用于可视化：优=3、中=2、低=1；不要把映射分值当作业务原始事实
 - 只展示 value 非 `"0"`、非空、非 null 的项
-- value 为 `"低"` 的行在评估项后加 ⚠（如 `"水分含量 ⚠"`）
+- value 为 `"低"` 的项在图表标签或 `sourceSummary` 中标注风险；如果无法稳定映射评级，再降级为 table
 - `grade[]` 全为空 / 全为 "0" → 跳过此卡片，Markdown 一句"暂无评级数据。"
 - **此卡片是 recommendation 的视觉依据，必须在 recommendation 之前出现**
 
-### 3. table — 积温积雨同比
+### 3. chart — 积温积雨同比
 
 来源：`accumulated_tp`
 
 - 标题：`"积温积雨对比（{start_date} 至 {end_date}）"`
-- 列：指标 | 本期 | 去年同期 | 变化
-- 行：积温（°C）/ 有效积温（°C）/ 积雨（mm）
+- 图表优先：生成 ECharts `chart`，常见选择为分组 `bar`，展示本期 vs 去年同期；变化值可用标签、tooltip 或辅助系列表达
+- 指标：积温（°C）/ 有效积温（°C）/ 积雨（mm）
 - `analyze` 字段内容作为卡片后的 Markdown 补充（1句话）
 - `accumulated_tp` 为空或所有字段均为 0 → 跳过此卡片
 

@@ -6,6 +6,8 @@
 
 通用内容使用顶层 Markdown，结构化业务展示使用 `blocks`。当 SONO-MCP 已返回企业、基地、地块、设备、农机数据，且用户意图是分析、详情、建议、报告或结构化输出时，`blocks` 是主输出，Markdown 只能做极短摘要或缺口说明。
 
+图表类结构化展示使用 `type: "chart"` 卡片，完整规则见 `echarts-options.md`。`data.option` 必须是可直接渲染的纯 JSON ECharts option。`chartType` / `chartRequest` 可用于追溯和校验，但不是最小合法渲染字段。
+
 ```ts
 type AgentOutput = {
   schemaVersion: 'plant-agent.message.v1'
@@ -45,10 +47,12 @@ type BusinessBlock =
 推荐顺序:
 
 ```txt
-metric -> chart/table/map -> recommendation -> retrospect/phase-summary
+metric -> chart -> map/table -> recommendation -> retrospect/phase-summary
 ```
 
-不要把无关卡片塞进一个 report；范围不同就拆成不同报告或 Markdown 小节。
+不要把无关卡片塞进一个 report；范围不同就拆成不同报告或 Markdown 小节。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
+
+图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
 
 报告前 Markdown 规则:
 
@@ -92,20 +96,26 @@ metric -> chart/table/map -> recommendation -> retrospect/phase-summary
 
 ### chart
 
-用于趋势、分类、对比、占比。`variant` 只使用当前支持的 `line`、`bar`、`pie`。
+用于趋势、分类、对比、占比、分布、关系、流向、空间轨迹或多维指标展示。`data.option` 必须包含完整 ECharts option。
+
+最小合法形态:
 
 ```json
 {
   "type": "chart",
-  "cardId": "chart_soil_b07_14d",
+  "cardId": "chart_custom",
   "data": {
-    "title": "B-07 近 14 天墒情",
-    "variant": "line",
-    "xAxis": ["05-01", "05-02"],
-    "series": [{ "name": "B-07", "data": [18.2, 17.6] }]
+    "title": "自定义图表",
+    "option": {
+      "xAxis": { "type": "category", "data": ["A", "B"] },
+      "yAxis": { "type": "value" },
+      "series": [{ "type": "scatter", "name": "样本", "data": [12, 19] }]
+    }
   }
 }
 ```
+
+复杂业务图表建议额外提供 `chartType`、`chartRequest`、`sourceSummary`，但最小合法渲染字段只有 `data.option`。完整图表选择和 option 自检规则见 `echarts-options.md`。
 
 ### map
 
@@ -115,7 +125,9 @@ metric -> chart/table/map -> recommendation -> retrospect/phase-summary
 
 ### table
 
-用于结构化行数据，尤其是需要排序、高亮、对比或后续交互的列表。简单说明优先用 Markdown 表格。
+用于结构化行数据，尤其是需要排序、审计、编号、状态清单、逐行操作或后续交互的列表。简单说明优先用 Markdown 表格。
+
+不要用 table 承载可图形化的数据。只要行数据能表达为趋势、对比、占比、分布、强度矩阵或多指标结构，就应先生成 chart；table 最多作为补充明细。
 
 必需: `title`、`columns`、`rows`。`rows` 只放字符串或数字。
 
@@ -198,7 +210,7 @@ type EntityKind = 'plot' | 'device' | 'machinery'
 
 一个生产级报告通常包含:
 
-1. `report`: 2-5 张卡片，顺序为概览、证据、空间或明细、建议、复盘。
+1. `report`: 2-5 张卡片，顺序为概览、图表证据、空间或明细、建议、复盘。
 2. 顶层 Markdown: 可选，最多 1-2 句，用于总览或必要缺口。
 3. `quick-reply`: 2-4 个后续追问或动作。
 

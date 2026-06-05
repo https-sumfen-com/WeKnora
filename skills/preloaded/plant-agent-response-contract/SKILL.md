@@ -42,6 +42,8 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 
 - 通用叙述、推理说明、数据来源、缺口说明 → Markdown
 - 结构化业务展示 → `blocks`（只允许 `card`、`report`、`quick-reply`）
+- ECharts 图表 → 使用 `type: "chart"` 卡片，`data.option` 必须是完整纯 JSON ECharts option；由 LLM 按数据语义选择最合适的 ECharts 图表类型
+- 图表优先级高于表格：时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等可视化数据必须优先生成 `chart`，不要用 `table` 替代图表
 - `blocks` 中禁止生成 `text` 或 `reasoning` 类型
 
 **仅当意图命中结构化输出类型时**：SONO-MCP 成功返回数据 → 必须优先生成 block，Markdown 只能做极短摘要或缺口说明。
@@ -63,6 +65,7 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 | --------------------------------- | ------------------------------------------------------------- |
 | 数据来源、缺口处理                | `references/data-grounding.md`                                |
 | block / card / report 规范        | `references/blocks-cards-reports.md`                          |
+| ECharts chart option 规范         | `references/echarts-options.md`                               |
 | 返回示例、反例、自检              | `references/response-examples.md`                             |
 | 企业/基地报告（get_summary_base） | `references/report-summary-base.md`                           |
 | 地块报告（get_plot_info）         | `references/report-plot-info.md`                              |
@@ -79,6 +82,8 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 - 所有事实值必须可追溯到 SONO-MCP/工具输出/用户明确事实
 - 不编造指标、面积、边界、长势、状态、坐标、时间序列、建议依据
 - 卡片类型只用：`metric`、`chart`、`map`、`table`、`recommendation`、`retrospect`、`phase-summary`
+- `chart` 卡片必须输出 `data.option` 纯 JSON ECharts option；`chartType` / `chartRequest` 是推荐元数据但不是渲染必需；不要只输出 `variant/xAxis/series` 简化结构
+- 能用图表表达趋势、对比、占比、分布、关系、轨迹或多指标结构时，必须优先用 `chart`；`table` 只用于明细清单、审计记录、精确逐行字段或图表无法表达的文本型行数据
 - 数字放 `value`，单位放 `unit`；禁止把 `"15.2%"` 当数值
 - `focusEntities.kind` 只用 `plot`、`device`、`machinery`；企业和基地写进 Markdown 或 report 标题
 - `recommendation` 卡片：`data.title` 和每条 `items[].title` 均为**必需**，不能省略也不能为空字符串

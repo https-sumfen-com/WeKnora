@@ -28,16 +28,18 @@ items 按序（每项先检查空值，无效则跳过）：
 
 如果 `is_online=0`，在 Markdown 第一行标注：`⚠ 设备当前离线，以下为最后上报数据`
 
-### 2. table — 传感器读数
+### 2. chart — 传感器读数
 
 来源：`device_detail.device_data[]`（只取 `is_open=1` 的条目）
 
 - 标题：`"{deviceType.name}实测数据（{Datatime} 上报）"`
-- 列：传感器名称 | 数值 | 单位
+- 图表优先：生成 ECharts `chart` 展示传感器名称与数值，常见选择为 `bar`、`gauge` 或多指标仪表盘式组合
+- 单位不一致时不要强行放同一数值轴；可按单位分组生成多个 series/多个坐标轴，或仅展示关键同单位指标
 - 排序：`is_index=1` 的行置顶（如温度、湿度、累计雨量），其余按数组顺序
 - `is_open=0` 的条目跳过
-- 如有 `last_device_data.电池电压_null`，追加末行：label "电池电压"，unit "V"
+- 如有 `last_device_data.电池电压_null`，可作为独立 gauge/bar 指标展示，unit "V"
 - 数据为空数组 → 跳过此卡片，Markdown 说明"暂无遥测数据"
+- 仅当传感器值主要是文本状态、无法安全转换为 number，或需要逐行审计时，才降级为 table
 
 ### 3. recommendation — 设备异常建议（有异常才生成）
 

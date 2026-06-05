@@ -27,30 +27,33 @@
 
 值为 `0` 的 item 跳过（如 `total_cost=0`）
 
-**2. chart(pie) — 作物种植结构**
+**2. chart — 作物种植结构**
 
 来源：`crop_statistics[]`
 - 各作物 `name` + `area`（亩）；`area=0` 跳过
 - 标题绑定当前批次：`"{batch_id对应年份}作物种植结构"`
+- 图表类型由 LLM 按数据语义选择；常见选择为 `pie` / `treemap` / `sunburst`；输出完整 `data.option`
 
-**3. chart(pie 或 bar) — 地块类型分布**
+**3. chart — 地块类型分布**
 
 来源：`wisdom_base.plot_type[]`
 - 旱地 / 喷灌地块 / 滴灌地块面积对比
 - 影响灌溉建议，必须展示
+- 图表类型由 LLM 按数据语义选择；少量组成可用 `pie`，排序/对比可用 `bar`；输出完整 `data.option`
 
-**4. chart(bar) — 近年产量趋势**
+**4. chart — 近年产量趋势**
 
 来源：`batch[]`（过滤 `value > 0`）
 - x 轴：年份；系列：主要作物（甜菜/小麦/油菜类）
 - 同一年份同一作物只取一条
 - 不足 2 年有效数据 → 跳过此卡片，Markdown 说明"历史产量记录不足"
+- 图表类型由 LLM 按数据语义选择；跨年趋势通常适合 `line` 或 `bar`，多作物可组合；输出完整 `data.option`
 
-**5. table — 当年生产投入**
+**5. chart — 当年生产投入**
 
 来源：`batch_contrast_count[0]`（当前批次，如"2026年"）
 - 标题：`"{batch_info.title}生产投入汇总"`
-- 列：投入类型 | 覆盖面积（亩）| 均量（元/亩）| 合计（元）
+- 图表优先：用 ECharts 展示投入类型与合计/覆盖面积对比，常见选择为 `bar` 或双轴组合图
 - 只展示 `total > 0` 的行；`plot_type_water` / `plot_type_dry` 单产为 0 时跳过
 - 卡片后 Markdown 补充上年（`batch_contrast_count[1]`）水浇地单产 + 旱地单产 avg 对比（一句话）
 
@@ -92,15 +95,17 @@
 | 农机台数 | `wisdom_machine.machine_summary.total` | 台 |
 | 累计作业面积 | `wisdom_machine.machine_summary.work_area` | 亩次 |
 
-**2. chart(pie) — 作物种植结构**
+**2. chart — 作物种植结构**
 
 来源：`wisdom_base.plant_structure[]`
 - 各作物 `name` + `value`（亩）
+- 图表类型由 LLM 按数据语义选择；常见选择为 `pie` / `treemap` / `sunburst`；输出完整 `data.option`
 
-**3. chart(pie 或 bar) — 地块类型分布**
+**3. chart — 地块类型分布**
 
 来源：`wisdom_base.plot_type[]`
 - 旱地 / 喷灌地块 / 滴灌地块
+- 图表类型由 LLM 按数据语义选择；少量组成可用 `pie`，排序/对比可用 `bar`；输出完整 `data.option`
 
 **4. recommendation — 作业建议**
 
