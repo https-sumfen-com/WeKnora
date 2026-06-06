@@ -4,6 +4,8 @@
 
 预警阈值和字段规则见 `sono-mcp/references/tool-weather.md`。
 
+天气只有在用户明确单独询问天气、天气预报或天气预警时，才作为独立天气 report。若用户请求的是地块/基地/企业综合分析或生成整体报告，天气是其中一个分析维度，必须合并进主 `report.cards[]`，不要生成第二份“天气报告”。
+
 ---
 
 ## 一、实时天气报告（payload.now）
@@ -95,5 +97,6 @@ items 按序：
 - 不要把 `icon`、`wind360`、`pressure`、`fxLink`、`refer` 放入任何卡片
 - 实时报告无预警时不强行生成 recommendation
 - 预报报告中不要逐天生成 recommendation，按风险类型合并
-- 不要把实时天气报告与地块详情混在同一个 report block；两者同时有数据时分两个独立 report
+- 不要在综合地块/基地/企业报告中另起独立“天气 report”；天气趋势、天气预警和作业窗口应作为主 report 内的 chart/recommendation cards
+- 不要把天气字段塞进地块基础 metric；需要展示天气时使用独立天气 chart/metric/recommendation card
 - 实时报告不推断未来天气；预报报告不使用 `payload.now` 字段

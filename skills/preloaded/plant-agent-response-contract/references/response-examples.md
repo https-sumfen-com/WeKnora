@@ -442,12 +442,40 @@
 
 错误。任何 key 都必须有 `: value`。缺少面积、布局值、布尔值或轴索引时，删除该字段或跳过对应 item/card；不要留下半截 JSON。
 
+### 同一地块综合分析拆成多份报告
+
+```json
+{
+  "schemaVersion": "plant-agent.message.v1",
+  "markdown": "以下为地块综合分析。",
+  "blocks": [
+    {
+      "kind": "report",
+      "title": "B-07 · 地块综合分析",
+      "cards": [
+        { "type": "metric", "cardId": "metric_b07_snapshot", "data": { "title": "地块生长快照", "items": [{ "label": "作物", "value": "玉米" }] } }
+      ]
+    },
+    {
+      "kind": "report",
+      "title": "B-07 · 未来天气",
+      "cards": [
+        { "type": "chart", "cardId": "chart_b07_weather_7d", "data": { "title": "未来7天天气预报", "option": { "xAxis": { "type": "category", "data": ["6/6", "6/7"] }, "yAxis": { "type": "value" }, "series": [{ "type": "line", "name": "最高温", "data": [22, 24] }] } } }
+      ]
+    }
+  ]
+}
+```
+
+错误。用户问的是同一地块综合分析时，只生成一份主 `report`。天气预报、设备状态、积温积雨、WOFOST 模型、评级和农事建议都应作为同一 `report.cards[]` 中的不同 cards。
+
 ## 最终自检
 
 - 最终输出整体是否是一个可被 `JSON.parse()` 解析的 JSON object，且没有 Markdown 代码围栏或自然语言前后缀？
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
 - 如果 SONO-MCP/API/工具数据读取成功，是否优先生成了 `report` 或 `card` block？
 - Markdown 是否只保留 1-2 句摘要或必要缺口，而不是完整分析正文？
+- 同一主对象的综合分析是否只生成了一份 `report`？天气、设备、作业、WOFOST、评级等维度是否合并到了同一 `report.cards[]`？
 - `blocks[].kind` 是否只包含 `card`、`report`、`quick-reply`？
 - 是否完全避免了 `text` block 和 `reasoning` block？
 - card 类型是否只用了当前注册类型？

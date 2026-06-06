@@ -27,7 +27,7 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 | 播种日期 | `plot_crop.start_time` | YYYY-MM-DD（为 "0" 或 "0000-00-00" 时跳过） |
 | 预计收获 | `plot_crop.end_time` | YYYY-MM-DD |
 
-**禁止在此 metric 卡片中添加任何天气字段**（温度、湿度、风力、降水、当前天气等）。如需展示天气，须另起独立 report block。
+**禁止在此 metric 卡片中添加任何天气字段**（温度、湿度、风力、降水、当前天气等）。如果用户请求的是地块综合分析/地块报告，天气应作为同一 `report.cards[]` 中的独立 weather chart 或 recommendation 维度，不要另起第二个 report。
 
 **metric 卡片后补一行 Markdown**（若 `current_crop_model_cycle.remark` 含"生长状态"段）：
 > 当前阶段说明：{remark 中"生长状态："之后的内容，截取到"注意事项："之前}

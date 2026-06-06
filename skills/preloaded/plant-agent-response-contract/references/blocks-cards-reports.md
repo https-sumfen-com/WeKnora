@@ -64,15 +64,22 @@ type BusinessBlock =
 
 ### report
 
-用于企业、基地、地块、设备、农机的成组分析或报告。`title` 要短且具体，`cards` 通常 2-5 张，从概览到证据再到建议。
+用于企业、基地、地块、设备、农机的成组分析或报告。`title` 要短且具体，`cards` 通常 3-7 张，从概览到证据再到建议。
+
+同一用户问题默认只有一个主分析范围，也就只生成一个主 `report`：
+
+- 用户问“某地块情况/综合分析/生成报告”时，主范围是该地块；WOFOST、基础快照、评级、积温积雨、未来天气、设备状态、作业窗口、农事建议都是该地块报告的分析维度，必须合并到同一个 `report.cards[]`。
+- 用户问“某基地/企业综合分析”时，基地/企业是主范围；天气、设备、作物结构、投入、风险等作为同一报告内的 cards。
+- 只有用户明确要求“分别生成报告/拆开看”，或同时比较多个互不从属对象且放在同一 report 会造成语义混乱时，才允许多个 `report`。
+- `quick-reply` 可以独立作为第二个 block；它不是一份报告。
 
 推荐顺序:
 
 ```txt
-metric -> chart -> map/table -> recommendation -> retrospect/phase-summary
+metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
 ```
 
-不要把无关卡片塞进一个 report；范围不同就拆成不同报告或 Markdown 小节。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
+不要把无关卡片塞进一个 report；但天气、设备、作业、积温、WOFOST 等如果服务于同一主对象的综合分析，就不是无关卡片，必须作为不同维度放进同一 report。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
 
 图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
 
@@ -234,8 +241,28 @@ type EntityKind = 'plot' | 'device' | 'machinery'
 
 一个生产级报告通常包含:
 
-1. `report`: 2-5 张卡片，顺序为概览、图表证据、空间或明细、建议、复盘。
+1. `report`: 3-7 张卡片，顺序为概览、图表证据、空间或明细、建议、复盘。
 2. 顶层 Markdown: 可选，最多 1-2 句，用于总览或必要缺口。
 3. `quick-reply`: 2-4 个后续追问或动作。
 
 报告标题要绑定范围，例如“企业经营风险概览”“东区基地设备运行报告”“B-07 地块墒情风险报告”。不要使用“综合报告”这类空泛标题。
+
+同一主对象综合分析的 `blocks` 推荐形态:
+
+```txt
+[
+  report(title="{对象名} · 综合分析", cards=[基础快照, 模型/趋势图, 天气/设备/作业维度, 建议]),
+  quick-reply(...)
+]
+```
+
+不要输出:
+
+```txt
+[
+  report(title="{地块名} · 地块综合分析", ...),
+  report(title="{地块名} · 天气", ...)
+]
+```
+
+天气是该地块综合分析的一个维度，应合并为同一 `report.cards[]` 中的天气趋势 chart 或天气风险 recommendation。
