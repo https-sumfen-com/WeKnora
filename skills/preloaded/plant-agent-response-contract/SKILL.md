@@ -42,6 +42,7 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 
 - 通用叙述、推理说明、数据来源、缺口说明 → Markdown
 - 结构化业务展示 → `blocks`（只允许 `card`、`report`、`quick-reply`）
+- 结构化最终输出 → 必须是严格 JSON object，整体可被 `JSON.parse()` 解析；禁止输出半截 JSON、JS 对象字面量或缺值字段
 - ECharts 图表 → 使用 `type: "chart"` 卡片，`data.option` 必须是完整纯 JSON ECharts option；由 LLM 按数据语义选择最合适的 ECharts 图表类型
 - 图表优先级高于表格：时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等可视化数据必须优先生成 `chart`，不要用 `table` 替代图表
 - `blocks` 中禁止生成 `text` 或 `reasoning` 类型
@@ -57,6 +58,7 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 5. MCP 成功且意图是报告/分析/建议 → block-first：先生成 `report` 或 `card`，再生成 `quick-reply`。Markdown 不得作为主输出。
 6. Markdown 只用于：1-2 句总览、必要数据缺口、block 无法表达的边界说明。
 7. MCP 返回数据不足时 → Markdown 说明缺口，只生成有数据支撑的 block。
+8. 提交前必须做 JSON 合法性自检：最终 payload 整体可解析，所有 key 都有合法 value，所有 `chart.data.option` 都是纯 JSON 对象；任一字段缺值时跳过该字段/item/card，不得留下空 key。
 
 ## 懒加载参考
 
@@ -81,6 +83,10 @@ description: Use when 需要生成或审查 packages/plant-agent 的企业、基
 - MCP 成功后的报告/分析类回答必须含 `report` 或 `card`；用户明确只要纯文字时除外
 - 不要在 report/card 前写完整 Markdown 分析章节；最多 1-2 句
 - `final_answer` 提交内容必须是结构化 payload 本身，不要提交自然语言版报告
+- `final_answer` 必须是严格 JSON：双引号 key/string、完整冒号和值、数组/对象闭合、无尾逗号、无注释、无 Markdown 代码围栏
+- 禁止出现缺值字段或 JS 简写字段，例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>`；布尔值必须写成 `true/false`
+- 禁止在最终 payload 中输出 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则；未知值不要占位，直接省略对应字段/item/card，并在 Markdown 简短说明数据缺口
+- JSON 合法性优先级高于卡片数量、图表丰富度和 `chartRequest` 追溯字段；payload 过长或不确定时，减少 card、聚合数据、删除可选 `chartRequest`，也不能提交不完整 JSON
 - 所有事实值必须可追溯到 SONO-MCP/工具输出/用户明确事实
 - 不编造指标、面积、边界、长势、状态、坐标、时间序列、建议依据
 - 卡片类型只用：`metric`、`chart`、`map`、`table`、`recommendation`、`retrospect`、`phase-summary`

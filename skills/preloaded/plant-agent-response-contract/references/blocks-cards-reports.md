@@ -23,6 +23,28 @@ MCP 成功后的分析/报告类回答不得 Markdown-only。必须至少包含�
 
 最终提交时输出完整 payload 本身，不要把 payload 内的 report/card 改写成自然语言 Markdown 后提交。
 
+## JSON 合法性门控
+
+最终输出必须是一个可被 `JSON.parse()` 解析的完整 JSON object。Agent 不依赖后端修复半截或不合法 JSON。
+
+- 只输出一个 JSON object，不包 Markdown 代码围栏，不在 JSON 前后追加自然语言。
+- 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。
+- 禁止缺值字段：例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>` 时，整包无效。
+- 禁止 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则、注释和尾逗号。
+- 布尔值必须写成 `true` / `false`；数字必须是 JSON number；字符串不能代替数字。
+- 事实值缺失时跳过对应字段、`items[]` 项、`series[]` 项或整张 card；不要输出空 key、空字符串、`null` 或 0 占位。
+- 必需字段缺失导致 card 无法成立时，不生成该 card，在顶层 `markdown` 用一句话说明数据缺口。
+- `null` 只允许用于 ECharts 明确支持的序列断点或 dataset 缺口；metric、recommendation、table 的必需字段不要用 `null`。
+- JSON 合法性优先级高于信息完整度。payload 过长或容易写断时，减少 report/card 数量、删除可选追溯字段、聚合图表数据，不能提交半截 JSON。
+
+提交前逐项自检：
+
+1. 顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"markdown"`。
+2. 如果包含 `blocks`，每个 block/card 是否字段完整且类型受支持。
+3. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
+4. 每个 `chart.data.option` 是否自身也是纯 JSON object。
+5. 将最终文本整体交给 `JSON.parse()` 是否能成功。
+
 ## 当前允许的 blocks
 
 ```ts
@@ -81,6 +103,8 @@ metric -> chart -> map/table -> recommendation -> retrospect/phase-summary
 用于企业、基地或单对象 KPI 快照。
 
 必需: `data.items[]`，每项至少有 `label`、`value`。可选: `unit`、`delta`、`trend`、`icon`。
+
+如果某个指标没有可追溯值，跳过该 item；不要输出 `{ "label": "面积", "value", "unit": "亩" }`、空字符串、`null` 或 0 占位。
 
 ```json
 {

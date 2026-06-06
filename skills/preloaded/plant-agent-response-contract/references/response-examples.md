@@ -421,8 +421,30 @@
 
 错误。`option` 必须是纯 JSON，不写函数字段；需要格式化时使用 ECharts 字符串模板或默认格式。
 
+### 字段缺值导致 JSON 断裂
+
+```text
+{
+  "label": "面积",
+  "value",
+  "unit": "亩"
+}
+```
+
+```text
+{
+  "legend": { "top" },
+  "series": [
+    { "type": "line", "smooth", "yAxisIndex", "data": [4, 5] }
+  ]
+}
+```
+
+错误。任何 key 都必须有 `: value`。缺少面积、布局值、布尔值或轴索引时，删除该字段或跳过对应 item/card；不要留下半截 JSON。
+
 ## 最终自检
 
+- 最终输出整体是否是一个可被 `JSON.parse()` 解析的 JSON object，且没有 Markdown 代码围栏或自然语言前后缀？
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
 - 如果 SONO-MCP/API/工具数据读取成功，是否优先生成了 `report` 或 `card` block？
 - Markdown 是否只保留 1-2 句摘要或必要缺口，而不是完整分析正文？
@@ -430,6 +452,7 @@
 - 是否完全避免了 `text` block 和 `reasoning` block？
 - card 类型是否只用了当前注册类型？
 - `chart` 卡片是否包含纯 JSON `data.option`？复杂图表是否按需补充了 `chartRequest`？
+- 是否不存在 `"value"`、`"top"`、`"smooth"`、`"max"`、`"yAxisIndex"` 等无值 key？缺值数据是否已跳过或在 Markdown 中说明？
 - 是否在可视化数据场景优先生成了 `chart`，没有把趋势、对比、占比、分布、多指标对比默认做成 `table`？
 - 地块情况/地块分析/地块报告是否把 `get_wofost_report` 作为重点分析来源，而不是只输出 `get_plot_info` 基础快照？
 - WOFOST 模型值是否明确表述为“模型模拟/预测”，没有写成实际测产或实测结果？
