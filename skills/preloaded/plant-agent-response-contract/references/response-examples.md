@@ -2,6 +2,8 @@
 
 示例中的数值表示“已由 SONO-MCP 返回”的数据形态；实际输出必须替换为当前任务真实读取的数据。
 
+示例为了展示组合效果，常把多个片段放在同一个批量 payload 中。实际运行时默认可以按片段流式输出：chart card 就绪后先输出 chart，风险建议就绪后再输出 recommendation，最后按需输出 quick-reply。不要因为示例是批量 JSON，就等待所有片段齐全后一次性 answer。
+
 ## 局部 card + recommendation + quick-reply 示例
 
 ```json
@@ -51,6 +53,82 @@
   ],
   "focusEntities": [
     { "kind": "plot", "id": "plot-b07", "name": "B-07 地块" }
+  ]
+}
+```
+
+## 天气趋势 chart + recommendation + quick-reply 示例
+
+用户问“天气趋势”“未来7天天气走势”且已有 `payload.days[]` 时，生成局部 `chart` card，不生成 `report`。
+
+```json
+{
+  "schemaVersion": "plant-agent.message.v1",
+  "blocks": [
+    {
+      "kind": "card",
+      "card": {
+        "type": "chart",
+        "cardId": "chart_weather_7d_trend",
+        "data": {
+          "title": "未来7天气温与降水趋势",
+          "chartType": "line-bar",
+          "option": {
+            "title": { "text": "未来7天气温与降水趋势" },
+            "tooltip": { "trigger": "axis" },
+            "legend": { "data": ["最高温", "最低温", "降水"] },
+            "xAxis": { "type": "category", "data": ["6/8", "6/9", "6/10", "6/11", "6/12", "6/13", "6/14"] },
+            "yAxis": [
+              { "type": "value", "name": "温度", "axisLabel": { "formatter": "{value}°C" } },
+              { "type": "value", "name": "降水", "axisLabel": { "formatter": "{value}mm" } }
+            ],
+            "series": [
+              { "type": "line", "name": "最高温", "data": [19, 21, 23, 23, 20, 21, 23] },
+              { "type": "line", "name": "最低温", "data": [7, 10, 10, 11, 7, 10, 11] },
+              {
+                "type": "bar",
+                "name": "降水",
+                "yAxisIndex": 1,
+                "data": [2.4, 0, 0, 0, 0, 18.9, 0],
+                "markPoint": { "data": [{ "name": "强降水", "coord": ["6/13", 18.9], "value": 18.9 }] }
+              }
+            ]
+          },
+          "sourceSummary": "数据来自 get_weather.days，展示未来7天最高温、最低温和降水趋势。"
+        }
+      }
+    },
+    {
+      "kind": "card",
+      "card": {
+        "type": "recommendation",
+        "cardId": "rec_weather_7d_work_window",
+        "data": {
+          "title": "天气风险与作业窗口",
+          "items": [
+            {
+              "title": "6月13日强降水，暂停田间作业",
+              "priority": "high",
+              "reason": "6月13日预计降水 18.9mm，超过 10mm 农事风险阈值。",
+              "action": "6月12日前检查排水沟渠，6月13日暂停喷药、追肥和机械下田"
+            },
+            {
+              "title": "6月9日至12日适合作业",
+              "priority": "low",
+              "reason": "6月9日至12日无明显降水，风力处于 1-4 级范围。",
+              "action": "优先安排喷药、追肥、播种收尾或设备巡检"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "quick-reply",
+      "prompts": [
+        { "label": "结合墒情", "fillText": "结合地块墒情分析未来7天作业窗口" },
+        { "label": "查看作业计划", "fillText": "根据未来7天天气安排农事作业计划" }
+      ]
+    }
   ]
 }
 ```
@@ -399,7 +477,7 @@
 }
 ```
 
-错误。用户明确要求报告、卡片、图表、可视化，或数据存在异常、风险、预警、离线、缺口、阈值越界等需要局部高亮时，应生成对应 `report`、`card` 或 `quick-reply` block。
+错误。用户明确要求报告、卡片、图表、可视化，询问趋势、走势、变化、对比、分布且已有可图形化数据，或数据存在异常、风险、预警、离线、缺口、阈值越界等需要局部高亮时，应生成对应 `report`、`card` 或 `quick-reply` block。
 
 ### report 空壳或塞入非片段内容
 
@@ -516,7 +594,8 @@
 
 ## 片段集合自检
 
-- 结构化片段集合是否是一个可被 `JSON.parse()` 解析的 JSON object，且没有代码围栏或额外包装？
+- 当前输出是否是一个字段完整的独立片段，或运行时明确要求的批量 payload？
+- 如果是批量 payload，是否是可被 `JSON.parse()` 解析的 JSON object，且没有代码围栏或额外包装？
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
 - 当前是否确实命中明确报告、局部结构化展示意图，或异常/风险数据触发，而不是无片段场景？
 - 明确报告意图是否生成了一份主 `report`？天气、设备、作业、WOFOST、评级等维度是否合并到了同一 `report.cards[]`？
@@ -525,6 +604,7 @@
 - 是否完全避免了 `text` block 和 `reasoning` block？
 - card 类型是否只用了当前注册类型？
 - `chart` 卡片是否包含纯 JSON `data.option`？复杂图表是否按需补充了 `chartRequest`？
+- 用户询问趋势、走势、变化、对比或分布且已有序列/对比数据时，是否生成了 `type: "chart"` card，而不是退回逐行表格？
 - 是否不存在 `"value"`、`"top"`、`"smooth"`、`"max"`、`"yAxisIndex"` 等无值 key？缺值数据是否已跳过，或只在缺口有操作价值时转为 recommendation / quick-reply？
 - 是否在可视化数据场景优先生成了 `chart`，没有把趋势、对比、占比、分布、多指标对比默认做成 `table`？
 - 地块情况/地块分析/地块报告是否把 `get_wofost_report` 作为重点分析来源，而不是只输出 `get_plot_info` 基础快照？

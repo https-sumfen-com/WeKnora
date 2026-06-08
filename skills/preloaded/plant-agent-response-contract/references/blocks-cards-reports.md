@@ -4,31 +4,38 @@
 
 ## 输出形态
 
-本参考只定义多 schema 渲染片段。结构化片段的常态是 `card` 和 `quick-reply`；`report` 只是把多张 card 组合成一组的模板。用户明确要求卡片、图表、地图、表格、指标面板、可视化、报告，或读取到异常、风险、预警、离线、缺口、阈值越界等需要局部高亮的数据，或运行时要求结构化片段时，才使用 `blocks`。SONO-MCP 返回数据本身不要求优先生成 block。
+本参考只定义多 schema 渲染片段。结构化片段的常态是 `card` 和 `quick-reply`；`report` 只是把多张 card 组合成一组的模板。用户明确要求卡片、图表、地图、表格、指标面板、可视化、报告，用户询问趋势、走势、变化、对比、分布且已有可图形化数据，或读取到异常、风险、预警、离线、缺口、阈值越界等需要局部高亮的数据，或运行时要求结构化片段时，才使用 `blocks`。SONO-MCP 返回数据本身不要求优先生成 block。
 
 图表类结构化展示使用 `type: "chart"` 卡片，完整规则见 `echarts-options.md`。`data.option` 必须是可直接渲染的纯 JSON ECharts option。`chartType` / `chartRequest` 可用于追溯和校验，但不是最小合法渲染字段。
 
+默认按多 schema 片段流式输出。每个已就绪片段都是一个可独立渲染的 `BusinessBlock`；不要为了等待其它 card、recommendation、quick-reply 或自然语言收尾，把所有内容攒成一次性最终回答。
+
 ```ts
-type RenderFragmentSet = {
+type RenderFragment = BusinessBlock
+
+type RenderFragmentBatch = {
   schemaVersion: 'plant-agent.message.v1'
   blocks: BusinessBlock[]
   focusEntities?: EntityRef[]
 }
 ```
 
-结构化片段集合只承载可渲染片段。Agent 不在 `blocks` 里生成 `text/content` 或推理型 block。
+结构化片段只承载可渲染内容。Agent 不在 `blocks` 里生成 `text/content` 或推理型 block。
 
-局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图或成组聚合展示需要时，才使用 `report` 组合模板。
+局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板；成组聚合展示如果没有明确报告要求，输出多张 `card` + `quick-reply`。
 
-当当前运行时要求提交结构化片段时，片段集合保持 `RenderFragmentSet` 格式，不要把 report/card 改写成其它格式。
+只有运行时明确要求批量 payload 时，才使用 `RenderFragmentBatch`。批量 payload 是兼容格式，不是模型必须等待所有片段后一次性提交的默认形态。
 
 异常、风险、预警、离线、阈值越界等场景必须生成至少一张 `recommendation` card；`recommendation` 用来承载“为什么值得关注”和“下一步建议”，不要只用 `metric` 或 `chart` 罗列现象。
 
-## JSON 合法性门控
+## 片段合法性门控
 
-结构化片段集合必须是一个可被 `JSON.parse()` 解析的完整 JSON object。不要依赖外部环节修复半截或不合法 JSON。
+每个独立片段必须是字段完整、可被当前 schema 渲染的 JSON object。不要把“片段合法”理解成“整段回答必须先组成一个完整 JSON object”。
 
-- 结构化片段集合序列化为单个 JSON object，不包代码围栏，不在 JSON 前后追加其它包装。
+- 单个 `card`、`quick-reply` 或 `report` 片段必须完整；同一片段内不要输出半截 JSON。
+- 多个片段可以按就绪顺序依次输出；不需要先包成一个完整 `blocks[]` 再提交。
+- 运行时明确要求批量 payload 时，才序列化为包含 `schemaVersion` 和 `blocks` 的单个 JSON object；否则不要额外包装。
+- 片段或批量 payload 不包代码围栏，不在 JSON 前后追加其它包装。
 - 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。
 - 禁止缺值字段：例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>` 时，整包无效。
 - 禁止 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则、注释和尾逗号。
@@ -36,15 +43,15 @@ type RenderFragmentSet = {
 - 事实值缺失时跳过对应字段、`items[]` 项、`series[]` 项或整张 card；不要输出空 key、空字符串、`null` 或 0 占位。
 - 必需字段缺失导致 card 无法成立时，不生成该 card；不要用空 card 表示缺口。
 - `null` 只允许用于 ECharts 明确支持的序列断点或 dataset 缺口；metric、recommendation、table 的必需字段不要用 `null`。
-- JSON 合法性优先级高于信息完整度。片段数据过长或容易写断时，减少 report/card 数量、删除可选追溯字段、聚合图表数据，不能提交半截 JSON。
+- 片段合法性优先级高于信息完整度。片段数据过长或容易写断时，先输出最小可渲染 card，删除可选追溯字段、聚合图表数据，不能输出半截 JSON。
 
-提交前逐项自检：
+输出片段前逐项自检：
 
-1. 顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`。
-2. 每个 block/card 是否字段完整且类型受支持。
-3. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
-4. 每个 `chart.data.option` 是否自身也是纯 JSON object。
-5. 将片段集合序列化内容交给 `JSON.parse()` 是否能成功。
+1. 当前输出是单个片段，还是运行时明确要求的批量 payload？
+2. 如果是单个片段，顶层是否是受支持的 `kind`，且字段完整？
+3. 如果是批量 payload，顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`？
+4. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
+5. 每个 `chart.data.option` 是否自身也是纯 JSON object。
 
 ## 当前允许的 blocks
 
@@ -78,7 +85,7 @@ type BusinessBlock =
 
 ### report
 
-`report` 是 card 的组合模板，只用于用户明确要求的企业、基地、地块、设备、农机成组报告。`title` 要短且具体，`cards` 通常 3-7 张，从概览到证据再到建议。
+`report` 是 card 的组合模板，只用于用户明确要求生成、查看或输出的企业、基地、地块、设备、农机成组报告。`title` 要短且具体，`cards` 通常 3-7 张，从概览到证据再到建议。
 
 同一明确报告请求默认只有一个主报告范围，也就只生成一个主 `report`：
 
@@ -94,7 +101,7 @@ metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
 
 不要把无关卡片塞进一个 report；但天气、设备、作业、积温、WOFOST 等如果服务于同一明确报告对象，就不是无关卡片，必须作为不同维度放进同一 report。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
 
-图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
+图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；用户询问“趋势/走势/变化/对比/分布”且已有对应数据时，必须生成 `type: "chart"` 卡片。只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
 
 report 组合规则:
 

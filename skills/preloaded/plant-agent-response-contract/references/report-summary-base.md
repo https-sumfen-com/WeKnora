@@ -1,5 +1,7 @@
 # 企业 / 基地报告结构（get_summary_base）
 
+本参考只在用户明确要求生成、查看或输出企业报告、基地报告、经营报告、生产报告或风险报告时加载。普通企业/基地查询、局部指标、天气趋势、设备状态、作物结构或风险关注，不加载本文件，使用通用 `card` / `chart` / `recommendation` 规则。
+
 角色判断方式见 `sono-mcp/references/tool-summary-base.md`。
 
 天气数据已内嵌在响应中（`summary.weather.now` / `summary.weather_7days.daily[]`），**不需要额外调用 `get_weather`**。
@@ -8,7 +10,7 @@
 
 ## 企业管理员报告（department_id=0）
 
-关注意图：全企业效益、整体种植情况、多作物横向对比、关键风险。
+明确报告关注维度：全企业效益、整体种植情况、多作物横向对比、关键风险。
 
 ### 卡片顺序（3-5 张）
 

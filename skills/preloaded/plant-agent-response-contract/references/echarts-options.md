@@ -2,7 +2,7 @@
 
 当业务数据需要趋势、对比、结构、分布、关系、流向、空间轨迹或多维指标展示时，输出 `type: "chart"` 卡片，并在 `chart.data.option` 中提供可直接传给 ECharts 的完整纯 JSON option。
 
-本规则借鉴 `Echarts-AI-Skill` 的稳定链路：先明确图表目标和字段映射，再生成完整 ECharts `option`，最后放入 chart card。`ChartRequest` 是推荐的可追溯中间规格，不是渲染必需字段。外部 skill 可作为本地生成/预览工具，但 chart card 必须内联最终 `option`，不依赖用户再运行脚本。
+本规则只约束单张 chart card 的可渲染字段。图表目标、字段映射和 ECharts 类型选择是内部判断；输出时直接给可渲染的 chart card，不要把这些步骤写成最终回答，也不要等待其它片段一起收口。`ChartRequest` 是推荐的可追溯中间规格，不是渲染必需字段。外部 skill 可作为本地生成/预览工具，但 chart card 必须内联可渲染 `option`，不依赖用户再运行脚本。
 
 图表优先级高于表格。只要数据能表达为趋势、对比、占比、分布、关系、强度矩阵、多指标结构或空间轨迹，就先生成 `chart`；`table` 只用于补充明细或无法有效图形化的逐行文本数据。
 
@@ -111,9 +111,9 @@ type ChartRequest = {
 1. 从 SONO-MCP/API/工具结果中抽取图表所需字段，删除无关系统字段。
 2. 判断 `goal` 和字段类型。复杂图表建议构造最小可解释 `ChartRequest`；简单图表可省略。
 3. 由 LLM 选择最合适的 ECharts 图表类型，不限制为 `line`、`bar`、`pie`。
-4. 生成完整 `option`，确保是纯 JSON，能直接 `setOption`。
+4. 生成当前 chart card 所需的 `option`，确保是纯 JSON，能直接 `setOption`。
 5. 把 `option` 放入 `chart.data.option`。如已构造 `ChartRequest`，一并放入 `chart.data`，便于运行时校验和追溯。
-6. 提交前校验整张 chart card：`data.option`、`data.chartRequest`、`series[].data`、`dataset.source` 都必须是合法 JSON；任一可选字段无值时删除该字段。
+6. 输出 chart card 前校验：`data.option`、`data.chartRequest`、`series[].data`、`dataset.source` 都必须是合法 JSON；任一可选字段无值时删除该字段。
 
 ## 示例
 
