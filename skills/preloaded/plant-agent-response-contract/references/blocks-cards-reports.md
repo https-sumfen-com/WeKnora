@@ -18,9 +18,11 @@ type AgentOutput = {
 
 结构化 payload 不承载正文。Agent 不在 `blocks` 里生成正文或推理 block。本技能不设计 Markdown 正文章节。
 
-普通分析、统计、建议、详情问答可以是自然回复。局部结构化展示默认生成 `card`，按需追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板。
+普通分析、统计、建议、详情问答可以是自然回复。命中结构化路径后，只输出结构化 payload，不要再输出整段自然语言正文、Markdown 表格或“自然语言主答 + JSON 补充”的混合格式。局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板。
 
 当当前运行时要求提交结构化 payload 时，输出完整 payload 本身，不要把 payload 内的 report/card 改写成自然语言后提交。
+
+异常、风险、预警、离线、阈值越界等场景必须生成至少一张 `recommendation` card；`recommendation` 用来承载“为什么值得关注”和“下一步建议”，不要只用 `metric` 或 `chart` 罗列现象。
 
 ## JSON 合法性门控
 
@@ -63,7 +65,7 @@ type BusinessBlock =
 
 ### quick-reply
 
-用于下一步可操作问题。`label` 简短，`fillText` 写成可直接追问的自然语言。
+用于下一步可操作问题。结构化路径默认追加 `quick-reply`，除非用户明确禁止后续追问。`label` 简短，`fillText` 写成可直接追问的自然语言。
 
 ```json
 {

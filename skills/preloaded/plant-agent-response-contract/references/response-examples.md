@@ -2,7 +2,7 @@
 
 示例中的数值表示“已由 SONO-MCP 返回”的数据形态；实际输出必须替换为当前任务真实读取的数据。
 
-## 局部卡片 + quick-reply 示例
+## 局部 card + recommendation + quick-reply 示例
 
 ```json
 {
@@ -20,6 +20,24 @@
             { "label": "近7天有效降雨", "value": 0, "unit": "mm" }
           ],
           "sourceSummary": "数据来自当前地块墒情快照和近7天降雨统计。"
+        }
+      }
+    },
+    {
+      "kind": "card",
+      "card": {
+        "type": "recommendation",
+        "cardId": "rec_plot_b07_soil_attention",
+        "data": {
+          "title": "B-07 今日关注建议",
+          "items": [
+            {
+              "title": "优先核查灌溉条件",
+              "priority": "high",
+              "reason": "当前土壤墒情为 15.2%，近7天有效降雨为 0mm，存在水分不足风险。",
+              "action": "确认灌溉设备在线状态并安排补水窗口"
+            }
+          ]
         }
       }
     },
