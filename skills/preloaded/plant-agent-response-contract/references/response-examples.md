@@ -2,12 +2,46 @@
 
 示例中的数值表示“已由 SONO-MCP 返回”的数据形态；实际输出必须替换为当前任务真实读取的数据。
 
+## 局部卡片 + quick-reply 示例
+
+```json
+{
+  "schemaVersion": "plant-agent.message.v1",
+  "blocks": [
+    {
+      "kind": "card",
+      "card": {
+        "type": "metric",
+        "cardId": "metric_plot_b07_soil_snapshot",
+        "data": {
+          "title": "B-07 墒情快照",
+          "items": [
+            { "label": "土壤墒情", "value": 15.2, "unit": "%" },
+            { "label": "近7天有效降雨", "value": 0, "unit": "mm" }
+          ],
+          "sourceSummary": "数据来自当前地块墒情快照和近7天降雨统计。"
+        }
+      }
+    },
+    {
+      "kind": "quick-reply",
+      "prompts": [
+        { "label": "看趋势", "fillText": "用图表展示 B-07 近 14 天墒情趋势" },
+        { "label": "生成报告", "fillText": "生成 B-07 地块墒情风险报告" }
+      ]
+    }
+  ],
+  "focusEntities": [
+    { "kind": "plot", "id": "plot-b07", "name": "B-07 地块" }
+  ]
+}
+```
+
 ## 企业报告示例
 
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "当前主要风险集中在东区基地设备离线和 B-07 地块墒情偏低。",
   "blocks": [
     {
       "kind": "report",
@@ -89,7 +123,6 @@
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "B-07 的 WOFOST 报告日期为 2026-06-03，当前模型重点风险是土壤含水量偏低。[WOFOST PDF 报告](https://example.com/report.pdf)",
   "blocks": [
     {
       "kind": "report",
@@ -186,7 +219,6 @@
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "B-07 当前墒情低于阈值，短期降雨不足，建议优先关注灌溉。",
   "blocks": [
     {
       "kind": "report",
@@ -276,7 +308,6 @@
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "1 号气象站当前在线，但近 24 小时存在一次数据中断。",
   "blocks": [
     {
       "kind": "card",
@@ -303,7 +334,6 @@
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "SONO-MCP 未返回指定时间范围内的作业轨迹，因此不能生成轨迹地图或作业效率图。",
   "blocks": [
     {
       "kind": "card",
@@ -329,10 +359,10 @@
 ### blocks 里放正文
 
 ```json
-{ "kind": "text", "markdown": "## 今日重点\n\nB-07 地块需要灌溉。" }
+{ "kind": "text", "content": "今日重点：B-07 地块需要灌溉。" }
 ```
 
-错误。正文写到顶层 `markdown`，不要作为 block。
+错误。正文不属于 block，不要让本技能承载完整自然语言正文。
 
 ### blocks 里放推理说明
 
@@ -340,33 +370,31 @@
 { "kind": "reasoning", "text": "先读取地块墒情，再判断风险。" }
 ```
 
-错误。业务级分析过程写到 Markdown 的“数据来源”或“判断依据”段落。
+错误。业务级分析过程不进入 block；需要说明时交由自然回复路径表达。
 
-### MCP 成功后仍只输出 Markdown
+### 明确结构化或异常数据场景仍只输出正文
 
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "## 地块分析总览\n\nB-07 当前墒情低于阈值。\n\n## 核心依据\n\n- 当前墒情 15.2%\n- 近 7 天无有效降雨\n\n## 农事建议\n\n建议优先安排滴灌。",
   "blocks": []
 }
 ```
 
-错误。SONO-MCP 已返回地块数据且用户意图是分析/建议/报告时，必须优先生成 `report` 或 `card` block。Markdown 只能保留极短摘要或必要缺口。
+错误。用户明确要求报告、卡片、图表、可视化，或数据存在异常、风险、预警、离线、缺口、阈值越界等需要局部高亮时，才生成对应 `report` 或 `card` block；普通分析/建议不适用这个反例。
 
 ### 报告前重复报告正文
 
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "## 地块分析总览\n\nB-07 墒情偏低。\n\n## 核心依据\n\n当前墒情 15.2%，近 7 天无有效降雨。\n\n## 详细分析报告",
   "blocks": [
     { "kind": "report", "title": "B-07 墒情风险报告", "cards": [] }
   ]
 }
 ```
 
-错误。report 已经是报告主体，不要在 report 前写一套重复的 Markdown 报告章节。
+错误。report 已经是报告主体，不要在 report 前写一套重复的自然语言报告正文。
 
 ### 编造数据
 
@@ -390,7 +418,7 @@
 { "kind": "base", "id": "base-east", "name": "东区基地" }
 ```
 
-错误，除非前后端已经扩展 `focusEntities.kind`。企业和基地作为分析范围写入 Markdown、report 标题或卡片数据。
+错误，除非前后端已经扩展 `focusEntities.kind`。企业和基地作为分析范围写入 report 标题或卡片数据。
 
 ### chart 缺少 option
 
@@ -447,7 +475,6 @@
 ```json
 {
   "schemaVersion": "plant-agent.message.v1",
-  "markdown": "以下为地块综合分析。",
   "blocks": [
     {
       "kind": "report",
@@ -467,20 +494,20 @@
 }
 ```
 
-错误。用户问的是同一地块综合分析时，只生成一份主 `report`。天气预报、设备状态、积温积雨、WOFOST 模型、评级和农事建议都应作为同一 `report.cards[]` 中的不同 cards。
+错误。用户明确要求同一地块报告时，只生成一份主 `report`。天气预报、设备状态、积温积雨、WOFOST 模型、评级和农事建议都应作为同一 `report.cards[]` 中的不同 cards。
 
 ## 最终自检
 
 - 最终输出整体是否是一个可被 `JSON.parse()` 解析的 JSON object，且没有 Markdown 代码围栏或自然语言前后缀？
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
-- 如果 SONO-MCP/API/工具数据读取成功，是否优先生成了 `report` 或 `card` block？
-- Markdown 是否只保留 1-2 句摘要或必要缺口，而不是完整分析正文？
-- 同一主对象的综合分析是否只生成了一份 `report`？天气、设备、作业、WOFOST、评级等维度是否合并到了同一 `report.cards[]`？
+- 当前是否确实命中明确报告、局部结构化展示意图，或异常/风险数据触发，而不是普通自然回复？
+- 明确报告意图是否生成了一份主 `report`？天气、设备、作业、WOFOST、评级等维度是否合并到了同一 `report.cards[]`？
+- 非报告的局部结构化展示是否只生成 `card` / `quick-reply`，没有误用 `report`？
 - `blocks[].kind` 是否只包含 `card`、`report`、`quick-reply`？
 - 是否完全避免了 `text` block 和 `reasoning` block？
 - card 类型是否只用了当前注册类型？
 - `chart` 卡片是否包含纯 JSON `data.option`？复杂图表是否按需补充了 `chartRequest`？
-- 是否不存在 `"value"`、`"top"`、`"smooth"`、`"max"`、`"yAxisIndex"` 等无值 key？缺值数据是否已跳过或在 Markdown 中说明？
+- 是否不存在 `"value"`、`"top"`、`"smooth"`、`"max"`、`"yAxisIndex"` 等无值 key？缺值数据是否已跳过或交由自然回复说明？
 - 是否在可视化数据场景优先生成了 `chart`，没有把趋势、对比、占比、分布、多指标对比默认做成 `table`？
 - 地块情况/地块分析/地块报告是否把 `get_wofost_report` 作为重点分析来源，而不是只输出 `get_plot_info` 基础快照？
 - WOFOST 模型值是否明确表述为“模型模拟/预测”，没有写成实际测产或实测结果？

@@ -101,7 +101,7 @@ type ChartRequest = {
 - 数字保持 number，单位放在 `axisLabel.formatter` 字符串、`name`、`title` 或 `sourceSummary` 中；不要把 `"15.2%"` 放进数值列。
 - `title.text`、`legend`、`tooltip`、坐标轴、`series` 必须与图表类型匹配。需要笛卡尔坐标时才输出 `xAxis`/`yAxis`；饼图、雷达、桑基、关系图不要带无意义坐标轴。
 - `radar.indicator[].max`、`series[].data[]`、`dataset.source[]` 中的数值必须是 number 或明确允许的 `null`。缺少评级分值、最大值或序列值时，跳过该指标/点位，或在 `sourceSummary` 说明缺口，不要输出空 key。
-- 大于 200 行的明细数据不要全塞进 option；先聚合、采样或输出 table，并在 Markdown 说明图表只展示 Top N 或聚合结果。
+- 大于 200 行的明细数据不要全塞进 option；先聚合、采样或输出 table，并由自然回复说明图表只展示 Top N 或聚合结果。
 - `chartRequest` 是可选追溯信息，不是渲染必需字段。为了保证 JSON 合法性，可以只输出 `title`、`chartType`、`option`、`sourceSummary`。
 - 地图、迁徙线、轨迹图必须有真实 `[lng, lat]` 坐标和前端已注册地图名；缺任一项则不要生成对应 option。
 - 多系列图表必须保证每个 `series[].name`、`encode` 或 `data` 都能追溯到 `chartRequest` 和原始数据字段。

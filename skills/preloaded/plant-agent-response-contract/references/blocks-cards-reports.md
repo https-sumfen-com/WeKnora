@@ -4,43 +4,42 @@
 
 ## 输出形态
 
-通用内容使用顶层 Markdown，结构化业务展示使用 `blocks`。当 SONO-MCP 已返回企业、基地、地块、设备、农机数据，且用户意图是分析、详情、建议、报告或结构化输出时，`blocks` 是主输出，Markdown 只能做极短摘要或缺口说明。
+大模型自然回复是默认路径，本参考只定义结构化渲染片段。结构化输出的常态是 `card` 和 `quick-reply`；`report` 只是把多张 card 组合成一组的模板。用户明确要求卡片、图表、地图、表格、指标面板、可视化、报告，或读取到异常、风险、预警、离线、缺口、阈值越界等需要局部高亮的数据，或运行时要求结构化 payload 时，才使用 `blocks`。SONO-MCP 返回数据本身不要求优先生成 block。
 
 图表类结构化展示使用 `type: "chart"` 卡片，完整规则见 `echarts-options.md`。`data.option` 必须是可直接渲染的纯 JSON ECharts option。`chartType` / `chartRequest` 可用于追溯和校验，但不是最小合法渲染字段。
 
 ```ts
 type AgentOutput = {
   schemaVersion: 'plant-agent.message.v1'
-  markdown: string
-  blocks?: BusinessBlock[]
+  blocks: BusinessBlock[]
   focusEntities?: EntityRef[]
 }
 ```
 
-如果当前接口仍需要旧格式，由后端 adapter 把 `markdown` 适配到兼容字段；Agent 不在 `blocks` 里生成正文或推理 block。
+结构化 payload 不承载正文。Agent 不在 `blocks` 里生成正文或推理 block。本技能不设计 Markdown 正文章节。
 
-MCP 成功后的分析/报告类回答不得 Markdown-only。必须至少包含一个 `report` 或 `card` block，除非用户明确要求纯文字解释。
+普通分析、统计、建议、详情问答可以是自然回复。局部结构化展示默认生成 `card`，按需追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板。
 
-最终提交时输出完整 payload 本身，不要把 payload 内的 report/card 改写成自然语言 Markdown 后提交。
+当当前运行时要求提交结构化 payload 时，输出完整 payload 本身，不要把 payload 内的 report/card 改写成自然语言后提交。
 
 ## JSON 合法性门控
 
-最终输出必须是一个可被 `JSON.parse()` 解析的完整 JSON object。Agent 不依赖后端修复半截或不合法 JSON。
+结构化 payload 必须是一个可被 `JSON.parse()` 解析的完整 JSON object。Agent 不依赖后端修复半截或不合法 JSON。
 
-- 只输出一个 JSON object，不包 Markdown 代码围栏，不在 JSON 前后追加自然语言。
+- 结构化 payload 输出为单个 JSON object，不包 Markdown 代码围栏，不在 JSON 前后追加自然语言。
 - 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。
 - 禁止缺值字段：例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>` 时，整包无效。
 - 禁止 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则、注释和尾逗号。
 - 布尔值必须写成 `true` / `false`；数字必须是 JSON number；字符串不能代替数字。
 - 事实值缺失时跳过对应字段、`items[]` 项、`series[]` 项或整张 card；不要输出空 key、空字符串、`null` 或 0 占位。
-- 必需字段缺失导致 card 无法成立时，不生成该 card，在顶层 `markdown` 用一句话说明数据缺口。
+- 必需字段缺失导致 card 无法成立时，不生成该 card；缺口由结构化 payload 外的自然回复说明。
 - `null` 只允许用于 ECharts 明确支持的序列断点或 dataset 缺口；metric、recommendation、table 的必需字段不要用 `null`。
 - JSON 合法性优先级高于信息完整度。payload 过长或容易写断时，减少 report/card 数量、删除可选追溯字段、聚合图表数据，不能提交半截 JSON。
 
 提交前逐项自检：
 
-1. 顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"markdown"`。
-2. 如果包含 `blocks`，每个 block/card 是否字段完整且类型受支持。
+1. 顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`。
+2. 每个 block/card 是否字段完整且类型受支持。
 3. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
 4. 每个 `chart.data.option` 是否自身也是纯 JSON object。
 5. 将最终文本整体交给 `JSON.parse()` 是否能成功。
@@ -50,45 +49,17 @@ MCP 成功后的分析/报告类回答不得 Markdown-only。必须至少包含�
 ```ts
 type BusinessBlock =
   | { kind: 'card', card: AgentCard }
-  | { kind: 'report', title: string, cards: AgentCard[] }
   | { kind: 'quick-reply', prompts: QuickReplyPrompt[] }
+  | { kind: 'report', title: string, cards: AgentCard[] }
 ```
 
-禁止在 `blocks` 中生成 `text` 或 `reasoning`。普通正文、分析过程、数据来源、缺口说明全部写进 Markdown。
+禁止在 `blocks` 中生成 `text` 或 `reasoning`。普通正文、分析过程、数据来源、缺口说明不属于 block 内容，由自然回复路径处理。
 
 ## Block 规则
 
 ### card
 
 用于单张业务卡片。最终输出中 `card` 不能为 `null`；流式占位是前端/后端内部行为，不是 Agent 最终输出。
-
-### report
-
-用于企业、基地、地块、设备、农机的成组分析或报告。`title` 要短且具体，`cards` 通常 3-7 张，从概览到证据再到建议。
-
-同一用户问题默认只有一个主分析范围，也就只生成一个主 `report`：
-
-- 用户问“某地块情况/综合分析/生成报告”时，主范围是该地块；WOFOST、基础快照、评级、积温积雨、未来天气、设备状态、作业窗口、农事建议都是该地块报告的分析维度，必须合并到同一个 `report.cards[]`。
-- 用户问“某基地/企业综合分析”时，基地/企业是主范围；天气、设备、作物结构、投入、风险等作为同一报告内的 cards。
-- 只有用户明确要求“分别生成报告/拆开看”，或同时比较多个互不从属对象且放在同一 report 会造成语义混乱时，才允许多个 `report`。
-- `quick-reply` 可以独立作为第二个 block；它不是一份报告。
-
-推荐顺序:
-
-```txt
-metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
-```
-
-不要把无关卡片塞进一个 report；但天气、设备、作业、积温、WOFOST 等如果服务于同一主对象的综合分析，就不是无关卡片，必须作为不同维度放进同一 report。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
-
-图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
-
-报告前 Markdown 规则:
-
-- 最多 1-2 句总览，或只写必要数据缺口。
-- 不要在 report 前写完整的“地块分析总览”“核心依据”“农事建议”“详细分析报告”等章节。
-- report 已承载的指标、建议、来源、缺口，不要在 Markdown 中重复。
-- 如果 report 能表达清楚，`markdown` 可以为空字符串或一句话摘要。
 
 ### quick-reply
 
@@ -102,6 +73,33 @@ metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
   ]
 }
 ```
+
+### report
+
+`report` 是 card 的组合模板，只用于用户明确要求的企业、基地、地块、设备、农机成组报告。`title` 要短且具体，`cards` 通常 3-7 张，从概览到证据再到建议。
+
+同一明确报告请求默认只有一个主报告范围，也就只生成一个主 `report`：
+
+- 用户明确要求“某地块报告/生成地块报告”时，主范围是该地块；WOFOST、基础快照、评级、积温积雨、未来天气、设备状态、作业窗口、农事建议都是该地块报告的分析维度，必须合并到同一个 `report.cards[]`。
+- 用户明确要求“某基地/企业报告”时，基地/企业是主范围；天气、设备、作物结构、投入、风险等作为同一报告内的 cards。
+- 只有用户明确要求“分别生成报告/拆开看”，或同时比较多个互不从属对象且放在同一 report 会造成语义混乱时，才允许多个 `report`。
+
+推荐 card 顺序:
+
+```txt
+metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
+```
+
+不要把无关卡片塞进一个 report；但天气、设备、作业、积温、WOFOST 等如果服务于同一明确报告对象，就不是无关卡片，必须作为不同维度放进同一 report。需要图表时，在相关 `report.cards[]` 中输出 `type: "chart"` 卡片，并用 `data.option` 承载完整 ECharts 配置。
+
+图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
+
+报告附带自然回复规则:
+
+- 最多 1-2 句总览，或只写必要数据缺口。
+- 不要在 report 前写完整的“地块分析总览”“核心依据”“农事建议”“详细分析报告”等章节。
+- report 已承载的指标、建议、来源、缺口，不要在自然回复中重复。
+- 如果 report 能表达清楚，不要额外把正文塞进结构化 payload。
 
 ## 支持的卡片类型
 
@@ -156,7 +154,7 @@ metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
 
 ### table
 
-用于结构化行数据，尤其是需要排序、审计、编号、状态清单、逐行操作或后续交互的列表。简单说明优先用 Markdown 表格。
+用于结构化行数据，尤其是需要排序、审计、编号、状态清单、逐行操作或后续交互的列表。简单说明优先走自然回复，不生成 table。
 
 不要用 table 承载可图形化的数据。只要行数据能表达为趋势、对比、占比、分布、强度矩阵或多指标结构，就应先生成 chart；table 最多作为补充明细。
 
@@ -235,19 +233,18 @@ type EntityKind = 'plot' | 'device' | 'machinery'
 { "kind": "plot", "id": "plot-b07", "name": "苏沁 B-07 地块" }
 ```
 
-企业和基地信息写在 Markdown、report 标题或卡片数据里；不要擅自把 `enterprise`、`base` 当作 `focusEntities.kind`，除非后端和前端已扩展该枚举。
+企业和基地信息写在 report 标题或卡片数据里；不要擅自把 `enterprise`、`base` 当作 `focusEntities.kind`，除非后端和前端已扩展该枚举。
 
-## 报告组织规范
+## report 组合模板规范
 
-一个生产级报告通常包含:
+一个 report 组合模板通常包含:
 
 1. `report`: 3-7 张卡片，顺序为概览、图表证据、空间或明细、建议、复盘。
-2. 顶层 Markdown: 可选，最多 1-2 句，用于总览或必要缺口。
-3. `quick-reply`: 2-4 个后续追问或动作。
+2. `quick-reply`: 2-4 个后续追问或动作。
 
 报告标题要绑定范围，例如“企业经营风险概览”“东区基地设备运行报告”“B-07 地块墒情风险报告”。不要使用“综合报告”这类空泛标题。
 
-同一主对象综合分析的 `blocks` 推荐形态:
+同一主对象明确报告请求的 `blocks` 推荐形态:
 
 ```txt
 [
@@ -265,4 +262,4 @@ type EntityKind = 'plot' | 'device' | 'machinery'
 ]
 ```
 
-天气是该地块综合分析的一个维度，应合并为同一 `report.cards[]` 中的天气趋势 chart 或天气风险 recommendation。
+天气是该地块明确报告请求中的一个维度，应合并为同一 `report.cards[]` 中的天气趋势 chart 或天气风险 recommendation。
