@@ -30,7 +30,7 @@ items 按序：
 | 降水 | `precip` | mm |
 
 - 触发预警的字段加 `trend: "down"`
-- 观测时间（`obsTime`）作为自然回复补充，不占 item
+- 观测时间（`obsTime`）可放入 `sourceSummary`，不占 item
 
 **2. recommendation — 天气预警与农事建议**
 
@@ -47,7 +47,7 @@ items 按序：
 ### 无预警时
 
 - **metric**（同上快照卡片，无 trend 高亮）
-- 自然回复一句：`"当前气象条件（风力{windScale}级，温度{temp}°C，湿度{humidity}%）适宜田间作业。"`
+- 不生成 recommendation
 - **quick-reply（1-2 个）**：追问地块长势或作业计划
 
 ---
@@ -80,7 +80,7 @@ items 按序：
 - `reason`：说明该时段满足的条件（风力≤4级、降水<5mm等）
 
 全部 7 天无预警时：
-- 跳过 recommendation，自然回复一句："未来7天气象条件整体正常，无明显农事风险。"
+- 跳过 recommendation。
 
 **3. metric（可选）— 最近1天快照**
 

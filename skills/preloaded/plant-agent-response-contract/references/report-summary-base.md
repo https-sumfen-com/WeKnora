@@ -46,7 +46,7 @@
 来源：`batch[]`（过滤 `value > 0`）
 - x 轴：年份；系列：主要作物（甜菜/小麦/油菜类）
 - 同一年份同一作物只取一条
-- 不足 2 年有效数据 → 跳过此卡片，自然回复说明"历史产量记录不足"
+- 不足 2 年有效数据 → 跳过此卡片
 - 图表类型由 LLM 按数据语义选择；跨年趋势通常适合 `line` 或 `bar`，多作物可组合；输出完整 `data.option`
 
 **5. chart — 当年生产投入**
@@ -55,7 +55,7 @@
 - 标题：`"{batch_info.title}生产投入汇总"`
 - 图表优先：用 ECharts 展示投入类型与合计/覆盖面积对比，常见选择为 `bar` 或双轴组合图
 - 只展示 `total > 0` 的行；`plot_type_water` / `plot_type_dry` 单产为 0 时跳过
-- 上年（`batch_contrast_count[1]`）水浇地单产 + 旱地单产 avg 对比，如需补充交由自然回复一句话表达
+- 上年（`batch_contrast_count[1]`）水浇地单产 + 旱地单产 avg 对比，如需保留依据，写入相关 chart 的 `sourceSummary`
 
 **6. recommendation — 关键风险与建议**
 

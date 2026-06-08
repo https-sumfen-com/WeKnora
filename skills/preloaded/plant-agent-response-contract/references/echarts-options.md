@@ -2,7 +2,7 @@
 
 当业务数据需要趋势、对比、结构、分布、关系、流向、空间轨迹或多维指标展示时，输出 `type: "chart"` 卡片，并在 `chart.data.option` 中提供可直接传给 ECharts 的完整纯 JSON option。
 
-本规则借鉴 `Echarts-AI-Skill` 的稳定链路：先明确图表目标和字段映射，再生成完整 ECharts `option`，最后放入 chart card。`ChartRequest` 是推荐的可追溯中间规格，不是渲染必需字段。外部 skill 可作为本地生成/预览工具，但生产回答必须内联最终 payload，不依赖用户再运行脚本。
+本规则借鉴 `Echarts-AI-Skill` 的稳定链路：先明确图表目标和字段映射，再生成完整 ECharts `option`，最后放入 chart card。`ChartRequest` 是推荐的可追溯中间规格，不是渲染必需字段。外部 skill 可作为本地生成/预览工具，但 chart card 必须内联最终 `option`，不依赖用户再运行脚本。
 
 图表优先级高于表格。只要数据能表达为趋势、对比、占比、分布、关系、强度矩阵、多指标结构或空间轨迹，就先生成 `chart`；`table` 只用于补充明细或无法有效图形化的逐行文本数据。
 
@@ -101,7 +101,7 @@ type ChartRequest = {
 - 数字保持 number，单位放在 `axisLabel.formatter` 字符串、`name`、`title` 或 `sourceSummary` 中；不要把 `"15.2%"` 放进数值列。
 - `title.text`、`legend`、`tooltip`、坐标轴、`series` 必须与图表类型匹配。需要笛卡尔坐标时才输出 `xAxis`/`yAxis`；饼图、雷达、桑基、关系图不要带无意义坐标轴。
 - `radar.indicator[].max`、`series[].data[]`、`dataset.source[]` 中的数值必须是 number 或明确允许的 `null`。缺少评级分值、最大值或序列值时，跳过该指标/点位，或在 `sourceSummary` 说明缺口，不要输出空 key。
-- 大于 200 行的明细数据不要全塞进 option；先聚合、采样或输出 table，并由自然回复说明图表只展示 Top N 或聚合结果。
+- 大于 200 行的明细数据不要全塞进 option；先聚合、采样或输出 table，并在 `sourceSummary` 中标注图表只展示 Top N 或聚合结果。
 - `chartRequest` 是可选追溯信息，不是渲染必需字段。为了保证 JSON 合法性，可以只输出 `title`、`chartType`、`option`、`sourceSummary`。
 - 地图、迁徙线、轨迹图必须有真实 `[lng, lat]` 坐标和前端已注册地图名；缺任一项则不要生成对应 option。
 - 多系列图表必须保证每个 `series[].name`、`encode` 或 `data` 都能追溯到 `chartRequest` 和原始数据字段。
@@ -112,7 +112,7 @@ type ChartRequest = {
 2. 判断 `goal` 和字段类型。复杂图表建议构造最小可解释 `ChartRequest`；简单图表可省略。
 3. 由 LLM 选择最合适的 ECharts 图表类型，不限制为 `line`、`bar`、`pie`。
 4. 生成完整 `option`，确保是纯 JSON，能直接 `setOption`。
-5. 把 `option` 放入 `chart.data.option`。如已构造 `ChartRequest`，一并放入 `chart.data`，便于后端/前端校验和追溯。
+5. 把 `option` 放入 `chart.data.option`。如已构造 `ChartRequest`，一并放入 `chart.data`，便于运行时校验和追溯。
 6. 提交前校验整张 chart card：`data.option`、`data.chartRequest`、`series[].data`、`dataset.source` 都必须是合法 JSON；任一可选字段无值时删除该字段。
 
 ## 示例

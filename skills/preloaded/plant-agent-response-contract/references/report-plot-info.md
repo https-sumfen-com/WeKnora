@@ -14,7 +14,7 @@
 
 来源：`plot_crop` + `area`
 
-**null 检查（先做）**：若 `plot_crop` 为 null 或 `plot_crop.crop` 为 null，则 作物/已生长天数/当前阶段/播种日期/预计收获 **全部跳过**；必要时由自然回复补充：`"暂无种植批次数据，以下信息仅供参考。"`
+**null 检查（先做）**：若 `plot_crop` 为 null 或 `plot_crop.crop` 为 null，则 作物/已生长天数/当前阶段/播种日期/预计收获 **全部跳过**；不要生成种植批次占位 item。
 
 items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**，不能用 "0" 占位）：
 
@@ -29,8 +29,7 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 
 **禁止在此 metric 卡片中添加任何天气字段**（温度、湿度、风力、降水、当前天气等）。如果用户明确请求的是地块报告，天气应作为同一 `report.cards[]` 中的独立 weather chart 或 recommendation 维度，不要另起第二个 report。
 
-**自然回复补充依据**（若 `current_crop_model_cycle.remark` 含"生长状态"段）：
-> 当前阶段说明：{remark 中"生长状态："之后的内容，截取到"注意事项："之前}
+**阶段说明来源**（若 `current_crop_model_cycle.remark` 含"生长状态"段）：可放入相关 card 的 `sourceSummary`，截取"生长状态："之后到"注意事项："之前的内容。
 
 ### 2. chart — 长势与环境评级
 
@@ -41,7 +40,7 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 - 评级映射仅用于可视化：优=3、中=2、低=1；不要把映射分值当作业务原始事实
 - 只展示 value 非 `"0"`、非空、非 null 的项
 - value 为 `"低"` 的项在图表标签或 `sourceSummary` 中标注风险；如果无法稳定映射评级，再降级为 table
-- `grade[]` 全为空 / 全为 "0" → 跳过此卡片，自然回复一句"暂无评级数据。"
+- `grade[]` 全为空 / 全为 "0" → 跳过此卡片
 - **此卡片是 recommendation 的视觉依据，必须在 recommendation 之前出现**
 
 ### 3. chart — 积温积雨同比
@@ -51,7 +50,7 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 - 标题：`"积温积雨对比（{start_date} 至 {end_date}）"`
 - 图表优先：生成 ECharts `chart`，常见选择为分组 `bar`，展示本期 vs 去年同期；变化值可用标签、tooltip 或辅助系列表达
 - 指标：积温（°C）/ 有效积温（°C）/ 积雨（mm）
-- `analyze` 字段内容可作为自然回复依据（1句话），不进入 block
+- `analyze` 字段内容只可作为 `sourceSummary` 或 recommendation 依据，不单独进入 block
 - `accumulated_tp` 为空或所有字段均为 0 → 跳过此卡片
 
 ### 4. recommendation — 农事建议
@@ -67,7 +66,7 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 
 每条 `items[].reason` 必须引用具体字段值。最多 3 条，按 priority 降序保留。
 
-若以上来源均无数据支撑 → 跳过 recommendation，自然回复一句"暂无农事建议依据。"
+若以上来源均无数据支撑 → 跳过 recommendation。
 
 ---
 
@@ -87,4 +86,4 @@ items 按序（值为 `0`、`null`、空字符串、`"0"` 时**跳过该 item**�
 - `crop_model_cycle` 全部阶段列表（只用 `current_crop_model_cycle`）
 - metric 卡片中出现天气字段（温度、湿度、风力等）
 - 值为 `0`、`"0"`、`null`、空字符串的 item **不能**以 "0" 显示，必须跳过
-- 土壤 N/P/K/有机质/pH 为空时不生成占位卡片，由自然回复说明即可
+- 土壤 N/P/K/有机质/pH 为空时不生成占位卡片

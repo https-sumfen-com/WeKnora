@@ -1,42 +1,42 @@
-# Block、Card、Report 规范
+# 多 schema 渲染片段规范
 
-本参考定义 Agent 应输出的长期约束。后端可以做兼容适配和校验，但 Agent 不依赖后端修复正常输出。
+本参考定义结构化渲染片段的长期约束。片段自身必须字段完整、类型稳定、可被运行时直接渲染。
 
 ## 输出形态
 
-大模型自然回复是默认路径，本参考只定义结构化渲染片段。结构化输出的常态是 `card` 和 `quick-reply`；`report` 只是把多张 card 组合成一组的模板。用户明确要求卡片、图表、地图、表格、指标面板、可视化、报告，或读取到异常、风险、预警、离线、缺口、阈值越界等需要局部高亮的数据，或运行时要求结构化 payload 时，才使用 `blocks`。SONO-MCP 返回数据本身不要求优先生成 block。
+本参考只定义多 schema 渲染片段。结构化片段的常态是 `card` 和 `quick-reply`；`report` 只是把多张 card 组合成一组的模板。用户明确要求卡片、图表、地图、表格、指标面板、可视化、报告，或读取到异常、风险、预警、离线、缺口、阈值越界等需要局部高亮的数据，或运行时要求结构化片段时，才使用 `blocks`。SONO-MCP 返回数据本身不要求优先生成 block。
 
 图表类结构化展示使用 `type: "chart"` 卡片，完整规则见 `echarts-options.md`。`data.option` 必须是可直接渲染的纯 JSON ECharts option。`chartType` / `chartRequest` 可用于追溯和校验，但不是最小合法渲染字段。
 
 ```ts
-type AgentOutput = {
+type RenderFragmentSet = {
   schemaVersion: 'plant-agent.message.v1'
   blocks: BusinessBlock[]
   focusEntities?: EntityRef[]
 }
 ```
 
-结构化 payload 不承载正文。Agent 不在 `blocks` 里生成正文或推理 block。本技能不设计 Markdown 正文章节。
+结构化片段集合只承载可渲染片段。Agent 不在 `blocks` 里生成 `text/content` 或推理型 block。
 
-普通分析、统计、建议、详情问答可以是自然回复。命中结构化路径后，只输出结构化 payload，不要再输出整段自然语言正文、Markdown 表格或“自然语言主答 + JSON 补充”的混合格式。局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板。
+局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图或成组聚合展示需要时，才使用 `report` 组合模板。
 
-当当前运行时要求提交结构化 payload 时，输出完整 payload 本身，不要把 payload 内的 report/card 改写成自然语言后提交。
+当当前运行时要求提交结构化片段时，片段集合保持 `RenderFragmentSet` 格式，不要把 report/card 改写成其它格式。
 
 异常、风险、预警、离线、阈值越界等场景必须生成至少一张 `recommendation` card；`recommendation` 用来承载“为什么值得关注”和“下一步建议”，不要只用 `metric` 或 `chart` 罗列现象。
 
 ## JSON 合法性门控
 
-结构化 payload 必须是一个可被 `JSON.parse()` 解析的完整 JSON object。Agent 不依赖后端修复半截或不合法 JSON。
+结构化片段集合必须是一个可被 `JSON.parse()` 解析的完整 JSON object。不要依赖外部环节修复半截或不合法 JSON。
 
-- 结构化 payload 输出为单个 JSON object，不包 Markdown 代码围栏，不在 JSON 前后追加自然语言。
+- 结构化片段集合序列化为单个 JSON object，不包代码围栏，不在 JSON 前后追加其它包装。
 - 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。
 - 禁止缺值字段：例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>` 时，整包无效。
 - 禁止 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则、注释和尾逗号。
 - 布尔值必须写成 `true` / `false`；数字必须是 JSON number；字符串不能代替数字。
 - 事实值缺失时跳过对应字段、`items[]` 项、`series[]` 项或整张 card；不要输出空 key、空字符串、`null` 或 0 占位。
-- 必需字段缺失导致 card 无法成立时，不生成该 card；缺口由结构化 payload 外的自然回复说明。
+- 必需字段缺失导致 card 无法成立时，不生成该 card；不要用空 card 表示缺口。
 - `null` 只允许用于 ECharts 明确支持的序列断点或 dataset 缺口；metric、recommendation、table 的必需字段不要用 `null`。
-- JSON 合法性优先级高于信息完整度。payload 过长或容易写断时，减少 report/card 数量、删除可选追溯字段、聚合图表数据，不能提交半截 JSON。
+- JSON 合法性优先级高于信息完整度。片段数据过长或容易写断时，减少 report/card 数量、删除可选追溯字段、聚合图表数据，不能提交半截 JSON。
 
 提交前逐项自检：
 
@@ -44,7 +44,7 @@ type AgentOutput = {
 2. 每个 block/card 是否字段完整且类型受支持。
 3. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
 4. 每个 `chart.data.option` 是否自身也是纯 JSON object。
-5. 将最终文本整体交给 `JSON.parse()` 是否能成功。
+5. 将片段集合序列化内容交给 `JSON.parse()` 是否能成功。
 
 ## 当前允许的 blocks
 
@@ -55,17 +55,17 @@ type BusinessBlock =
   | { kind: 'report', title: string, cards: AgentCard[] }
 ```
 
-禁止在 `blocks` 中生成 `text` 或 `reasoning`。普通正文、分析过程、数据来源、缺口说明不属于 block 内容，由自然回复路径处理。
+禁止在 `blocks` 中生成 `text`、`content` 或 `reasoning`。推理过程和无法结构化的缺口说明不属于 block 内容。
 
 ## Block 规则
 
 ### card
 
-用于单张业务卡片。最终输出中 `card` 不能为 `null`；流式占位是前端/后端内部行为，不是 Agent 最终输出。
+用于单张业务卡片。`card` 不能为 `null`；流式占位是运行时内部行为，不是结构化片段内容。
 
 ### quick-reply
 
-用于下一步可操作问题。结构化路径默认追加 `quick-reply`，除非用户明确禁止后续追问。`label` 简短，`fillText` 写成可直接追问的自然语言。
+用于下一步可操作问题。结构化路径默认追加 `quick-reply`，除非用户明确禁止后续追问。`label` 简短，`fillText` 写成可直接发起的追问文本。
 
 ```json
 {
@@ -96,12 +96,11 @@ metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
 
 图表优先级高于表格。时间序列、分类对比、占比、分布、多指标对比、风险强度、空间轨迹等数据，优先生成 `chart`；只有需要逐行精确查看、排序、审计、编号、状态清单或字段值大多是文本时，才使用 `table`。
 
-报告附带自然回复规则:
+report 组合规则:
 
-- 最多 1-2 句总览，或只写必要数据缺口。
-- 不要在 report 前写完整的“地块分析总览”“核心依据”“农事建议”“详细分析报告”等章节。
-- report 已承载的指标、建议、来源、缺口，不要在自然回复中重复。
-- 如果 report 能表达清楚，不要额外把正文塞进结构化 payload。
+- report 只组合同一主对象或同一报告主题下的 cards。
+- 不要把章节文本塞进 report。
+- report 已承载的指标、建议、来源、缺口，不要重复成额外 block。
 
 ## 支持的卡片类型
 
@@ -156,7 +155,7 @@ metric -> chart -> chart/map/table -> recommendation -> retrospect/phase-summary
 
 ### table
 
-用于结构化行数据，尤其是需要排序、审计、编号、状态清单、逐行操作或后续交互的列表。简单说明优先走自然回复，不生成 table。
+用于结构化行数据，尤其是需要排序、审计、编号、状态清单、逐行操作或后续交互的列表。简单说明不生成 table。
 
 不要用 table 承载可图形化的数据。只要行数据能表达为趋势、对比、占比、分布、强度矩阵或多指标结构，就应先生成 chart；table 最多作为补充明细。
 
@@ -235,7 +234,7 @@ type EntityKind = 'plot' | 'device' | 'machinery'
 { "kind": "plot", "id": "plot-b07", "name": "苏沁 B-07 地块" }
 ```
 
-企业和基地信息写在 report 标题或卡片数据里；不要擅自把 `enterprise`、`base` 当作 `focusEntities.kind`，除非后端和前端已扩展该枚举。
+企业和基地信息写在 report 标题或卡片数据里；不要擅自把 `enterprise`、`base` 当作 `focusEntities.kind`，除非运行时已扩展该枚举。
 
 ## report 组合模板规范
 
