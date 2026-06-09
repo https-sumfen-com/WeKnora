@@ -33,6 +33,7 @@ type RenderFragmentPayload = {
 - 顶层必须包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`。
 - `blocks[]` 可以只包含一个已就绪的 `card`、`quick-reply` 或 `report`；不要为了凑齐所有片段而等待。
 - 多个 payload 可以按就绪顺序依次输出；每个 payload 都必须自带 `schemaVersion` 和 `blocks`。
+- **唯一例外是 `quick-reply`：它必须是最后输出的内容，排在自然语言正文和所有其它片段之后。即使 quick-reply 先就绪，也要压到最后再发；其后不得再输出任何正文或片段。**
 - payload 不包代码围栏，不在 JSON 前后追加其它包装。不要把 payload 当 Markdown 代码块展示。
 - 不要输出裸 `kind/card/prompts/title/cards` 对象；前端解析入口依赖 `schemaVersion`。
 - 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。

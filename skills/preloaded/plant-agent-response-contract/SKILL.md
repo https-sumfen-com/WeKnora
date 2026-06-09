@@ -31,6 +31,8 @@ description: Use when 需要为农业数据选择合理的多 schema 业务渲�
 
 用于承接下一步可操作问题。出现风险、缺口、异常、详情钻取或可继续分析的数据时，默认搭配 quick-reply。
 
+**位置硬约束**：quick-reply 必须是整个回答的最后内容——排在自然语言正文和所有其他片段（card、chart、table、map、report）之后。无论流式分多少个 payload 输出，quick-reply 永远最后发；不得置于开头或穿插在中间，也不得在 quick-reply 之后再输出任何正文或其它片段。
+
 ### report
 
 report 是多张 card 的组合模板，不是默认片段。只有用户明确要求生成、查看或输出报告时才使用；不要因为数据较多、需要聚合或已有多张 card 就自动生成 report。
