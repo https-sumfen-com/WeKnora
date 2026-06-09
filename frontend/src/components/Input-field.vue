@@ -13,6 +13,7 @@ import KnowledgeBaseSelector from './KnowledgeBaseSelector.vue';
 import MentionSelector from './MentionSelector.vue';
 import AgentSelector from './AgentSelector.vue';
 import { getCaretCoordinates } from '@/utils/caret';
+import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom';
 import { listModels, type ModelConfig } from '@/api/model';
 import { listAgents, type CustomAgent, BUILTIN_QUICK_ANSWER_ID, BUILTIN_SMART_REASONING_ID } from '@/api/agent';
 import { listWebSearchProviders, type WebSearchProviderEntity } from '@/api/web-search-provider';
@@ -804,15 +805,29 @@ const ensureModelSelection = () => {
 };
 
 // 智能体身份或其数据到位时，把对话模型同步到智能体配置的 model_id。
-// 修复场景：导航离开再返回时，onMounted 中的 initChatModelSelection 会用
-// localStorage 的 lastPick（用户上一次手动挑选）覆盖 store 中的 selectedChatModelId，
-// 把共享智能体绑定的源租户 model_id 冲掉，UI 显示「未配置」。
-// 该 watch 在 loadAgents/sharedAgents 异步返回让 agentModelId 由空变非空时也会触发，
-// 与 handleSelectAgent 中的同步逻辑保持一致：智能体「拥有」其模型选择。
+// 修复场景：导航离开再返回时，initChatModelSelection 会用 localStorage 的 lastPick
+// 覆盖共享智能体绑定的源租户 model_id，UI 显示「未配置」——此时需要拉回 agent 模型。
+// 但若用户在本页手动改过模型（lastPick 与 agent 默认不同且当前选中即为 lastPick），
+// 则保留用户选择，避免 creatChat → chat 跳转后把模型 B 冲回智能体默认 A。
 watch(
   [selectedAgentId, () => settingsStore.selectedAgentSourceTenantId, agentModelId],
-  ([, , newModelId]) => {
-    if (newModelId && newModelId.trim() !== '' && newModelId !== selectedModelId.value) {
+  ([, sourceTenantId, newModelId]) => {
+    if (!newModelId || newModelId.trim() === '') return;
+
+    const lastPick = readLastChatModelID();
+    const isSharedAgent = !!sourceTenantId;
+    const agentModelInList = availableModels.value.some(m => m.id === newModelId);
+
+    if (
+      lastPick &&
+      selectedModelId.value === lastPick &&
+      lastPick !== newModelId &&
+      (!isSharedAgent || agentModelInList)
+    ) {
+      return;
+    }
+
+    if (newModelId !== selectedModelId.value) {
       selectedModelId.value = newModelId;
     }
   },
@@ -866,13 +881,18 @@ const selectedModel = computed(() => {
 
 // 模型展示名：本租户列表中有则用名称；若为共享智能体且其 model_id 不在本租户列表中则显示“共享智能体配置的模型”
 const selectedModelDisplayName = computed(() => {
-  if (selectedModel.value) return selectedModel.value.name;
+  if (selectedModel.value) return modelDisplayName(selectedModel.value);
   if (!selectedModelId.value) return t('input.notConfigured');
   const isSharedAgent = !!settingsStore.selectedAgentSourceTenantId;
   const modelFromAgent = agentModelId.value && agentModelId.value === selectedModelId.value;
   if (isSharedAgent && modelFromAgent) return t('input.sharedAgentModelLabel');
   return t('input.notConfigured');
 });
+
+const modelDisplayName = (model: ModelConfig) => {
+  const displayName = model.display_name?.trim();
+  return displayName || model.name;
+};
 
 const updateModelDropdownPosition = () => {
   const anchor = modelButtonRef.value;
@@ -886,8 +906,10 @@ const updateModelDropdownPosition = () => {
     return;
   }
 
-  // 获取按钮相对于视口的位置
-  const rect = anchor.getBoundingClientRect();
+  // Normalize coordinates to CSS pixels so they are interpreted the same way
+  // the browser will render them under the root `zoom` (see utils/zoom.ts).
+  const zoom = getRootZoom();
+  const rect = rectToCssPx(anchor.getBoundingClientRect(), zoom);
   console.log('[Model Dropdown] Button rect:', {
     top: rect.top,
     bottom: rect.bottom,
@@ -899,8 +921,7 @@ const updateModelDropdownPosition = () => {
 
   const dropdownWidth = 280;
   const offsetY = 8;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const { width: vw, height: vh } = cssViewportSize(zoom);
 
   // 左对齐到触发元素的左边缘
   // 使用 Math.floor 而不是 Math.round，避免像素对齐问题
@@ -1266,27 +1287,29 @@ const onInput = (val: string | InputEvent) => {
       mentionQuery.value = "";
 
       const coords = getCaretCoordinates(textarea, cursor);
-      const rect = textarea.getBoundingClientRect();
+      // Normalize coordinates to CSS pixels (root <html> may carry `zoom`).
+      const zoom = getRootZoom();
+      const rect = rectToCssPx(textarea.getBoundingClientRect(), zoom);
+      const { width: vw, height: vh } = cssViewportSize(zoom);
       const scrollTop = textarea.scrollTop;
       const menuHeight = 320; // 预估最大高度
 
       let left = rect.left + coords.left;
       // Prevent menu from going off-screen horizontally
-      if (left + 300 > window.innerWidth) {
-        left = window.innerWidth - 300 - 10;
+      if (left + 300 > vw) {
+        left = vw - 300 - 10;
       }
 
-      // 光标相对于视口的实际 top 位置
+      // 光标相对于视口的实际 top 位置（CSS 像素）
       const cursorAbsoluteTop = rect.top + coords.top - scrollTop;
       const lineHeight = coords.height; // 光标高度
 
       // Check vertical space below cursor
-      const spaceBelow = window.innerHeight - (cursorAbsoluteTop + lineHeight);
+      const spaceBelow = vh - (cursorAbsoluteTop + lineHeight);
 
       if (spaceBelow < menuHeight && cursorAbsoluteTop > menuHeight) {
         // Show above cursor (using bottom positioning)
-        // bottom distance = viewport height - cursor top position
-        const bottom = window.innerHeight - cursorAbsoluteTop;
+        const bottom = vh - cursorAbsoluteTop;
         mentionStyle.value = {
           left: `${left}px`,
           bottom: `${bottom}px`,
@@ -1344,19 +1367,22 @@ const triggerMention = () => {
   mentionQuery.value = "";
   mentionStartPos.value = textarea.selectionStart;
 
-  const rect = textarea.getBoundingClientRect();
+  // Normalize coordinates to CSS pixels (root <html> may carry `zoom`).
+  const zoom = getRootZoom();
+  const rect = rectToCssPx(textarea.getBoundingClientRect(), zoom);
+  const { height: vh } = cssViewportSize(zoom);
   const menuHeight = 320;
 
   // 判断输入框上方空间
   const spaceAbove = rect.top;
-  const spaceBelow = window.innerHeight - rect.bottom;
+  const spaceBelow = vh - rect.bottom;
 
   // 优先显示在上方，除非上方空间不足且下方空间充足
   if (spaceAbove > menuHeight || spaceAbove > spaceBelow) {
     // Show above textarea
     mentionStyle.value = {
       left: `${rect.left}px`,
-      bottom: `${window.innerHeight - rect.top + 8}px`, // 8px padding
+      bottom: `${vh - rect.top + 8}px`, // 8px padding
       top: 'auto'
     };
   } else {
@@ -1643,11 +1669,12 @@ const updateAgentModeDropdownPosition = () => {
     return;
   }
 
-  const rect = anchor.getBoundingClientRect();
+  // Normalize coordinates to CSS pixels (root <html> may carry `zoom`).
+  const zoom = getRootZoom();
+  const rect = rectToCssPx(anchor.getBoundingClientRect(), zoom);
   const dropdownWidth = 200;
   const offsetY = 8;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const { width: vw, height: vh } = cssViewportSize(zoom);
 
   // 水平位置：左对齐
   let left = Math.floor(rect.left);
@@ -1802,7 +1829,15 @@ const handleSelectAgent = (agent: CustomAgent, sourceTenantId?: string) => {
 
   showAgentModeSelector.value = false;
 
-  const message = agent.is_builtin
+  // Only the two "mode-entry" built-ins are re-branded as "Normal / Agent Mode"
+  // in the dropdown — the switched-on/off toasts only make sense for them.
+  // Other built-ins (wiki researcher, data analyst, etc.) share `is_builtin`
+  // but should fall back to the generic agentSelected toast like custom agents,
+  // otherwise selecting e.g. the Wiki Questioner incorrectly says
+  // "Switched to Intelligent Reasoning".
+  const isModeBuiltin =
+    agent.id === BUILTIN_QUICK_ANSWER_ID || agent.id === BUILTIN_SMART_REASONING_ID;
+  const message = isModeBuiltin
     ? (isAgentType ? t('input.messages.agentSwitchedOn') : t('input.messages.agentSwitchedOff'))
     : t('input.messages.agentSelected', { name: agent.name });
   MessagePlugin.success(message);
@@ -2078,7 +2113,7 @@ defineExpose({
     <input ref="imageInputRef" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple
       style="display:none" @change="handleImageSelect" />
     <!-- 富文本输入框容器 -->
-    <div class="rich-input-container">
+    <div class="rich-input-container" data-guide="chat-input">
       <!-- 图片预览区域 -->
       <div v-if="uploadedImages.length > 0" class="image-preview-bar">
         <div v-for="(img, idx) in uploadedImages" :key="idx" class="image-preview-item">
@@ -2234,7 +2269,7 @@ defineExpose({
                 allSelectedItems.length
             }) : $t('input.knowledgeBase') }}</span>
           </template>
-          <div ref="atButtonRef" class="control-btn kb-btn" :class="{
+          <div ref="atButtonRef" class="control-btn kb-btn" data-guide="chat-kb-mention" :class="{
             'active': allSelectedItems.length > 0,
             'disabled': isKnowledgeBaseDisabledByAgent
           }" @click.stop @mousedown.prevent="triggerMention">
@@ -2280,7 +2315,8 @@ defineExpose({
               <div v-for="model in availableModels" :key="model.id" class="model-option"
                 :class="{ selected: model.id === selectedModelId }" @click="handleModelChange(model.id || '')">
                 <div class="model-option-main">
-                  <span class="model-option-name">{{ model.name }}</span>
+                  <span class="model-option-name">{{ modelDisplayName(model) }}</span>
+                  <span v-if="model.display_name" class="model-option-raw-name">{{ model.name }}</span>
                   <span v-if="model.source === 'remote'" class="model-badge-remote">{{ $t('input.remote') }}</span>
                   <span v-else-if="model.parameters?.parameter_size" class="model-badge-local">
                     {{ model.parameters.parameter_size }}
@@ -2310,7 +2346,7 @@ defineExpose({
         </t-tooltip>
 
         <!-- 发送按钮 -->
-        <div v-if="!isReplying" @click="createSession(query)" class="control-btn send-btn"
+        <div v-if="!isReplying" @click="createSession(query)" class="control-btn send-btn" data-guide="chat-send"
           :class="{ 'disabled': !query.length }">
           <img src="../assets/img/sending-aircraft.svg" :alt="$t('input.send')" />
         </div>
@@ -2388,7 +2424,8 @@ const getImgSrc = (url: string) => {
   display: inline-flex;
   width: 16px;
   height: 16px;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
   align-items: center;
   justify-content: center;
   border-radius: 3px;
@@ -3182,11 +3219,21 @@ const getImgSrc = (url: string) => {
 .model-option-name {
   font-size: 12px;
   color: var(--td-text-color-primary, #222);
-  flex: 1;
+  flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.4;
+}
+
+.model-option-raw-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--td-text-color-placeholder, #b0b6bd);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-option-desc {
