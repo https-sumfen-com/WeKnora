@@ -8,34 +8,33 @@
 
 图表类结构化展示使用 `type: "chart"` 卡片，完整规则见 `echarts-options.md`。`data.option` 必须是可直接渲染的纯 JSON ECharts option。`chartType` / `chartRequest` 可用于追溯和校验，但不是最小合法渲染字段。
 
-默认按多 schema 片段流式输出。每个已就绪片段都是一个可独立渲染的 `BusinessBlock`；不要为了等待其它 card、recommendation、quick-reply 或自然语言收尾，把所有内容攒成一次性最终回答。
+默认按多 schema 片段流式输出。每个已就绪片段都必须放进带 `schemaVersion` 和 `blocks` 的小 payload；不要为了等待其它 card、recommendation、quick-reply 或自然语言收尾，把所有内容攒成一次性最终回答。
 
 ```ts
-type RenderFragment = BusinessBlock
-
-type RenderFragmentBatch = {
+type RenderFragmentPayload = {
   schemaVersion: 'plant-agent.message.v1'
   blocks: BusinessBlock[]
   focusEntities?: EntityRef[]
 }
 ```
 
-结构化片段只承载可渲染内容。Agent 不在 `blocks` 里生成 `text/content` 或推理型 block。
+结构化 payload 只承载可渲染内容。Agent 不在 `blocks` 里生成 `text/content` 或推理型 block。
 
 局部结构化展示默认生成 `card`，默认追加 `quick-reply`。只有明确报告意图才使用 `report` 组合模板；成组聚合展示如果没有明确报告要求，输出多张 `card` + `quick-reply`。
 
-只有运行时明确要求批量 payload 时，才使用 `RenderFragmentBatch`。批量 payload 是兼容格式，不是模型必须等待所有片段后一次性提交的默认形态。
+禁止输出裸 `BusinessBlock`，例如只输出 `{ "kind": "card", ... }` 是不合规的。即使只输出一张 card，也必须包在 `RenderFragmentPayload.blocks[]` 中。
 
 异常、风险、预警、离线、阈值越界等场景必须生成至少一张 `recommendation` card；`recommendation` 用来承载“为什么值得关注”和“下一步建议”，不要只用 `metric` 或 `chart` 罗列现象。
 
 ## 片段合法性门控
 
-每个独立片段必须是字段完整、可被当前 schema 渲染的 JSON object。不要把“片段合法”理解成“整段回答必须先组成一个完整 JSON object”。
+每次结构化输出必须是字段完整、可被当前 schema 渲染的 `RenderFragmentPayload` JSON object。不要把“payload 合法”理解成“整段回答必须先组成一个完整大 JSON object”。
 
-- 单个 `card`、`quick-reply` 或 `report` 片段必须完整；同一片段内不要输出半截 JSON。
-- 多个片段可以按就绪顺序依次输出；不需要先包成一个完整 `blocks[]` 再提交。
-- 运行时明确要求批量 payload 时，才序列化为包含 `schemaVersion` 和 `blocks` 的单个 JSON object；否则不要额外包装。
-- 片段或批量 payload 不包代码围栏，不在 JSON 前后追加其它包装。
+- 顶层必须包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`。
+- `blocks[]` 可以只包含一个已就绪的 `card`、`quick-reply` 或 `report`；不要为了凑齐所有片段而等待。
+- 多个 payload 可以按就绪顺序依次输出；每个 payload 都必须自带 `schemaVersion` 和 `blocks`。
+- payload 不包代码围栏，不在 JSON 前后追加其它包装。不要把 payload 当 Markdown 代码块展示。
+- 不要输出裸 `kind/card/prompts/title/cards` 对象；前端解析入口依赖 `schemaVersion`。
 - 所有 key 和 string 必须使用双引号；每个属性必须是 `"key": value`，不能只写 `"key"`。
 - 禁止缺值字段：例如 `"value"`、`"top"`、`"smooth"`、`"yAxisIndex"` 后面没有 `: <value>` 时，整包无效。
 - 禁止 `undefined`、`NaN`、`Infinity`、函数、`Date` 对象、正则、注释和尾逗号。
@@ -45,11 +44,11 @@ type RenderFragmentBatch = {
 - `null` 只允许用于 ECharts 明确支持的序列断点或 dataset 缺口；metric、recommendation、table 的必需字段不要用 `null`。
 - 片段合法性优先级高于信息完整度。片段数据过长或容易写断时，先输出最小可渲染 card，删除可选追溯字段、聚合图表数据，不能输出半截 JSON。
 
-输出片段前逐项自检：
+输出 payload 前逐项自检：
 
-1. 当前输出是单个片段，还是运行时明确要求的批量 payload？
-2. 如果是单个片段，顶层是否是受支持的 `kind`，且字段完整？
-3. 如果是批量 payload，顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`？
+1. 顶层是否包含 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`？
+2. `blocks[]` 是否至少包含一个受支持 block？
+3. 是否没有输出裸 `{ "kind": ... }`？
 4. 每个 `metric.items[]` 是否都有非空 `label` 和合法 `value`。
 5. 每个 `chart.data.option` 是否自身也是纯 JSON object。
 

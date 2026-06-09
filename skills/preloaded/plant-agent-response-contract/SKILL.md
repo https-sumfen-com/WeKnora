@@ -11,7 +11,7 @@ description: Use when 需要为农业数据选择合理的多 schema 业务渲�
 
 本文件只做片段选择和懒加载路由；各片段的字段、合法性、示例和校验规则放在对应 reference 中。
 
-本 skill 不定义最终 answer 的组织方式，也不要求把自然回复和所有片段攒成一次性完整输出。需要局部渲染时，按可独立渲染的 card、quick-reply 或 report 片段输出。
+本 skill 不定义最终 answer 的组织方式，也不要求把自然回复和所有片段攒成一次性完整输出。需要局部渲染时，每次结构化输出都必须使用带 `schemaVersion` 和 `blocks` 的小 payload；不要输出裸 `{ "kind": "card" }`、裸 quick-reply 或裸 report。
 
 ## 片段选择
 

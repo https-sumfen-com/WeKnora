@@ -2,7 +2,24 @@
 
 示例中的数值表示“已由 SONO-MCP 返回”的数据形态；实际输出必须替换为当前任务真实读取的数据。
 
-示例为了展示组合效果，常把多个片段放在同一个批量 payload 中。实际运行时默认可以按片段流式输出：chart card 就绪后先输出 chart，风险建议就绪后再输出 recommendation，最后按需输出 quick-reply。不要因为示例是批量 JSON，就等待所有片段齐全后一次性 answer。
+示例为了展示组合效果，常把多个片段放在同一个 payload 中。实际运行时可以按小 payload 流式输出：chart card 就绪后先输出一个只含 chart 的 `schemaVersion + blocks` payload，风险建议就绪后再输出一个只含 recommendation 的 payload，最后按需输出 quick-reply payload。不要因为示例是组合 JSON，就等待所有片段齐全后一次性 answer。
+
+错误：不要只输出裸 block。
+
+```json
+{ "kind": "card", "card": { "type": "recommendation", "cardId": "rec_x", "data": { "title": "风险提示", "items": [] } } }
+```
+
+正确：即使只有一个 card，也必须带 `schemaVersion` 和 `blocks`。
+
+```json
+{
+  "schemaVersion": "plant-agent.message.v1",
+  "blocks": [
+    { "kind": "card", "card": { "type": "recommendation", "cardId": "rec_x", "data": { "title": "风险提示", "items": [] } } }
+  ]
+}
+```
 
 ## 局部 card + recommendation + quick-reply 示例
 
@@ -594,8 +611,9 @@
 
 ## 片段集合自检
 
-- 当前输出是否是一个字段完整的独立片段，或运行时明确要求的批量 payload？
-- 如果是批量 payload，是否是可被 `JSON.parse()` 解析的 JSON object，且没有代码围栏或额外包装？
+- 当前结构化输出是否带 `"schemaVersion": "plant-agent.message.v1"` 和 `"blocks"`？
+- 是否没有输出裸 `{ "kind": "card" }`、裸 quick-reply 或裸 report？
+- 当前 payload 是否是可被 `JSON.parse()` 解析的 JSON object，且没有代码围栏或额外包装？
 - 是否先读取或接收了 SONO-MCP/API/工具数据？
 - 当前是否确实命中明确报告、局部结构化展示意图，或异常/风险数据触发，而不是无片段场景？
 - 明确报告意图是否生成了一份主 `report`？天气、设备、作业、WOFOST、评级等维度是否合并到了同一 `report.cards[]`？

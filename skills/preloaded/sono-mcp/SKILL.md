@@ -40,7 +40,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ### get_plot_info
 
-触发：用户查地块状态、作物、长势、面积、当前阶段、农事建议。
+触发：用户**明确**查地块状态、作物、长势、面积、当前阶段、农事建议。无明确地块分析意图时禁止调用。
 
 - 有 `plot_id` 传 `plot_id`；有地块名传 `keyword`；两者都有可同时传。
 - 用户问天气 → `get_weather`；问设备 → `get_plot_device_info`；不要先查地块再联动。
@@ -55,7 +55,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ### get_wofost_report
 
-触发：用户查 WOFOST、作物模型/生长模拟报告、模型预测产量、生育进程、模拟生物量、LAI、根深、氮吸收、水分平衡，或明确要求某地块的 WOFOST 报告。
+触发：用户**明确**查 WOFOST、作物模型/生长模拟报告、模型预测产量、生育进程、模拟生物量、LAI、根深、氮吸收、水分平衡，或明确要求某地块的 WOFOST 报告。无明确地块分析意图时禁止调用。
 
 - 必须有明确 `cid` 和 `plot_id`；缺任一项时先追问，不用地块工具替代。
 - `report_date` 仅在用户指定报告日期时传；未指定则不传，让服务端默认当天。
@@ -80,7 +80,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ### get_plot_device_info
 
-触发：用户查设备详情、设备数据、设备所属地块，上下文有 `device_id`。
+触发：用户**明确**查设备详情、设备数据、设备所属地块，且上下文有 `device_id`。无明确设备分析意图时禁止调用，即使上下文存在 `device_id` 也不得主动调用。
 
 - 必须有明确 `device_id`；无时先追问，不用地块工具替代。
 - `cid > 0` 必须满足；`entity_info_id > 0` 时上游才发送 `enterpriseId`。
@@ -157,6 +157,8 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - 纯文本任务（总结、翻译、推理）不依赖业务数据。
 - 缺关键 ID 且上下文无法补齐。
 - 多工具都可能匹配但意图不明。
+- **无明确地块分析需求**：用户未明确询问地块状态、作物长势、农事建议、生长模拟等地块相关信息时，**禁止调用 `get_plot_info` 和 `get_wofost_report`**。仅凭"可能有帮助"或补全信息为由不得调用。
+- **无明确设备分析需求**：用户未明确询问设备详情、设备数据或设备所属信息时，**禁止调用 `get_plot_device_info`**。上下文存在 `device_id` 不构成调用理由，必须有用户明确的设备查询意图。
 
 处理：简短追问最关键的缺失字段，或说明当前不支持该类查询。
 
