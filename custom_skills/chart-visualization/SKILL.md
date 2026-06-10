@@ -103,6 +103,10 @@ new GPTVis(options: VisualizationOptions)
 ```json
 {
   "type": "column",
+  "style": {
+    "palette": ["#5B8FF9", "#61DDAA"]
+  },
+  "theme": "academy",
   "data": [
     { "category": "A产品", "value": 30, "group": "线上" },
     { "category": "B产品", "value": 50, "group": "线上" }
@@ -110,17 +114,33 @@ new GPTVis(options: VisualizationOptions)
   "title": "产品销量对比",
   "axisXTitle": "产品",
   "axisYTitle": "销量（万）",
-  "stack": true,
-  "theme": "academy",
-  "style": {
-    "palette": ["#5B8FF9", "#61DDAA"]
-  }
+  "stack": true
 }
 ```
 
 ## 语法模式：Syntax 格式
 
 类 Markdown 缩进语法，支持流式渲染。第一行必须是 `vis [type]`。
+
+### 字段输出顺序（重要）
+
+流式渲染是边生成边绘制的：如果 `style.palette` 放在最后输出，图表会先用默认配色渲染，palette 到达后再整体变色。因此：
+
+1. 第一行：`vis [type]`
+2. **紧跟第二行起：`style`（含 `palette`）**，需要 `theme` 时也放在这里
+3. 然后才是 `data`、`title`、轴标题等其余字段
+
+```
+vis column
+style
+  palette
+    - #45C079
+theme light
+data
+  - category 油菜类
+    value 126990
+title 作物种植面积（亩）
+```
 
 ### 语法规则
 
@@ -209,6 +229,11 @@ data
 
 ```
 vis column
+style
+  palette
+    - #5B8FF9
+    - #61DDAA
+theme academy
 data
   - category A产品
     value 30
@@ -220,12 +245,9 @@ title 产品销量对比
 axisXTitle 产品
 axisYTitle 销量（万）
 stack true
-theme academy
-style
-  palette
-    - #5B8FF9
-    - #61DDAA
 ```
+
+注意：`style` 紧跟在 `vis column` 的下一行，先于 `data` 输出。
 
 ## 代码模式
 
@@ -496,6 +518,7 @@ type FishboneNode = { name: string; children?: FishboneNode[] };
 
 ### 配色使用规则
 
+0. **输出顺序**：Syntax 格式中 `style.palette` 必须紧跟 `vis [type]` 的下一行、先于 `data` 输出，避免流式渲染时先按默认配色绘制再变色
 1. 单系列图表使用主色 `#45C079`
 2. 双系列图表使用主色 + 辅助色：`["#45C079", "#53BCFF"]`
 3. 需要警示/负向含义时，优先使用 `#FF934F`（中级）或 `#BE225F`（高级）
@@ -509,5 +532,5 @@ type FishboneNode = { name: string; children?: FishboneNode[] };
 3. 数值字段必须是数字类型，分类字段必须是文本类型
 4. 连续数值的分布（如薪资、成绩、年龄）必须用直方图（histogram）
 5. 多维数据字段映射：有两个分类维度时，x 轴维度写 `time`/`category`，另一个写 `group`
-6. **语法模式必须优先使用 Syntax 格式（流式友好，禁止默认输出 JSON）**
+6. **语法模式必须优先使用 Syntax 格式（流式友好，禁止默认输出 JSON）**，且 `style.palette` 紧跟 `vis [type]` 之后、先于 `data` 输出
 7. 代码模式默认生成 HTML + CDN 方案（零安装），用户指定框架时再用 npm 方案
