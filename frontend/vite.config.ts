@@ -14,10 +14,10 @@ const FRONTEND_VERSION = pkg.version ?? 'unknown'
 const DEV_PROXY_TARGET =
   process.env.VITE_DEV_PROXY_TARGET ||
   process.env.FRONTEND_BACKEND_URL ||
-  'https://sono.sumfen.com'
+  'http://localhost:8080'
 
 // Sumfen 渠道登录 API 代理，走 Vite 代理避免浏览器 CORS preflight 拦截自定义 header
-const SUMFEN_DEV_API_TARGET = process.env.VITE_SUMFEN_API_URL || 'https://api.demo.sumfen.com'
+const SUMFEN_DEV_API_TARGET = process.env.VITE_SUMFEN_API_URL || 'http://192.168.3.38:3000'
 
 function resolveVueOfficePptxEntry(): string {
   try {
