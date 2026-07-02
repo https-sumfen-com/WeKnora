@@ -1,6 +1,6 @@
 ---
 name: call-mcp-tools
-description: "Use when the server-side Agent must precisely choose and call currently registered SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, or get_wofost_report."
+description: "Use when the server-side Agent must precisely choose and call currently registered SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, get_wofost_report, get_report_by_type, or get_plot_warning."
 ---
 
 # 服务端 Agent 精确调用本服务 MCP 工具
@@ -9,7 +9,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 ## 核心原则
 
-- 只调用已注册工具：`get_plot_info`、`get_weather`、`get_summary_base`、`get_plot_device_info`、`get_wofost_report`。
+- 只调用已注册工具：`get_plot_info`、`get_weather`、`get_summary_base`、`get_plot_device_info`、`get_wofost_report`、`get_report_by_type`、`get_plot_warning`。
 - 禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
 - 不猜测 `plot_id`、`device_id`、`dept_id`、`base_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
 - 用户意图不清晰或缺少关键 ID 时，先追问，不盲目调用。
@@ -30,11 +30,17 @@ description: "Use when the server-side Agent must precisely choose and call curr
 | `cid`       | 各工具均需要，企业标识                                                                                                                                  |
 | `dept_id`   | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                        |
 | `base_id`   | 仅 `get_summary_base`；有值时优先于 `dept_id`                                                                                                           |
-| `plot_id`   | `get_plot_info`、`get_weather`、`get_wofost_report`                                                                                                     |
+| `plot_id`   | `get_plot_info`、`get_weather`、`get_wofost_report`、`get_plot_warning`                                                                                  |
 | `keyword`   | `get_plot_info`、`get_weather`：传地块名/区域名，不传天气词/时间词；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
 | `device_id` | 仅 `get_plot_device_info`                                                                                                                               |
 | `report_date` | 仅 `get_wofost_report`；报告日期，格式 `YYYY-MM-DD`；不传时服务端默认当天                                                                           |
 | `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
+| `type`      | 仅 `get_report_by_type`；支持 `plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis` |
+| `id`        | 仅 `get_report_by_type`；报告对应 ID，地块类报告传地块 ID，设备报告传设备 ID                                                                            |
+| `period_type` | 仅 `get_report_by_type`；支持 `7d`、`week`、`month`，不传默认 `7d`                                                                                   |
+| `start_date` / `end_date` | `get_report_by_type`、`get_plot_warning`；明确日期范围才传，格式 `YYYY-MM-DD`                                                           |
+| `planting_start_date` | 仅 `get_report_by_type`；用户明确指定种植开始日期时才传                                                                                       |
+| `limit`     | 仅 `get_plot_warning`；不传或传 `0` 时服务端默认 `20`                                                                                                   |
 
 ## 工具选择
 
@@ -60,6 +66,22 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - 必须有明确 `cid` 和 `plot_id`；缺任一项时先追问，不用地块工具替代。
 - `report_date` 仅在用户指定报告日期时传；未指定则不传，让服务端默认当天。
 - 返回成功后聚焦报告摘要、关键生育日期、产量/生物量、水分平衡和报告链接，详见 `references/tool-wofost-report.md`。
+
+### get_report_by_type
+
+触发：用户明确查询某类农业报告，如地块长势分析、3D 表型、长势动态、苗情监测、WOFOST 报告，或设备分析报告。
+
+- 必须有明确 `cid`、`type` 和 `id`；缺任一项时先追问，不用其他报告/地块/设备工具替代。
+- `period_type` 仅在用户指定最近7条、按周、按月时传对应 `7d`、`week`、`month`；未指定可不传，让服务端默认 `7d`。
+- `start_date`、`end_date`、`planting_start_date`、`days` 仅在用户明确指定日期范围、种植开始日期或条数时传。
+
+### get_plot_warning
+
+触发：用户查地块预警、告警、风险、异常提醒、病虫害/气象/农事风险等。
+
+- 必须有明确 `cid` 和 `plot_id`；缺任一项时先追问，不用地块信息或天气工具替代。
+- `start_date`、`end_date` 仅在用户指定日期范围时传。
+- `limit` 仅在用户指定条数时传；未指定可不传，让服务端默认 `20`。
 
 ### get_summary_base
 
@@ -119,6 +141,44 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - 必须传有效 `cid` 和 `plot_id`；`report_date` 可省略。
 - `report_date` 只接受明确日期语义，不要把“今天/最新”等词原样传入。
 
+### get_report_by_type
+
+```json
+{
+  "type": "plot_growth_analysis",
+  "id": 123,
+  "period_type": "7d",
+  "start_date": "2026-06-01",
+  "end_date": "2026-06-30",
+  "planting_start_date": "2026-05-01",
+  "days": 7,
+  "cid": 2007,
+  "token": "optional-token",
+  "entity_id": 1,
+  "entity_info_id": 0
+}
+```
+
+- `type`、`id`、`cid` 必须有效；`type` 不在支持列表内会失败。
+- 日期、`planting_start_date`、`days` 均为可选；不要把“最新/最近”等词原样传给日期字段。
+
+### get_plot_warning
+
+```json
+{
+  "plot_id": 123,
+  "start_date": "2026-06-01",
+  "end_date": "2026-06-30",
+  "limit": 20,
+  "cid": 2007,
+  "token": "optional-token",
+  "entity_id": 1,
+  "entity_info_id": 0
+}
+```
+
+- 必须传有效 `cid` 和 `plot_id`；`start_date`、`end_date`、`limit` 可省略。
+
 ### get_summary_base
 
 ```json
@@ -164,9 +224,9 @@ description: "Use when the server-side Agent must precisely choose and call curr
 
 **单工具优先**：能用一个工具回答就只调一个。
 
-**禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查 WOFOST 报告不自动查地块/天气；查基地汇总不联动其他工具。
+**禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查 WOFOST 报告不自动查地块/天气；查农业报告不自动查地块/天气/设备；查地块预警不自动查地块/天气；查基地汇总不联动其他工具。
 
-**禁止全量扫描**：不得在单次用户问题中同时调用多个工具"以防遗漏"。特别是全局概览意图（如"今天有哪些值得关注"）触发 `get_summary_base` 后，**禁止再追加调用 `get_weather`、`get_plot_info`、`get_plot_device_info`、`get_wofost_report`**。
+**禁止全量扫描**：不得在单次用户问题中同时调用多个工具"以防遗漏"。特别是全局概览意图（如"今天有哪些值得关注"）触发 `get_summary_base` 后，**禁止再追加调用 `get_weather`、`get_plot_info`、`get_plot_device_info`、`get_wofost_report`、`get_report_by_type`、`get_plot_warning`**。
 
 ## 返回结果处理
 
@@ -187,3 +247,5 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - `get_summary_base` 返回处理 → `references/tool-summary-base.md`
 - `get_plot_device_info` 返回处理 → `references/tool-device-info.md`
 - `get_wofost_report` 返回处理 → `references/tool-wofost-report.md`
+- `get_report_by_type` 返回处理 → `references/tool-report-by-type.md`
+- `get_plot_warning` 返回处理 → `references/tool-plot-warning.md`
