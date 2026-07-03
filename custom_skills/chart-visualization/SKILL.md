@@ -122,13 +122,22 @@ new GPTVis(options: VisualizationOptions)
 
 类 Markdown 缩进语法，支持流式渲染。第一行必须是 `vis [type]`。
 
-### 字段输出顺序（重要）
+### 输出格式硬规则（重要）
 
-流式渲染是边生成边绘制的：如果 `style.palette` 放在最后输出，图表会先用默认配色渲染，palette 到达后再整体变色。因此：
+**逐行换行**：Syntax 是按行解析的，换行符是语法的一部分，绝对不能省略：
+
+- 每个 key、每个 `- ` 数组项、每个子字段**必须独占一行**，行尾必须是换行符。
+- 禁止把多个 key 写在同一行，禁止把整段 Syntax 压成一行（如 `vis pie style palette - #45C079 theme light data ...` 是错误输出，无法解析）。
+- 缩进固定用 2 个空格，逐级递增。
+- 不含空格的值（如色值 `#45C079`、数字、单词）**不加引号**；仅含空格的字符串才用引号。
+
+**字段输出顺序**：流式渲染是边生成边绘制的，如果 `style.palette` 放在最后输出，图表会先用默认配色渲染，palette 到达后再整体变色。因此：
 
 1. 第一行：`vis [type]`
 2. **紧跟第二行起：`style`（含 `palette`）**，需要 `theme` 时也放在这里
 3. 然后才是 `data`、`title`、轴标题等其余字段
+
+正确输出（注意每行独立、逐行换行）：
 
 ```
 vis column
@@ -139,6 +148,8 @@ theme light
 data
   - category 油菜类
     value 126990
+  - category 小麦
+    value 120308
 title 作物种植面积（亩）
 ```
 
@@ -371,6 +382,21 @@ value 不可使用百分比数字。
 
 `align`: 是否对齐各维度比例尺，默认 false（各轴独立缩放）；true 时所有轴共享同一最大值，适合多系列绝对数值对比。
 
+**⚠️ 各维度同一量纲时（如长势评级、五维评分都是 1~5 分），必须传 `align true`**：默认的独立缩放下，单系列数据每根轴的最大刻度就是该轴自己的值，所有点都落在最外圈，图形铺满整个雷达，高低分看不出差异。
+
+```
+vis radar
+style
+  palette
+    - #45C079
+align true
+data
+  - name 作物长势
+    value 5
+  - name 水分含量
+    value 2
+```
+
 ### funnel
 
 ```
@@ -532,5 +558,5 @@ type FishboneNode = { name: string; children?: FishboneNode[] };
 3. 数值字段必须是数字类型，分类字段必须是文本类型
 4. 连续数值的分布（如薪资、成绩、年龄）必须用直方图（histogram）
 5. 多维数据字段映射：有两个分类维度时，x 轴维度写 `time`/`category`，另一个写 `group`
-6. **语法模式必须优先使用 Syntax 格式（流式友好，禁止默认输出 JSON）**，且 `style.palette` 紧跟 `vis [type]` 之后、先于 `data` 输出
+6. **语法模式必须优先使用 Syntax 格式（流式友好，禁止默认输出 JSON）**，且 `style.palette` 紧跟 `vis [type]` 之后、先于 `data` 输出；每个字段独占一行，严禁压成单行
 7. 代码模式默认生成 HTML + CDN 方案（零安装），用户指定框架时再用 npm 方案

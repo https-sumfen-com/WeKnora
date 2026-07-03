@@ -40,7 +40,7 @@
           <div class="dropdown-user-meta">
             <div class="dropdown-user-name-row">
               <span class="dropdown-user-name">{{ userName }}</span>
-              <t-tooltip :content="$t('newUserGuide.reopen')" placement="top">
+              <t-tooltip v-if="userGuideEnabled" :content="$t('newUserGuide.reopen')" placement="top">
                 <button type="button" class="dropdown-guide-btn" :aria-label="$t('newUserGuide.reopen')"
                   @click.stop="reopenGuide">
                   <t-icon name="help-circle" size="14px" />
@@ -262,7 +262,9 @@ import {
 import type { TenantInfo } from '@/api/tenant'
 import { useRoleLabel, useHomeTenant } from '@/composables/useRoleLabel'
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom'
-import { openNewUserGuide } from '@/config/contextualGuides'
+import { openNewUserGuide, USER_GUIDE_ENABLED } from '@/config/contextualGuides'
+
+const userGuideEnabled = USER_GUIDE_ENABLED
 
 const { t } = useI18n()
 

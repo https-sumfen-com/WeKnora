@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import SpotlightGuide from '@/components/SpotlightGuide.vue'
-import { GLOBAL_USER_GUIDE_KEY, OPEN_NEW_USER_GUIDE_EVENT } from '@/config/contextualGuides'
+import { GLOBAL_USER_GUIDE_KEY, OPEN_NEW_USER_GUIDE_EVENT, USER_GUIDE_ENABLED } from '@/config/contextualGuides'
 import { useUIStore } from '@/stores/ui'
 import type { SpotlightGuideStep } from '@/types/spotlightGuide'
 
@@ -82,6 +82,7 @@ const handleOpenEvent = () => {
 }
 
 onMounted(() => {
+  if (!USER_GUIDE_ENABLED) return
   window.addEventListener(OPEN_NEW_USER_GUIDE_EVENT, handleOpenEvent)
   if (localStorage.getItem(GLOBAL_USER_GUIDE_KEY) !== '1') {
     window.setTimeout(() => {
