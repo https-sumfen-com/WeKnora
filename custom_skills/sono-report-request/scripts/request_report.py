@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Build and send a SONO report-generation POST request.
+
+Preferred execute_skill_script usage:
+  script_path: scripts/request_report.py
+  input: <JSON containing query, plot_id, cid, entity-id, entity-info-id, plot_name>
+
+The script generates report_no, builds the required headers and JSON body,
+POSTs to the hard-coded default endpoint, and prints a JSON result containing
+`sono_report` for the agent to return to the frontend.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import uuid
+from typing import Any
+from urllib import error, request
+
+PUBLIC_REPORT_BASE_URL = "https://sonoagi.com/report/"
+# TODO: Replace this placeholder with the production report-generation POST endpoint.
+DEFAULT_REPORT_ENDPOINT = "https://api.sumfen.com/api/support/llm/reports/common"
+DEFAULT_AGENT_ID = "builtin-wiki-fixer"
+REQUEST_TIMEOUT_SECONDS = 60
+
+
+class InputError(SystemExit):
+    """Raised for user/actionable input problems."""
+
+
+def read_input(args: argparse.Namespace) -> dict[str, Any]:
+    if args.input_json:
+        raw = args.input_json
+    elif args.input_file:
+        with open(args.input_file, "r", encoding="utf-8") as f:
+            raw = f.read()
+    else:
+        raw = sys.stdin.buffer.read().decode("utf-8")
+
+    if not raw.strip():
+        raise InputError("Input JSON is required via stdin, --input-json, or --input-file")
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise InputError(f"Input is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise InputError("Input JSON must be an object")
+    return payload
+
+
+def first_present(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value).strip()
+    return ""
+
+
+def require_fields(payload: dict[str, Any]) -> dict[str, str]:
+    values = {
+        "query": first_present(payload, "query", "user_query", "userQuestion"),
+        "plot_id": first_present(payload, "plot_id", "plotId", "plot-id"),
+        "cid": first_present(payload, "cid"),
+        "entity-id": first_present(payload, "entity-id", "entity_id", "entityId"),
+        "entity-info-id": first_present(payload, "entity-info-id", "entity_info_id", "entityInfoId"),
+        "plot_name": first_present(payload, "plot_name", "plotName", "plot-name"),
+        "agent_id": first_present(payload, "agent_id", "agentId") or DEFAULT_AGENT_ID,
+    }
+    missing = [key for key, value in values.items() if key != "agent_id" and not value]
+    if missing:
+        raise InputError("Missing required fields: " + ", ".join(missing))
+    return values
+
+
+def build_query(values: dict[str, str], report_no: str) -> str:
+    return "\n".join([
+        "#用户提问",
+        values["query"],
+        "",
+        "#系统参数",
+        f"- plot_id: {values['plot_id']}",
+        f"- cid: {values['cid']}",
+        f"- entity-id: {values['entity-id']}",
+        f"- entity-info-id: {values['entity-info-id']}",
+        f"- plot_name: {values['plot_name']}",
+        f"- report_no: {report_no}",
+    ])
+
+
+def extract_report_url(response_json: Any, fallback_url: str) -> str:
+    if not isinstance(response_json, dict):
+        return fallback_url
+
+    candidates = [
+        response_json.get("report_url"),
+        response_json.get("reportUrl"),
+        response_json.get("url"),
+        response_json.get("file"),
+    ]
+    data = response_json.get("data")
+    if isinstance(data, dict):
+        candidates.extend([
+            data.get("report_url"),
+            data.get("reportUrl"),
+            data.get("url"),
+            data.get("file"),
+        ])
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        text = str(candidate).strip()
+        if not text:
+            continue
+        if text.startswith("http://") or text.startswith("https://"):
+            return text
+        return PUBLIC_REPORT_BASE_URL + text.lstrip("/")
+    return fallback_url
+
+
+def post_json(endpoint: str, headers: dict[str, str], body: dict[str, Any]) -> tuple[int, Any]:
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = request.Request(endpoint, data=data, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+            status = int(resp.status)
+            response_text = resp.read().decode("utf-8", errors="replace")
+    except error.HTTPError as exc:
+        response_text = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"Report request failed with HTTP {exc.code}: {response_text[:500]}") from exc
+    except error.URLError as exc:
+        raise SystemExit(f"Report request failed: {exc.reason}") from exc
+
+    if not response_text.strip():
+        return status, {}
+    try:
+        return status, json.loads(response_text)
+    except json.JSONDecodeError:
+        return status, {"raw": response_text}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Send a SONO report-generation POST request")
+    parser.add_argument("--endpoint", default=DEFAULT_REPORT_ENDPOINT, help="Report-generation POST endpoint; defaults to the hard-coded DEFAULT_REPORT_ENDPOINT")
+    parser.add_argument("--input-json", help="Input JSON string; prefer stdin for larger payloads")
+    parser.add_argument("--input-file", help="Path to input JSON file")
+    args = parser.parse_args()
+
+    endpoint = args.endpoint.strip()
+    if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+        raise InputError("Report endpoint must be an HTTP(S) URL")
+
+    payload = read_input(args)
+    values = require_fields(payload)
+    report_no = uuid.uuid4().hex
+    report_url = f"{PUBLIC_REPORT_BASE_URL}{report_no}.html"
+
+    headers = {
+        "Content-Type": "application/json",
+        "plot-id": values["plot_id"],
+        "cid": values["cid"],
+        "entity-id": values["entity-id"],
+        "entity-info-id": values["entity-info-id"],
+    }
+    body = {
+        "related_id": values["plot_id"],
+        "report_no": report_no,
+        "report_url": report_url,
+        "agent_id": values["agent_id"],
+        "query": build_query(values, report_no),
+    }
+
+    status, response_json = post_json(endpoint, headers, body)
+    final_report_url = extract_report_url(response_json, report_url)
+    sono_report = f"<sono-report>{final_report_url}</sono-report>"
+
+    print(json.dumps({
+        "ok": True,
+        "status": status,
+        "report_no": report_no,
+        "report_url": final_report_url,
+        "sono_report": sono_report,
+        "response": response_json,
+    }, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
