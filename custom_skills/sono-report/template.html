@@ -90,6 +90,12 @@ body{min-height:100vh}
 .fallback-axis{stroke:#d9dee3;stroke-width:1}
 .fallback-line-a{fill:none;stroke:var(--blue);stroke-width:2.5}
 .fallback-line-b{fill:none;stroke:var(--green);stroke-width:2.5;stroke-dasharray:5 4}
+.fallback-timeline{width:100%;display:grid;gap:10px;padding:8px 2px}
+.fallback-timeline-row{display:grid;grid-template-columns:72px 1fr;gap:10px;align-items:center;font-size:11.5px}
+.fallback-timeline-label{color:var(--muted);font-weight:700}
+.fallback-timeline-track{position:relative;height:10px;background:#eef1f4;border:1px solid var(--line)}
+.fallback-timeline-dot{position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:var(--green);transform:translate(-50%,-50%)}
+.fallback-timeline-value{font-size:12px;color:var(--ink);font-weight:700;margin-top:3px}
 
 /* Legend */
 .legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}
@@ -104,6 +110,32 @@ body{min-height:100vh}
 .alert-success{border-color:#8bcf98;color:var(--green);background:var(--green-pale)}
 .alert-danger{border-color:#db8ea0;color:var(--red);background:var(--red-soft)}
 .alert-bar strong{font-weight:600;margin-right:2px}
+
+/* Plot warnings and module reports */
+.warning-list{display:grid;gap:7px}
+.warning-item{background:#fff;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:2px;padding:10px 13px}
+.warning-item.warn-high{border-left-color:var(--red);background:var(--red-soft)}
+.warning-item.warn-mid{border-left-color:#c27410;background:var(--amber-soft)}
+.warning-item.warn-low{border-left-color:var(--blue);background:var(--blue-soft)}
+.warning-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:4px}
+.warning-title{font-size:13px;font-weight:800;color:var(--ink)}
+.warning-meta{font-size:10.5px;color:var(--muted);white-space:nowrap}
+.warning-body{font-size:12px;color:#49515a;line-height:1.7}
+.warning-advice{font-size:11.5px;color:var(--ink);margin-top:4px}
+.module-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:5mm}
+.module-card{background:#fff;border:1px solid var(--line);border-top:3px solid #90c99b;border-radius:3px;padding:12px 14px;box-shadow:none}
+.module-card:nth-child(2n){background:#fbfbfb}
+.module-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:1px solid var(--line);padding-bottom:7px;margin-bottom:8px}
+.module-title{font-size:13px;font-weight:800;color:var(--ink)}
+.module-type{font-size:10.5px;color:var(--muted);margin-top:2px}
+.module-period{font-size:10.5px;color:var(--muted);text-align:right;white-space:nowrap}
+.module-conclusion{font-size:12px;color:#49515a;line-height:1.7;margin-bottom:8px}
+.module-metrics{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);margin-bottom:8px}
+.module-metric{padding:7px 8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff}
+.module-metric-label{font-size:10.5px;color:var(--muted)}
+.module-metric-value{font-size:13px;font-weight:800;color:var(--green);margin-top:2px}
+.module-note{font-size:11.5px;color:#49515a;line-height:1.6;margin-top:5px}
+.module-note strong{color:var(--ink)}
 
 /* Weather */
 .weather-grid{display:grid;grid-template-columns:1fr 1.35fr;gap:5mm;margin-bottom:5mm}
@@ -218,9 +250,9 @@ body{min-height:100vh}
   .header-actions,.btn{display:none!important}
   .report-header{min-height:250mm;padding-top:26mm;margin-bottom:0;page-break-after:always;break-after:page}
   .section{break-inside:auto;page-break-inside:auto}
-  .chart-card,.kpi-card,.plot-row,.device-card,.wofost-card,.rec-item{break-inside:avoid;page-break-inside:avoid}
+  .chart-card,.kpi-card,.plot-row,.device-card,.wofost-card,.warning-item,.module-card,.rec-item{break-inside:avoid;page-break-inside:avoid}
   .sec-label{break-inside:avoid;break-after:avoid;page-break-after:avoid}
-  .chart-card,.kpi-card,.plot-row,.device-card,.wofost-card{box-shadow:none}
+  .chart-card,.kpi-card,.plot-row,.device-card,.wofost-card,.warning-item,.module-card{box-shadow:none}
 }
 </style>
 </head>
@@ -281,9 +313,19 @@ body{min-height:100vh}
     </div>
   </div>
 
+  <div class="section" id="section-plot-warnings">
+    <div class="sec-label"><i class="ti ti-alert-triangle"></i>地块预警</div>
+    <div class="warning-list" id="plot-warning-list"></div>
+  </div>
+
   <div class="section" id="section-plots">
     <div class="sec-label"><i class="ti ti-leaf"></i>地块作物生长状态</div>
     <div class="plot-list" id="plot-list"></div>
+  </div>
+
+  <div class="section" id="section-module-reports">
+    <div class="sec-label"><i class="ti ti-report-analytics"></i>专项模块报告</div>
+    <div class="module-grid" id="module-report-grid"></div>
   </div>
 
   <div class="section" id="section-devices">
@@ -333,9 +375,11 @@ const REPORT_DATA = /* __REPORT_DATA__ */ {
   overview: { kpis: [] },
   charts: { sowingProgress: [], plotTypes: [], biomassTrend: [] },
   weather: { now: null, forecast: [], alerts: [] },
+  plotWarnings: [],
   plots: [],
   devices: { summary: {}, items: [] },
   wofost: { phenology: [], kpis: [], waterBalance: [], links: {} },
+  moduleReports: [],
   recommendations: [],
   emptyStates: []
 };
@@ -366,6 +410,11 @@ function fmtNumber(value,digits=0){
 function withUnit(value,unit='',digits=0){
   const formatted=fmtNumber(value,digits);
   return formatted ? `${formatted}${escapeHtml(unit)}` : '';
+}
+function compactDigits(value){
+  const n=Number(value);
+  if(!Number.isFinite(n)||Number.isInteger(n)) return 0;
+  return Math.abs(n)<10?2:1;
 }
 function safeUrl(url){
   if(!isPresent(url)) return '';
@@ -457,6 +506,16 @@ function replaceCanvasWithFallback(canvasId,html){
   fallback.innerHTML=html;
   canvas.parentElement.appendChild(fallback);
 }
+function setCardTitle(cardId,title){
+  const card=document.getElementById(cardId);
+  const titleEl=card&&card.querySelector('.chart-title');
+  if(titleEl&&isPresent(title)) titleEl.textContent=String(title);
+}
+function setCardLegend(cardId,html=''){
+  const card=document.getElementById(cardId);
+  const legend=card&&card.querySelector('.legend');
+  if(legend) legend.innerHTML=html;
+}
 function renderFallbackBarChart(canvasId,items){
   const rows=cleanArray(items)
     .map(item=>({name:String(item.name||''),value:asFiniteNumber(item.value)}))
@@ -468,6 +527,19 @@ function renderFallbackBarChart(canvasId,items){
     return `<div class="fallback-bar-row"><div class="fallback-bar-label">${escapeHtml(item.name)}</div><div class="fallback-bar-track"><div class="fallback-bar-fill" style="width:${pct}%"></div></div><div class="fallback-bar-value">${fmtNumber(item.value,0)}%</div></div>`;
   }).join('')}</div>`;
   replaceCanvasWithFallback(canvasId,html);
+}
+function renderFallbackValueBars(canvasId,items){
+  const rows=cleanArray(items)
+    .map(item=>({name:String(item.name||''),value:asFiniteNumber(item.value),unit:item.unit||'',color:item.color||C.green}))
+    .filter(item=>item.name&&item.value!==null);
+  if(!rows.length) return false;
+  const max=Math.max(1,...rows.map(item=>Math.abs(item.value)));
+  const html=`<div class="fallback-bars">${rows.map(item=>{
+    const pct=Math.max(2,Math.min(100,(Math.abs(item.value)/max)*100));
+    return `<div class="fallback-bar-row"><div class="fallback-bar-label">${escapeHtml(item.name)}</div><div class="fallback-bar-track"><div class="fallback-bar-fill" style="width:${pct}%;background:${item.color}"></div></div><div class="fallback-bar-value">${fmtNumber(item.value,2)}${escapeHtml(item.unit)}</div></div>`;
+  }).join('')}</div>`;
+  replaceCanvasWithFallback(canvasId,html);
+  return true;
 }
 function renderFallbackDonutChart(canvasId,items){
   const rows=cleanArray(items)
@@ -482,7 +554,7 @@ function renderFallbackDonutChart(canvasId,items){
     cursor=end;
     return `${item.color} ${start}% ${end}%`;
   }).join(',');
-  const html=`<div class="fallback-donut-wrap"><div class="fallback-donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${rows.map(item=>`<span class="leg-item"><span class="leg-sq" style="background:${item.color}"></span>${escapeHtml(item.name)} ${withUnit(item.value,item.unit,0)}</span>`).join('')}</div></div>`;
+  const html=`<div class="fallback-donut-wrap"><div class="fallback-donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${rows.map(item=>`<span class="leg-item"><span class="leg-sq" style="background:${item.color}"></span>${escapeHtml(item.name)} ${withUnit(item.value,item.unit,compactDigits(item.value))}</span>`).join('')}</div></div>`;
   replaceCanvasWithFallback(canvasId,html);
 }
 function renderFallbackLineChart(canvasId,series){
@@ -502,6 +574,17 @@ function renderFallbackLineChart(canvasId,series){
   const html=`<div class="fallback-line"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="WOFOST 生物量模拟折线图">${xLines}${yLines}<polyline class="fallback-line-a" points="${pointsFor('tagp')}"/><polyline class="fallback-line-b" points="${pointsFor('twso')}"/></svg></div>`;
   replaceCanvasWithFallback(canvasId,html);
 }
+function renderFallbackTimeline(canvasId,items){
+  const rows=cleanArray(items).filter(item=>isPresent(item.label)&&isPresent(item.value));
+  if(!rows.length) return false;
+  const denominator=Math.max(1,rows.length-1);
+  const html=`<div class="fallback-timeline">${rows.map((item,index)=>{
+    const pos=(index/denominator)*100;
+    return `<div class="fallback-timeline-row"><div class="fallback-timeline-label">${escapeHtml(item.label)}</div><div><div class="fallback-timeline-track"><span class="fallback-timeline-dot" style="left:${pos}%"></span></div><div class="fallback-timeline-value">${escapeHtml(item.value)}</div></div></div>`;
+  }).join('')}</div>`;
+  replaceCanvasWithFallback(canvasId,html);
+  return true;
+}
 function deriveSowingProgress(charts={},data={}){
   const fromCharts=cleanArray(charts.sowingProgress)
     .map(item=>({name:item&&item.name,value:asFiniteNumber(item&&item.value)}))
@@ -511,11 +594,14 @@ function deriveSowingProgress(charts={},data={}){
     .map(plot=>({name:plot.crop||plot.name,value:asFiniteNumber(plot.progress)}))
     .filter(item=>isPresent(item.name)&&item.value!==null);
 }
-function derivePlotTypes(charts={},data={}){
+function firstOverviewKpi(data={},predicate=()=>false){
+  return cleanArray(data.overview&&data.overview.kpis).find(predicate);
+}
+function derivePlotStructure(charts={},data={}){
   const fromCharts=cleanArray(charts.plotTypes)
     .map(item=>({name:item&&item.name,value:asFiniteNumber(item&&item.value),unit:item&&item.unit}))
     .filter(item=>isPresent(item.name)&&item.value!==null&&item.value>0);
-  if(fromCharts.length) return fromCharts;
+  if(fromCharts.length) return {title:'地块类型分布',items:fromCharts};
   const grouped=new Map();
   cleanArray(data.overview&&data.overview.kpis).forEach(kpi=>{
     const value=asFiniteNumber(kpi.value);
@@ -528,7 +614,47 @@ function derivePlotTypes(charts={},data={}){
     if(!current.unit&&kpi.unit) current.unit=kpi.unit;
     grouped.set(key,current);
   });
-  return [...grouped.values()];
+  if(grouped.size) return {title:'地块类型分布',items:[...grouped.values()]};
+
+  const areaKpi=firstOverviewKpi(data,kpi=>String(kpi.label||'').includes('面积')&&asFiniteNumber(kpi.value)!==null);
+  const area=areaKpi?asFiniteNumber(areaKpi.value):null;
+  const areaUnit=areaKpi&&areaKpi.unit?areaKpi.unit:'';
+  const cropArea=new Map();
+  cleanArray(data.plots).forEach(plot=>{
+    const name=plot.crop||plot.name;
+    if(!isPresent(name)) return;
+    const key=String(name);
+    const current=cropArea.get(key)||{name:key,value:0,unit:area!==null?areaUnit:'个地块'};
+    current.value+=area!==null?area:1;
+    cropArea.set(key,current);
+  });
+  if(cropArea.size) return {title:area!==null?'作物面积结构':'作物地块结构',items:[...cropArea.values()]};
+  return {title:'地块结构',items:[]};
+}
+function parseMetricValue(raw){
+  if(!isPresent(raw)) return null;
+  const text=String(raw).replace(/,/g,'').trim();
+  const match=text.match(/-?\d+(?:\.\d+)?/);
+  if(!match) return null;
+  const value=Number(match[0]);
+  if(!Number.isFinite(value)) return null;
+  const unit=text.slice(match.index+match[0].length).trim();
+  return {value,unit};
+}
+function deriveWofostBarMetrics(kpis=[]){
+  const preferred=[
+    {pattern:/TAGP/i,name:'TAGP',color:C.blue},
+    {pattern:/TWSO|WSO|储存器官|贮藏器官/i,name:'TWSO',color:C.green},
+    {pattern:/LAIMAX|叶面积/i,name:'LAIMAX',color:C.amber},
+    {pattern:/RD|根深/i,name:'RD',color:C.gray}
+  ];
+  const rows=[];
+  preferred.forEach(rule=>{
+    const kpi=cleanArray(kpis).find(item=>rule.pattern.test(String(item.label||'')));
+    const parsed=kpi&&parseMetricValue(kpi.value);
+    if(parsed) rows.push({name:rule.name,value:parsed.value,unit:parsed.unit,color:rule.color});
+  });
+  return rows;
 }
 
 function renderOverview(kpis=[]){
@@ -545,10 +671,12 @@ function renderOverview(kpis=[]){
 
 function renderPlantingCharts(charts={},data={}){
   const sow=deriveSowingProgress(charts,data);
-  const types=derivePlotTypes(charts,data);
+  const structure=derivePlotStructure(charts,data);
+  const types=structure.items;
   if(!sow.length && !types.length){hide('section-planting');return;}
   if(!sow.length) hide('sowing-card');
-  if(!types.length) hide('plot-type-card');
+  if(types.length) setCardTitle('plot-type-card',structure.title);
+  else hide('plot-type-card');
   if(!window.Chart){
     if(sow.length) renderFallbackBarChart('sowChart',sow);
     if(types.length) renderFallbackDonutChart('plotTypeChart',types);
@@ -563,11 +691,11 @@ function renderPlantingCharts(charts={},data={}){
   }
   if(types.length){
     const legend=document.getElementById('plot-type-legend');
-    legend.innerHTML=types.map((x,i)=>`<span class="leg-item"><span class="leg-sq" style="background:${PALETTE[i%PALETTE.length]}"></span>${escapeHtml(x.name)} ${withUnit(x.value,x.unit||'',0)}</span>`).join('');
+    legend.innerHTML=types.map((x,i)=>`<span class="leg-item"><span class="leg-sq" style="background:${PALETTE[i%PALETTE.length]}"></span>${escapeHtml(x.name)} ${withUnit(x.value,x.unit||'',compactDigits(x.value))}</span>`).join('');
     new Chart(document.getElementById('plotTypeChart'),{
       type:'doughnut',
       data:{labels:types.map(x=>String(x.name)),datasets:[{data:types.map(x=>Number(x.value)||0),backgroundColor:types.map((_,i)=>PALETTE[i%PALETTE.length]),borderWidth:0,hoverOffset:8}]},
-      options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.label+': '+ctx.raw.toLocaleString('zh-CN')+(types[ctx.dataIndex]?.unit||'')}}}}
+      options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.label+': '+fmtNumber(ctx.raw,compactDigits(ctx.raw))+(types[ctx.dataIndex]?.unit||'')}}}}
     });
   }
 }
@@ -621,6 +749,62 @@ function renderPlots(plots=[]){
   }).join('');
 }
 
+function listText(value){
+  if(Array.isArray(value)){
+    return value.map(item=>{
+      if(!isPresent(item)) return '';
+      if(typeof item==='object') return [item.title,item.body,item.content,item.message,item.value].filter(isPresent).join('：');
+      return String(item);
+    }).filter(isPresent);
+  }
+  if(isPresent(value)) return [String(value)];
+  return [];
+}
+function warningClass(level){
+  const text=String(level||'').toLowerCase();
+  if(['high','danger','red','严重','高风险','4','3'].some(key=>text.includes(key))) return 'warn-high';
+  if(['mid','medium','warn','amber','中风险','2'].some(key=>text.includes(key))) return 'warn-mid';
+  return 'warn-low';
+}
+function renderPlotWarnings(warnings=[]){
+  const items=cleanArray(warnings);
+  if(!items.length){hide('section-plot-warnings');return;}
+  document.getElementById('plot-warning-list').innerHTML=items.slice(0,5).map(w=>{
+    const title=w.title||w.name||w.type||w.category||'地块预警';
+    const level=w.level||w.warningLevel||w.grade||w.severity||'预警';
+    const time=[w.time,w.startTime,w.endTime,w.status].filter(isPresent).map(escapeHtml).join(' · ');
+    const body=w.body||w.content||w.message||w.description||'请结合现场情况确认。';
+    const advices=listText(w.suggestions||w.advice||w.suggestion).slice(0,3);
+    return `<div class="warning-item ${warningClass(level)}"><div class="warning-head"><div><div class="warning-title">${escapeHtml(level)} · ${escapeHtml(title)}</div></div>${time?`<div class="warning-meta">${time}</div>`:''}</div><div class="warning-body">${escapeHtml(body)}</div>${advices.length?`<div class="warning-advice"><strong>建议：</strong>${advices.map(escapeHtml).join('；')}</div>`:''}</div>`;
+  }).join('');
+}
+
+function moduleTypeName(type){
+  return {
+    plot_growth_analysis:'地块长势分析',
+    plot_3d_phenotype:'地块 3D 表型',
+    plot_growth_dynamics:'地块长势动态',
+    plot_seedling_monitoring:'苗情监测',
+    plot_wofost:'WOFOST 报告',
+    device_analysis:'设备分析报告'
+  }[String(type||'')]||String(type||'模块报告');
+}
+function renderModuleReports(reports=[]){
+  const items=cleanArray(reports);
+  if(!items.length){hide('section-module-reports');return;}
+  document.getElementById('module-report-grid').innerHTML=items.map(r=>{
+    const typeLabel=moduleTypeName(r.type);
+    const title=r.title||r.reportName||typeLabel;
+    const period=[r.reportDate||r.date,[r.startDate,r.endDate].filter(isPresent).join(' 至 '),r.periodType].filter(isPresent).join(' · ');
+    const conclusion=r.conclusion||r.summary||r.overview||r.result||'未提取到明确结论。';
+    const metrics=cleanArray(r.metrics||r.kpis||r.index).slice(0,6);
+    const risks=cleanArray(r.risks||r.warnings||r.alerts).slice(0,3);
+    const suggestions=listText(r.suggestions||r.recommendations||r.advice).slice(0,3);
+    const link=safeUrl(r.link||r.reportUrl||r.report_url||r.url||r.file_url||r.pdf_url);
+    return `<div class="module-card"><div class="module-head"><div><div class="module-title">${escapeHtml(title)}</div><div class="module-type">${escapeHtml(typeLabel)}</div></div>${period?`<div class="module-period">${escapeHtml(period)}</div>`:''}</div><div class="module-conclusion">${escapeHtml(conclusion)}</div>${metrics.length?`<div class="module-metrics">${metrics.map(m=>`<div class="module-metric"><div class="module-metric-label">${escapeHtml(m.label||m.name||'指标')}</div><div class="module-metric-value">${escapeHtml([m.value,m.unit].filter(isPresent).join(''))}</div></div>`).join('')}</div>`:''}${risks.length?`<div class="module-note"><strong>风险：</strong>${risks.map(x=>escapeHtml(x.title||x.body||x.content||x.message||x.name||String(x))).join('；')}</div>`:''}${suggestions.length?`<div class="module-note"><strong>建议：</strong>${suggestions.map(escapeHtml).join('；')}</div>`:''}${link?`<div class="report-links"><a class="report-link" href="${escapeHtml(link)}" target="_blank" rel="noopener">查看原始报告</a></div>`:''}</div>`;
+  }).join('');
+}
+
 function renderDevices(devices={}){
   const summary=devices.summary||{};
   const items=cleanArray(devices.items);
@@ -646,6 +830,7 @@ function renderWofost(wofost={},trend=[]){
   const kpis=cleanArray(wofost.kpis);
   const water=cleanArray(wofost.waterBalance);
   const series=cleanArray(trend).filter(x=>isPresent(x.label)&& (isPresent(x.tagp)||isPresent(x.twso)) );
+  const metricBars=deriveWofostBarMetrics(kpis);
   const links=wofost.links||{};
   if(!phenology.length&&!kpis.length&&!water.length&&!series.length&&!safeUrl(links.pdf)&&!safeUrl(links.csv)){hide('section-wofost');return;}
   const phenoTitle=['关键生育日期',wofost.plotNo?`地块：${wofost.plotNo}`:null,wofost.stageText].filter(isPresent).join(' · ');
@@ -655,7 +840,31 @@ function renderWofost(wofost={},trend=[]){
   if(water.length){document.getElementById('water-balance').innerHTML=water.map(w=>`<div class="water-item"><div class="water-label">${escapeHtml(w.label)}</div><div class="water-val">${escapeHtml(w.value)}</div></div>`).join('');}else{hide('water-card');}
   const pdf=safeUrl(links.pdf), csv=safeUrl(links.csv);
   document.getElementById('wofost-links').innerHTML=[pdf?`<a class="report-link" href="${escapeHtml(pdf)}" target="_blank" rel="noopener">WOFOST PDF 报告</a>`:'',csv?`<a class="report-link" href="${escapeHtml(csv)}" target="_blank" rel="noopener">WOFOST CSV 明细</a>`:''].join('');
-  if(!series.length){hide('bio-card');return;}
+  if(!series.length){
+    if(metricBars.length){
+      setCardTitle('bio-card','WOFOST 关键指标（模型模拟）');
+      setCardLegend('bio-card',metricBars.map(item=>`<span class="leg-item"><span class="leg-sq" style="background:${item.color}"></span>${escapeHtml(item.name)} ${fmtNumber(item.value,2)}${escapeHtml(item.unit)}</span>`).join(''));
+      if(!window.Chart){
+        renderFallbackValueBars('bioChart',metricBars);
+        return;
+      }
+      new Chart(document.getElementById('bioChart'),{
+        type:'bar',
+        data:{labels:metricBars.map(x=>String(x.name)),datasets:[{label:'模型指标',data:metricBars.map(x=>Number(x.value)||0),backgroundColor:metricBars.map(x=>x.color),borderRadius:4,barThickness:18}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${fmtNumber(ctx.raw,2)}${metricBars[ctx.dataIndex]?.unit||''}`}}},scales:{x:{ticks:{color:C.txt,font:{size:10}},grid:{display:false},border:{color:'transparent'}},y:{ticks:{color:C.muted,font:{size:9}},grid:{color:C.border},border:{color:'transparent'}}}}
+      });
+      return;
+    }
+    if(phenology.length){
+      setCardTitle('bio-card','生育期关键节点（模型模拟）');
+      setCardLegend('bio-card','');
+      renderFallbackTimeline('bioChart',phenology);
+      return;
+    }
+    hide('bio-card');
+    return;
+  }
+  setCardTitle('bio-card','生物量累积趋势（模型模拟）');
   if(!window.Chart){
     renderFallbackLineChart('bioChart',series);
     return;
@@ -697,7 +906,9 @@ function exportReport(){window.print();}
   renderOverview(data.overview?.kpis||[]);
   renderPlantingCharts(data.charts||{},data);
   renderWeather(data.weather||{});
+  renderPlotWarnings(data.plotWarnings||[]);
   renderPlots(data.plots||[]);
+  renderModuleReports(data.moduleReports||[]);
   renderDevices(data.devices||{});
   renderWofost(data.wofost||{},data.charts?.biomassTrend||[]);
   renderRecommendations(data.recommendations||[]);

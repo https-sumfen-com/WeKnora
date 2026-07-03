@@ -3,6 +3,8 @@
 ## 目录
 
 - `get_plot_info`
+- `get_plot_warning`
+- `get_report_by_type`
 - `get_weather`
 - `get_plot_device_info`
 - `get_wofost_report`
@@ -10,7 +12,7 @@
 
 读取本文件前，先按实际调用工具读取对应 `sono-mcp/references/tool-*.md`，本文件只说明报告层映射。
 
-禁止使用或展示 `get_summary_base`。本 Skill 只生成基于地块的报告。
+禁止使用或展示 `get_summary_base`。本 Skill 只生成基于地块的报告。整体地块报告不是基地/企业全局报告，而是在同一真实地块下组合基础信息、预警和细分模块。
 
 ## `get_plot_info`
 
@@ -83,6 +85,60 @@
 如果需要页面中出现 WOFOST 趋势图，必须把 `csv_content[]` 抽样或聚合成 `charts.biomassTrend[]`。不要把完整 `csv_content[]` 原样保留在最终报告 JSON 中。
 
 如 WOFOST 结果只有 `plot_id`/`plot_no` 没有地块名称，先调用 `get_plot_info` 获取地块名称，再生成报告。
+
+## `get_plot_warning`
+
+参考：`custom_skills/sono-mcp/references/tool-plot-warning.md`
+
+映射：
+
+- `plot_name` / `plotName` / `plot.name` → `plotWarnings[].plotName`，但标题仍以 `meta.plotName` 为准
+- `title` / `name` / `warning_type` / `type` / `category` → `plotWarnings[].title`
+- `warning_level` / `level` / `grade` / `severity` → `plotWarnings[].level`
+- `content` / `message` / `description` / `reason` → `plotWarnings[].body`
+- `warning_time` / `start_date` / `startDate` / `created_at` → `plotWarnings[].time`
+- `status` / `state` / `is_handled` → `plotWarnings[].status`
+- `suggestion` / `advice` / `handle_suggestion` / `recommendation` → `plotWarnings[].suggestions[]`
+
+需要处置的高风险/严重风险同步写入 `recommendations[]`，`source` 使用 `get_plot_warning`。空列表表示未查询到预警，不写泛化提醒。
+
+## `get_report_by_type`
+
+参考：`custom_skills/sono-mcp/references/tool-report-by-type.md`
+
+整体地块报告默认尝试地块类模块：
+
+- `plot_growth_analysis`
+- `plot_3d_phenotype`
+- `plot_growth_dynamics`
+- `plot_seedling_monitoring`
+- `plot_wofost`
+
+`device_analysis` 只有在有明确 `device_id` 且用户要求设备分析时调用。用户只要求某个细分报告时，只调用并展示该 `type`。
+
+通用映射到 `moduleReports[]`：
+
+- `type` → `moduleReports[].type`
+- `report_name` / `title` / `name` → `moduleReports[].title`
+- `report_date` / `date` → `moduleReports[].reportDate`
+- `start_date` / `end_date` → `moduleReports[].startDate` / `moduleReports[].endDate`
+- `period_type` → `moduleReports[].periodType`
+- `conclusion` / `summary` / `overview` / `result` → `moduleReports[].conclusion`
+- `metrics` / `index` / `data` 中的关键数值项 → `moduleReports[].metrics[]`
+- `warnings` / `risks` / `alerts` / `abnormal` → `moduleReports[].risks[]`
+- `suggestions` / `recommendations` / `advice` → `moduleReports[].suggestions[]`
+- `report_url` / `reportUrl` / `url` / `file_url` / `pdf_url` → `moduleReports[].link`
+
+类型专属处理：
+
+- `plot_growth_analysis`：把长势等级、作物/批次、NDVI/LAI/覆盖度、异常区域和建议放入模块。
+- `plot_3d_phenotype`：把株高、冠层覆盖、LAI、生物量和三维重建结论放入模块。
+- `plot_growth_dynamics`：只摘要趋势最近值、极值、变化幅度和异常日期，不逐点展示全量序列。
+- `plot_seedling_monitoring`：把出苗率、密度、整齐度、缺苗断垄和补苗建议放入模块。
+- `plot_wofost`：按模型模拟/报告口径展示，可同步摘要到 `wofost.kpis`；不要说成实测产量。
+- `device_analysis`：映射设备在线状态、最后通信、核心遥测统计、异常时段和维护建议。
+
+如果 `get_report_by_type` 返回下载链接，只放到 `moduleReports[].link`，不要展开原始报告全文或完整时序数据。
 
 ## 禁止展示字段
 

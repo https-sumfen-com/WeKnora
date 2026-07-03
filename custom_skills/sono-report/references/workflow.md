@@ -11,17 +11,19 @@
 
 ## 触发与边界
 
-使用 `sono-report` 仅限用户明确要求生成**地块**报告、地块 HTML、地块日报/周报/月报、导出或保存地块报告。
+使用 `sono-report` 仅限用户明确要求生成**地块**报告、地块 HTML、地块日报/周报/月报、地块细分模块报告、导出或保存地块报告。
 
 普通查询仍使用 `call-mcp-tools`：一次问题只调最匹配的一个 MCP 工具，不生成 HTML。
 
-本 Skill 不生成基地报告、企业报告、全局概览报告，也不使用 `get_summary_base`。如果用户要求基地/企业报告，应说明当前 Skill 只支持地块报告，并请用户提供地块名称或 `plot_id`。
+本 Skill 不生成基地报告、企业报告、全局概览报告，也不使用 `get_summary_base`。如果用户要求基地/企业报告，应说明当前 Skill 只支持地块报告，并请用户提供地块名称或 `plot_id`。整体地块报告指同一地块下的基础信息、预警、细分模块组合，不是基地/企业整体报告。
 
 ## 地块报告章节
 
 | 章节 | 工具 | 说明 |
 |---|---|---|
 | 地块基础与长势 | `get_plot_info` | 必须调用；用于获取真实地块名称、面积、作物、生长阶段、评级和建议 |
+| 地块预警 | `get_plot_warning` | 整体报告默认调用；预警/风险报告必须调用 |
+| 细分模块报告 | `get_report_by_type` | 整体地块报告默认包含地块类模块；单独细分报告只调用指定 `type` |
 | 天气与作业窗口 | `get_weather` | 用户要求天气/预警/作业窗口时调用；未来/本周传 `days=7` |
 | 设备状态 | `get_plot_device_info` | 仅当用户提供明确 `device_id` 时调用 |
 | WOFOST 模型 | `get_wofost_report` | 用户要求模型/预测/WOFOST 时调用；必须有 `cid + plot_id` |
@@ -31,9 +33,13 @@
 1. 判断用户是否要求地块报告；若是基地/企业报告，停止并请用户提供地块范围。
 2. 读取 `sono-mcp/SKILL.md`，按其参数纪律调用 MCP。
 3. 必须先调用或取得 `get_plot_info` 结果，以获得真实 `payload.name`。
-4. 按已调用工具读取对应 reference：`tool-plot-info.md`、`tool-weather.md`、`tool-device-info.md`、`tool-wofost-report.md`。
-5. 构造原始 `REPORT_DATA` JSON。
-6. 用 `execute_skill_script` 执行一体化脚本，并把 `REPORT_DATA` 放入 `input` 字段：
+4. 判断报告范围：
+   - 整体地块报告：调用 `get_plot_warning`，并用同一 `plot_id` 调用地块类 `get_report_by_type`：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`。空结果或失败模块跳过。
+   - 细分模块报告：只调用用户指定的 `get_report_by_type.type`。
+   - 天气、设备、WOFOST 模型日报：只有用户明确要求对应内容时追加。
+5. 按已调用工具读取对应 reference：`tool-plot-info.md`、`tool-plot-warning.md`、`tool-report-by-type.md`、`tool-weather.md`、`tool-device-info.md`、`tool-wofost-report.md`。
+6. 构造原始 `REPORT_DATA` JSON：`get_plot_warning` 写入 `plotWarnings[]`，`get_report_by_type` 写入 `moduleReports[]`。
+7. 用 `execute_skill_script` 执行一体化脚本，并把 `REPORT_DATA` 放入 `input` 字段：
 
 ```json
 {
@@ -44,7 +50,7 @@
 }
 ```
 
-7. 读取脚本输出 JSON 中的 `sono_report`，原样返回给用户。格式必须是 `<sono-report>https://sonoagi.com/report/{file}</sono-report>`，不要把本地 `final_html` 路径作为用户可见结果。
+8. 读取脚本输出 JSON 中的 `sono_report`，原样返回给用户。格式必须是 `<sono-report>https://sonoagi.com/report/{file}</sono-report>`，不要把本地 `final_html` 路径作为用户可见结果。
 
 ### 手动命令行排查
 
@@ -86,6 +92,8 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - 中间文件位于 `$WORKDIR`，不在 Skill 根目录。
 - HTML 以 `<!DOCTYPE html>` 开头。
 - `dataSources` 不包含 `get_summary_base`。
+- 整体地块报告已尝试写入 `plotWarnings[]` 和可取得的 `moduleReports[]`。
+- 细分模块报告只写入用户指定的 `moduleReports[].type`。
 - 标题不是 `plot_id` 风格。
 - 不显示 `undefined`、`null`、`NaN`。
 - WOFOST 数据表述为“模型模拟/预测”。

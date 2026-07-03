@@ -1,6 +1,6 @@
 # 地块 REPORT_DATA 契约
 
-本契约只用于基于地块的报告，禁止包含 `get_summary_base`、基地报告、企业报告或全局概览内容。
+本契约只用于基于地块的报告，包括整体地块报告和细分模块报告。禁止包含 `get_summary_base`、基地报告、企业报告或全局概览内容。
 
 ## 目录
 
@@ -18,7 +18,9 @@
   "overview": { "kpis": [] },
   "charts": { "sowingProgress": [], "plotTypes": [], "biomassTrend": [] },
   "weather": { "now": null, "forecast": [], "alerts": [] },
+  "plotWarnings": [],
   "plots": [],
+  "moduleReports": [],
   "devices": { "summary": {}, "items": [] },
   "wofost": { "phenology": [], "kpis": [], "waterBalance": [], "links": {} },
   "recommendations": [],
@@ -31,6 +33,7 @@
 ```json
 {
   "reportType": "plot_report",
+  "reportSubtype": "",
   "title": "地块报告",
   "subjectName": "真实地块名称",
   "plotName": "真实地块名称",
@@ -48,7 +51,9 @@
 - 地块相关报告必须同时设置 `subjectName` 和 `plotName` 为真实地块名称。
 - 禁止把 `plot_id`、`plot_no`、`地块 {id}` 写入 `subjectName` 或 `plotName`。
 - `dataSources` 只列实际使用的地块相关 MCP 工具。
-- `dataSources` 只允许：`get_plot_info`、`get_weather`、`get_plot_device_info`、`get_wofost_report`。
+- `reportType` 可用 `plot_report`、`plot_overall_report`、`plot_module_report`；无论哪种都必须围绕单个真实地块。
+- `reportSubtype` 用于记录细分报告类型，例如 `plot_growth_analysis`、`plot_seedling_monitoring`；整体报告可留空。
+- `dataSources` 只允许：`get_plot_info`、`get_plot_warning`、`get_report_by_type`、`get_weather`、`get_plot_device_info`、`get_wofost_report`。
 - `dataSources` 必须包含 `get_plot_info`，禁止包含 `get_summary_base`。
 
 ## 模块字段
@@ -88,6 +93,28 @@
 }
 ```
 
+### `plotWarnings[]`
+
+来自 `get_plot_warning` 的地块预警，聚焦预警等级、类型、时间、状态和处置建议：
+
+```json
+{
+  "level": "高风险",
+  "title": "水分含量低",
+  "body": "土壤水分偏低，可能影响幼苗生长。",
+  "time": "2026-07-03 09:00",
+  "status": "未处理",
+  "suggestions": ["安排现场核查", "结合天气窗口补水"],
+  "source": "get_plot_warning"
+}
+```
+
+规则：
+
+- 无预警时 `plotWarnings` 留空，不生成泛化风险提醒。
+- 需要处置的预警同步提炼到 `recommendations[]`，`source` 指向 `get_plot_warning`。
+- 不展示内部 ID、坐标、边界、图片 URL 或处理日志明细。
+
 ### `plots[]`
 
 ```json
@@ -123,6 +150,34 @@
 }
 ```
 
+### `moduleReports[]`
+
+来自 `get_report_by_type` 的细分模块报告。整体地块报告应包含可取得的地块类模块；单独细分报告只放用户指定模块。
+
+```json
+{
+  "type": "plot_growth_analysis",
+  "title": "地块长势分析",
+  "reportDate": "2026-07-03",
+  "periodType": "7d",
+  "conclusion": "长势整体正常，局部水分偏低。",
+  "metrics": [{ "label": "NDVI", "value": "0.72" }],
+  "risks": [{ "level": "warn", "title": "局部水分偏低", "body": "建议巡田确认。" }],
+  "suggestions": ["关注低水分区域", "按计划巡田"],
+  "link": "https://example.com/report.pdf",
+  "source": "get_report_by_type"
+}
+```
+
+允许的 `type`：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis`。
+
+规则：
+
+- `plot_wofost` 必须表述为模型模拟/报告口径，不得写成实际测产。
+- 指标只放 3~6 个关键项；长数组只摘要最近值、极值、趋势或异常点。
+- 有下载链接时放 `link`；不要展开长 URL 或原始文件内容。
+- 模块返回空或失败时跳过，不填示例值。
+
 ### `recommendations[]`
 
 ```json
@@ -137,6 +192,7 @@
 - 空值、`NaN`、`undefined`、`null` 不作为业务展示值。
 - 建议必须来源可追溯，不能写泛化模板建议。
 - WOFOST 值必须表述为“模型模拟/预测”，不能说成实测。
+- 整体地块报告应尝试包含 `plotWarnings[]` 和可取得的地块类 `moduleReports[]`；细分模块报告只包含用户指定的 `moduleReports[]`。
 
 ## 示例
 

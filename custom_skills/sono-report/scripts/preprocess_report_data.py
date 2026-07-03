@@ -20,7 +20,14 @@ from pathlib import Path
 from typing import Any
 
 ID_LIKE_RE = re.compile(r"^(?:地块\s*)?(?:ID[:：]?\s*)?\d+$", re.IGNORECASE)
-ALLOWED_DATA_SOURCES = {"get_plot_info", "get_weather", "get_plot_device_info", "get_wofost_report"}
+ALLOWED_DATA_SOURCES = {
+    "get_plot_info",
+    "get_weather",
+    "get_plot_device_info",
+    "get_wofost_report",
+    "get_plot_warning",
+    "get_report_by_type",
+}
 DISALLOWED_REPORT_TYPES = {"base_report", "summary_report", "enterprise_report", "comprehensive_report"}
 
 
@@ -163,6 +170,8 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
             data[key] = default
 
     data["plots"] = ensure_list(data.get("plots"))
+    data["plotWarnings"] = ensure_list(data.get("plotWarnings"))
+    data["moduleReports"] = ensure_list(data.get("moduleReports"))
     data["emptyStates"] = ensure_list(data.get("emptyStates"))
     normalize_recommendations(data)
     return data, warnings
