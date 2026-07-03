@@ -29,6 +29,12 @@
 - `iot_device` → 设备摘要或建议
 - `current_crop_model_cycle.remark` 中“注意事项” → `recommendations[]`
 
+图表规则：
+
+- 单地块报告不调用 `get_summary_base`，通常拿不到基地级 `sowing_progress[]` / `plot_type[]`。
+- 模板会从 `plots[].progress` 派生“作物 / 地块进度”图。
+- 模板会从“地块面积” KPI 的 `tag`（如喷灌/滴灌/旱地）和面积值派生地块类型图。
+
 如果 `plot_crop` 为空，不输出作物、阶段、播种日期、预计收获等占位字段。
 
 ## `get_weather`
@@ -73,6 +79,8 @@
 - `summary_report_json.DVS/LAIMAX/RD/TAGP/TWSO/NuptakeTotal` → `wofost.kpis`
 - `terminal_report_json.RAINT/TOTIRR/TOTINF/PERCT/WTRAT/EVST/EVWT/LOSST/TSR` → `wofost.waterBalance`
 - `csv_content[]` 的有效 `DVS/LAI/TAGP/WSO/SM/TRA/RD/NuptakeTotal` → `charts.biomassTrend` 或趋势摘要
+
+如果需要页面中出现 WOFOST 趋势图，必须把 `csv_content[]` 抽样或聚合成 `charts.biomassTrend[]`。不要把完整 `csv_content[]` 原样保留在最终报告 JSON 中。
 
 如 WOFOST 结果只有 `plot_id`/`plot_no` 没有地块名称，先调用 `get_plot_info` 获取地块名称，再生成报告。
 

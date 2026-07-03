@@ -75,6 +75,21 @@ body{min-height:100vh}
 /* Chart cards */
 .chart-card{background:#fff;border:1px solid var(--line);border-radius:4px;padding:13px 15px;box-shadow:none}
 .chart-title{font-size:13px;color:var(--ink);font-weight:700;margin-bottom:10px}
+.chart-fallback{width:100%;height:100%;min-height:120px;display:grid;place-items:center;color:var(--muted)}
+.fallback-bars{width:100%;display:grid;gap:10px;padding:8px 4px}
+.fallback-bar-row{display:grid;grid-template-columns:minmax(54px,.34fr) 1fr 44px;gap:9px;align-items:center;font-size:11.5px}
+.fallback-bar-label{color:var(--ink);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fallback-bar-track{height:10px;background:#eef1f4;border:1px solid var(--line);position:relative}
+.fallback-bar-fill{height:100%;background:var(--green)}
+.fallback-bar-value{text-align:right;color:var(--muted);font-weight:700}
+.fallback-donut-wrap{display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:center;width:100%;padding:6px 0}
+.fallback-donut{width:112px;height:112px;border-radius:50%;position:relative;background:var(--green)}
+.fallback-donut::after{content:'';position:absolute;inset:28px;background:#fff;border-radius:50%;border:1px solid var(--line)}
+.fallback-line{width:100%;height:100%;min-height:160px}
+.fallback-line svg{width:100%;height:100%;display:block}
+.fallback-axis{stroke:#d9dee3;stroke-width:1}
+.fallback-line-a{fill:none;stroke:var(--blue);stroke-width:2.5}
+.fallback-line-b{fill:none;stroke:var(--green);stroke-width:2.5;stroke-dasharray:5 4}
 
 /* Legend */
 .legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}
@@ -234,7 +249,7 @@ body{min-height:100vh}
     <div class="sec-label"><i class="ti ti-plant-2"></i>播种进度与地块结构</div>
     <div class="two-col">
       <div class="chart-card" id="sowing-card">
-        <div class="chart-title">各作物播种完成率（%）</div>
+        <div class="chart-title">作物 / 地块进度（%）</div>
         <div class="legend"><span class="leg-item"><span class="leg-sq" style="background:#176B32"></span>已完成</span></div>
         <div style="position:relative;height:165px"><canvas id="sowChart" role="img" aria-label="各作物播种进度水平条形图"></canvas></div>
       </div>
@@ -384,6 +399,11 @@ function alertClass(level){
 }
 function cleanArray(value){return Array.isArray(value)?value.filter(Boolean):[];}
 function hasKeys(obj){return obj && typeof obj==='object' && Object.keys(obj).some(k=>isPresent(obj[k]));}
+function asFiniteNumber(value){
+  if(!isPresent(value)) return null;
+  const n=Number(value);
+  return Number.isFinite(n)?n:null;
+}
 function isIdLike(value){return isPresent(value) && /^(?:地块\s*)?(?:ID[:：]?\s*)?\d+$/i.test(String(value).trim());}
 function firstNonIdText(values){
   for(const value of values){
@@ -426,6 +446,91 @@ function renderHeader(data={}){
   }
 }
 
+function replaceCanvasWithFallback(canvasId,html){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas||!canvas.parentElement) return;
+  canvas.style.display='none';
+  const existing=canvas.parentElement.querySelector('.chart-fallback');
+  if(existing) existing.remove();
+  const fallback=document.createElement('div');
+  fallback.className='chart-fallback';
+  fallback.innerHTML=html;
+  canvas.parentElement.appendChild(fallback);
+}
+function renderFallbackBarChart(canvasId,items){
+  const rows=cleanArray(items)
+    .map(item=>({name:String(item.name||''),value:asFiniteNumber(item.value)}))
+    .filter(item=>item.name&&item.value!==null);
+  if(!rows.length) return;
+  const max=Math.max(100,...rows.map(item=>item.value));
+  const html=`<div class="fallback-bars">${rows.map(item=>{
+    const pct=Math.max(0,Math.min(100,(item.value/max)*100));
+    return `<div class="fallback-bar-row"><div class="fallback-bar-label">${escapeHtml(item.name)}</div><div class="fallback-bar-track"><div class="fallback-bar-fill" style="width:${pct}%"></div></div><div class="fallback-bar-value">${fmtNumber(item.value,0)}%</div></div>`;
+  }).join('')}</div>`;
+  replaceCanvasWithFallback(canvasId,html);
+}
+function renderFallbackDonutChart(canvasId,items){
+  const rows=cleanArray(items)
+    .map((item,i)=>({name:String(item.name||''),value:asFiniteNumber(item.value),unit:item.unit||'',color:PALETTE[i%PALETTE.length]}))
+    .filter(item=>item.name&&item.value!==null&&item.value>0);
+  if(!rows.length) return;
+  const total=rows.reduce((sum,item)=>sum+item.value,0);
+  let cursor=0;
+  const gradient=rows.map(item=>{
+    const start=cursor;
+    const end=cursor+(item.value/total)*100;
+    cursor=end;
+    return `${item.color} ${start}% ${end}%`;
+  }).join(',');
+  const html=`<div class="fallback-donut-wrap"><div class="fallback-donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${rows.map(item=>`<span class="leg-item"><span class="leg-sq" style="background:${item.color}"></span>${escapeHtml(item.name)} ${withUnit(item.value,item.unit,0)}</span>`).join('')}</div></div>`;
+  replaceCanvasWithFallback(canvasId,html);
+}
+function renderFallbackLineChart(canvasId,series){
+  const rows=cleanArray(series).filter(item=>isPresent(item.label)&&(isPresent(item.tagp)||isPresent(item.twso)));
+  if(rows.length<2) return;
+  const values=rows.flatMap(item=>[asFiniteNumber(item.tagp),asFiniteNumber(item.twso)]).filter(value=>value!==null);
+  const max=Math.max(1,...values);
+  const w=360,h=180,pad=24;
+  const pointsFor=key=>rows.map((item,index)=>{
+    const value=asFiniteNumber(item[key])||0;
+    const x=pad+(index/(rows.length-1))*(w-pad*2);
+    const y=h-pad-(value/max)*(h-pad*2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const xLines=[0,.25,.5,.75,1].map(t=>`<line class="fallback-axis" x1="${pad}" x2="${w-pad}" y1="${(pad+t*(h-pad*2)).toFixed(1)}" y2="${(pad+t*(h-pad*2)).toFixed(1)}"/>`).join('');
+  const yLines=[0,.33,.66,1].map(t=>`<line class="fallback-axis" y1="${pad}" y2="${h-pad}" x1="${(pad+t*(w-pad*2)).toFixed(1)}" x2="${(pad+t*(w-pad*2)).toFixed(1)}"/>`).join('');
+  const html=`<div class="fallback-line"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="WOFOST 生物量模拟折线图">${xLines}${yLines}<polyline class="fallback-line-a" points="${pointsFor('tagp')}"/><polyline class="fallback-line-b" points="${pointsFor('twso')}"/></svg></div>`;
+  replaceCanvasWithFallback(canvasId,html);
+}
+function deriveSowingProgress(charts={},data={}){
+  const fromCharts=cleanArray(charts.sowingProgress)
+    .map(item=>({name:item&&item.name,value:asFiniteNumber(item&&item.value)}))
+    .filter(item=>isPresent(item.name)&&item.value!==null);
+  if(fromCharts.length) return fromCharts;
+  return cleanArray(data.plots)
+    .map(plot=>({name:plot.crop||plot.name,value:asFiniteNumber(plot.progress)}))
+    .filter(item=>isPresent(item.name)&&item.value!==null);
+}
+function derivePlotTypes(charts={},data={}){
+  const fromCharts=cleanArray(charts.plotTypes)
+    .map(item=>({name:item&&item.name,value:asFiniteNumber(item&&item.value),unit:item&&item.unit}))
+    .filter(item=>isPresent(item.name)&&item.value!==null&&item.value>0);
+  if(fromCharts.length) return fromCharts;
+  const grouped=new Map();
+  cleanArray(data.overview&&data.overview.kpis).forEach(kpi=>{
+    const value=asFiniteNumber(kpi.value);
+    const type=kpi.tag;
+    const looksLikeArea=String(kpi.label||'').includes('面积') || ['亩','公顷','ha','m²','平方米'].includes(String(kpi.unit||'').toLowerCase());
+    if(!isPresent(type)||value===null||value<=0||!looksLikeArea) return;
+    const key=String(type);
+    const current=grouped.get(key)||{name:key,value:0,unit:kpi.unit||''};
+    current.value+=value;
+    if(!current.unit&&kpi.unit) current.unit=kpi.unit;
+    grouped.set(key,current);
+  });
+  return [...grouped.values()];
+}
+
 function renderOverview(kpis=[]){
   const items=cleanArray(kpis);
   if(!items.length){hide('section-overview');return;}
@@ -438,13 +543,17 @@ function renderOverview(kpis=[]){
   }).join('');
 }
 
-function renderPlantingCharts(charts={}){
-  const sow=cleanArray(charts.sowingProgress).filter(x=>isPresent(x.name)&&isPresent(x.value));
-  const types=cleanArray(charts.plotTypes).filter(x=>isPresent(x.name)&&isPresent(x.value));
+function renderPlantingCharts(charts={},data={}){
+  const sow=deriveSowingProgress(charts,data);
+  const types=derivePlotTypes(charts,data);
   if(!sow.length && !types.length){hide('section-planting');return;}
   if(!sow.length) hide('sowing-card');
   if(!types.length) hide('plot-type-card');
-  if(!window.Chart) return;
+  if(!window.Chart){
+    if(sow.length) renderFallbackBarChart('sowChart',sow);
+    if(types.length) renderFallbackDonutChart('plotTypeChart',types);
+    return;
+  }
   if(sow.length){
     new Chart(document.getElementById('sowChart'),{
       type:'bar',
@@ -547,6 +656,10 @@ function renderWofost(wofost={},trend=[]){
   const pdf=safeUrl(links.pdf), csv=safeUrl(links.csv);
   document.getElementById('wofost-links').innerHTML=[pdf?`<a class="report-link" href="${escapeHtml(pdf)}" target="_blank" rel="noopener">WOFOST PDF 报告</a>`:'',csv?`<a class="report-link" href="${escapeHtml(csv)}" target="_blank" rel="noopener">WOFOST CSV 明细</a>`:''].join('');
   if(!series.length){hide('bio-card');return;}
+  if(!window.Chart){
+    renderFallbackLineChart('bioChart',series);
+    return;
+  }
   if(window.Chart){
     new Chart(document.getElementById('bioChart'),{
       type:'line',
@@ -582,7 +695,7 @@ function exportReport(){window.print();}
   const data=REPORT_DATA||{};
   renderHeader(data);
   renderOverview(data.overview?.kpis||[]);
-  renderPlantingCharts(data.charts||{});
+  renderPlantingCharts(data.charts||{},data);
   renderWeather(data.weather||{});
   renderPlots(data.plots||[]);
   renderDevices(data.devices||{});

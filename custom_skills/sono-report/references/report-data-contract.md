@@ -71,6 +71,13 @@
 }
 ```
 
+规则：
+
+- `sowingProgress` / `plotTypes` 有真实数据时优先显式填写。
+- 单地块报告只有 `plots[].progress` 和面积 KPI 时可以不填这两项，模板会从已有真实字段派生基础图表。
+- WOFOST 趋势图不会从摘要 KPI 自动推断；需要从有效 `csv_content[]` 抽取少量点写入 `biomassTrend`。
+- 不要把完整原始 `csv_content[]` 放进最终报告 JSON。
+
 ### `weather`
 
 ```json
