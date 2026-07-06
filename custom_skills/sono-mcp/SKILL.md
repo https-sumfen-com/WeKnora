@@ -196,6 +196,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - 地块类报告使用 `id=plot_id`；`device_analysis` 使用 `id=device_id`。
 - `period_type` 只在用户指定 7 天/周/月时传为 `7d`、`week`、`month`；未指定时不传。
 - 返回成功后提取报告结论、时间范围、关键指标、风险异常、建议和下载链接，详见 `references/tool-report-by-type.md`。
+- 如果上层正在生成 `sono-report` HTML，必须保留可图表化的多天序列和开放分析结构（如 `trendSeries`、`charts[]`、`analysisItems`、`sections`、`tables`），不要压缩成普通问答短摘要。
 - `plot_wofost` 是细分报告口径；`get_wofost_report` 是 WOFOST 模型日报口径。用户只说“WOFOST 模型模拟/预测”时优先 `get_wofost_report`；用户说“细分报告/模块报告/按类型报告”时用本工具。
 
 ```json

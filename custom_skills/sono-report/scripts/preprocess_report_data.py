@@ -20,14 +20,7 @@ from pathlib import Path
 from typing import Any
 
 ID_LIKE_RE = re.compile(r"^(?:地块\s*)?(?:ID[:：]?\s*)?\d+$", re.IGNORECASE)
-ALLOWED_DATA_SOURCES = {
-    "get_plot_info",
-    "get_weather",
-    "get_plot_device_info",
-    "get_wofost_report",
-    "get_plot_warning",
-    "get_report_by_type",
-}
+DISALLOWED_DATA_SOURCES = {"get_summary_base"}
 DISALLOWED_REPORT_TYPES = {"base_report", "summary_report", "enterprise_report", "comprehensive_report"}
 
 
@@ -135,7 +128,7 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
     report_type = first_text(meta.get("reportType"), "plot_report")
     if report_type in DISALLOWED_REPORT_TYPES:
         raise SystemExit(f"sono-report only supports plot-based reports; disallowed reportType: {report_type}")
-    disallowed_sources = sorted(set(meta["dataSources"]) - ALLOWED_DATA_SOURCES)
+    disallowed_sources = sorted(set(meta["dataSources"]) & DISALLOWED_DATA_SOURCES)
     if disallowed_sources:
         raise SystemExit(f"sono-report only supports plot-based MCP sources; remove: {', '.join(disallowed_sources)}")
     if strict and "get_plot_info" not in meta["dataSources"]:
@@ -161,7 +154,7 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
 
     for key, default in {
         "overview": {"kpis": []},
-        "charts": {"sowingProgress": [], "plotTypes": [], "biomassTrend": []},
+        "charts": {"biomassTrend": []},
         "weather": {"now": None, "forecast": [], "alerts": []},
         "devices": {"summary": {}, "items": []},
         "wofost": {"phenology": [], "kpis": [], "waterBalance": [], "links": {}},

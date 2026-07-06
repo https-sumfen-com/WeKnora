@@ -27,15 +27,15 @@
 - `plot_crop.progress` → `plots[].progress`
 - `plot_crop.current_crop_model_cycle.name` → `plots[].stage`
 - `grade[]` → `plots[].grade` 和 `recommendations[]`
-- `accumulated_tp` → 积温积雨 KPI 或图表
+- `accumulated_tp` → 积温积雨 KPI 或专项分析项
 - `iot_device` → 设备摘要或建议
 - `current_crop_model_cycle.remark` 中“注意事项” → `recommendations[]`
 
-图表规则：
+展示规则：
 
-- 单地块报告不调用 `get_summary_base`，通常拿不到基地级 `sowing_progress[]` / `plot_type[]`。
-- 模板会从 `plots[].progress` 派生“作物 / 地块进度”图。
-- 模板会从“地块面积” KPI 的 `tag`（如喷灌/滴灌/旱地）和面积值派生地块类型图。
+- 不生成播种进度图或地块结构图。
+- `plots[].progress` 只用于地块作物生长状态进度条或概览 KPI。
+- “地块面积”、地块类型、作物等只进入 `overview.kpis[]` 或 `plots[]` 文本字段。
 
 如果 `plot_crop` 为空，不输出作物、阶段、播种日期、预计收获等占位字段。
 
@@ -128,15 +128,24 @@
 - `warnings` / `risks` / `alerts` / `abnormal` → `moduleReports[].risks[]`
 - `suggestions` / `recommendations` / `advice` → `moduleReports[].suggestions[]`
 - `report_url` / `reportUrl` / `url` / `file_url` / `pdf_url` → `moduleReports[].link`
+- 多天数组、日报数组、趋势数据、曲线数据 → `moduleReports[].trendSeries` 或 `moduleReports[].charts[]`
+- 从多天数据挖掘出的结论、异常点、极值、变化幅度、原因判断 → `moduleReports[].analysisItems[]`
+- 需要保留的解释段落和小表格 → `moduleReports[].sections[]` / `moduleReports[].tables[]`
+
+开放规则：
+
+- 不要被字段名限制。`trendSeries`、`timeSeries`、`dailyData`、`rows`、`records`、`charts[].rows`、`charts[].labels + series[]` 都可以进入 `moduleReports`；模板会尽量渲染。
+- Agent 可以自由挖掘更多分析项，但每一项必须能追溯到 payload 中的时间序列、指标、风险或建议字段。
+- Python 预处理只做底线校验，不会因为细分模块来源或开放字段名不同而丢弃内容；不要把真实分析数据压缩成一句泛泛结论。
 
 类型专属处理：
 
-- `plot_growth_analysis`：把长势等级、作物/批次、NDVI/LAI/覆盖度、异常区域和建议放入模块。
-- `plot_3d_phenotype`：把株高、冠层覆盖、LAI、生物量和三维重建结论放入模块。
-- `plot_growth_dynamics`：只摘要趋势最近值、极值、变化幅度和异常日期，不逐点展示全量序列。
-- `plot_seedling_monitoring`：把出苗率、密度、整齐度、缺苗断垄和补苗建议放入模块。
-- `plot_wofost`：按模型模拟/报告口径展示，可同步摘要到 `wofost.kpis`；不要说成实测产量。
-- `device_analysis`：映射设备在线状态、最后通信、核心遥测统计、异常时段和维护建议。
+- `plot_growth_analysis`：挖掘 NDVI/LAI/覆盖度多天趋势、阶段变化、异常区域、作物/批次关联和建议。
+- `plot_3d_phenotype`：挖掘株高、冠层覆盖、LAI、生物量的分布/变化，识别表型异常或空间差异。
+- `plot_growth_dynamics`：必须形成趋势图或趋势分析项，包含最近值、极值、变化幅度、异常日期；不要逐点展示全量序列。
+- `plot_seedling_monitoring`：挖掘出苗率、苗数/密度、整齐度、缺苗断垄的多天变化和补苗优先级。
+- `plot_wofost`：按模型模拟/报告口径展示，多天模型序列进入 `trendSeries` 或 `charts[]`；不要说成实测产量。
+- `device_analysis`：挖掘在线率、最后通信、核心遥测、异常时段、连续离线/波动规律和维护建议。
 
 如果 `get_report_by_type` 返回下载链接，只放到 `moduleReports[].link`，不要展开原始报告全文或完整时序数据。
 

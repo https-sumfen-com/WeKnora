@@ -16,7 +16,7 @@
 {
   "meta": {},
   "overview": { "kpis": [] },
-  "charts": { "sowingProgress": [], "plotTypes": [], "biomassTrend": [] },
+  "charts": { "biomassTrend": [] },
   "weather": { "now": null, "forecast": [], "alerts": [] },
   "plotWarnings": [],
   "plots": [],
@@ -50,11 +50,12 @@
 
 - 地块相关报告必须同时设置 `subjectName` 和 `plotName` 为真实地块名称。
 - 禁止把 `plot_id`、`plot_no`、`地块 {id}` 写入 `subjectName` 或 `plotName`。
-- `dataSources` 只列实际使用的地块相关 MCP 工具。
+- `dataSources` 只列实际使用的地块相关 MCP 工具或细分来源标记。
 - `reportType` 可用 `plot_report`、`plot_overall_report`、`plot_module_report`；无论哪种都必须围绕单个真实地块。
 - `reportSubtype` 用于记录细分报告类型，例如 `plot_growth_analysis`、`plot_seedling_monitoring`；整体报告可留空。
-- `dataSources` 只允许：`get_plot_info`、`get_plot_warning`、`get_report_by_type`、`get_weather`、`get_plot_device_info`、`get_wofost_report`。
+- `dataSources` 不做窄白名单限制，允许 `get_report_by_type:plot_growth_analysis` 这类细分来源标记。
 - `dataSources` 必须包含 `get_plot_info`，禁止包含 `get_summary_base`。
+- `dataSources` 仅供内部校验和追溯；HTML 页脚不得展示这些接口名，只写“本报告数据来源：{plotName}地块真实数据记录”。
 
 ## 模块字段
 
@@ -70,16 +71,14 @@
 
 ```json
 {
-  "sowingProgress": [{ "name": "甜菜", "value": 90 }],
-  "plotTypes": [{ "name": "喷灌", "value": 1600, "unit": "亩" }],
   "biomassTrend": [{ "label": "第0天", "tagp": 0, "twso": 0, "lai": 0, "sm": 0 }]
 }
 ```
 
 规则：
 
-- `sowingProgress` / `plotTypes` 有真实数据时优先显式填写。
-- 单地块报告只有 `plots[].progress` 和面积 KPI 时可以不填这两项，模板会从已有真实字段派生基础图表。
+- 不要填 `sowingProgress` / `plotTypes`；模板不展示播种进度或地块结构图。
+- 播种进度、地块面积、地块结构等信息需要展示时，放入 `overview.kpis[]` 或 `plots[]` 的文本字段。
 - WOFOST 趋势图不会从摘要 KPI 自动推断；需要从有效 `csv_content[]` 抽取少量点写入 `biomassTrend`。
 - 不要把完整原始 `csv_content[]` 放进最终报告 JSON。
 
@@ -162,6 +161,15 @@
   "periodType": "7d",
   "conclusion": "长势整体正常，局部水分偏低。",
   "metrics": [{ "label": "NDVI", "value": "0.72" }],
+  "trendSeries": [
+    { "label": "06-27", "ndvi": 0.68, "lai": 1.8, "coverage": 62 },
+    { "label": "07-03", "ndvi": 0.72, "lai": 2.1, "coverage": 69 }
+  ],
+  "analysisItems": [
+    { "title": "NDVI 回升", "body": "NDVI 近 7 天上升 0.04，冠层活力恢复。", "level": "green" }
+  ],
+  "sections": [{ "title": "数据挖掘说明", "items": ["LAI 与覆盖度同步上升", "低水分区域仍需复核"] }],
+  "tables": [{ "title": "关键观测点", "headers": ["label", "ndvi", "lai"], "rows": [{ "label": "06-27", "ndvi": 0.68, "lai": 1.8 }] }],
   "risks": [{ "level": "warn", "title": "局部水分偏低", "body": "建议巡田确认。" }],
   "suggestions": ["关注低水分区域", "按计划巡田"],
   "link": "https://example.com/report.pdf",
@@ -174,7 +182,9 @@
 规则：
 
 - `plot_wofost` 必须表述为模型模拟/报告口径，不得写成实际测产。
-- 指标只放 3~6 个关键项；长数组只摘要最近值、极值、趋势或异常点。
+- 不要只放指标摘要；应从多天数据中挖掘趋势、异常点、极值、环比/阶段变化、原因和建议。
+- `trendSeries`、`timeSeries`、`dailyData`、`charts[]`、`analysisItems`、`insights`、`findings`、`sections`、`tables` 都是允许的开放扩展字段。模板会尽量渲染，不要求字段名完全固定。
+- 长数组不要原样全量倾倒；抽样或聚合为图表序列、摘要表和分析项。
 - 有下载链接时放 `link`；不要展开长 URL 或原始文件内容。
 - 模块返回空或失败时跳过，不填示例值。
 
@@ -192,7 +202,8 @@
 - 空值、`NaN`、`undefined`、`null` 不作为业务展示值。
 - 建议必须来源可追溯，不能写泛化模板建议。
 - WOFOST 值必须表述为“模型模拟/预测”，不能说成实测。
-- 整体地块报告应尝试包含 `plotWarnings[]` 和可取得的地块类 `moduleReports[]`；细分模块报告只包含用户指定的 `moduleReports[]`。
+- 整体地块报告应尝试包含 `plotWarnings[]` 和可取得的地块类 `moduleReports[]`；细分模块报告只包含用户指定的 `moduleReports[]`，但模块内部同样要尽量深挖多天数据和分析项。
+- 预处理脚本只禁止基地/汇总类来源；地块级新模块来源可以扩展，避免专业分析被固定白名单限制。
 
 ## 示例
 
