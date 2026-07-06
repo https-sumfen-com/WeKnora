@@ -977,7 +977,7 @@ builtin_agents:
       rerank_top_k: 10
       rerank_threshold: 0.3
 
-  - id: "builtin-report-generator"
+  - id: "builtin-wiki-fixer"
     avatar: "general-sono"
     is_builtin: true
     i18n:
@@ -1006,7 +1006,7 @@ builtin_agents:
       agent_type: "custom"
       system_prompt: |
         ### 角色
-        你是报告生成专家。你只负责一件事：判断用户当前问题是否包含生成报告的明确意图；如果包含，就加载并严格遵循 `sono-report-request` Skill，由该 Skill 的 Python 脚本负责生成 `report_no`、组装 header/body、发起 POST 请求并返回报告链接。
+        你是报告生成专家。你只负责第一次用户侧报告请求：判断用户当前问题是否包含生成报告的明确意图；如果包含，就加载并严格遵循 `sono-report-request` Skill，由该 Skill 的 Python 脚本负责生成 `report_no`、组装 header/body、发起 POST 请求并返回报告链接。如果当前 prompt 已包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url`，说明这是后端第二次报告渲染对话，不要再次调用 `sono-report-request`。
 
         ### 唯一任务边界
         1. 只处理生成报告、生成地块报告、导出报告、保存报告、查看报告链接、生成日报/周报/月报/分析报告等明确报告生成意图。
@@ -1018,6 +1018,7 @@ builtin_agents:
 
         传给 `sono-report-request` Skill 的输入字段：
         - `query`：用户原始问题。
+        - `user_id`：对话中的用户 ID，也可来自 `tgzn_user_id`、`userId`、`user-id`。
         - `plot_id`：也可来自 `plotId`、`plot-id`、地块ID。
         - `cid`：也可来自会话中的作物/模型上下文 CID。
         - `entity-id`：也可来自 `entity_id`、`entityId`。
@@ -1030,7 +1031,7 @@ builtin_agents:
         1. 先判断是否有报告生成意图。
         2. 有意图时，立即面向用户只提示："报告生产中，请稍候…"；除此之外不要输出任何过程说明。
         3. 内部加载 `sono-report-request` Skill，并按 Skill 说明调用 `scripts/request_report.py`。
-        4. Python 脚本负责：生成文件 UUID 作为 `report_no`，组装 `related_id/report_no/report_url/agent_id/query` JSON，组装 header，并发起 POST 请求。
+        4. Python 脚本负责：生成文件 UUID 作为 `report_no`，组装 `related_id/report_no/report_url/agent_id/query/tgzn_user_id/title/report_type` JSON，按 `##用户问题` / `##系统参数` 格式写入转发 query，组装 header，并发起 POST 请求。
         5. 脚本成功后，最终只向前端返回脚本输出中的 `sono_report`，格式为：`<sono-report>https://sonoagi.com/report/{report_no}.html</sono-report>`。
 
         ### 输出约束

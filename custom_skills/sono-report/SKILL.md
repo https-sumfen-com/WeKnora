@@ -1,13 +1,13 @@
 ---
 name: sono-report
-description: Generates plot-based SONO agricultural HTML reports from SONO-MCP business data, including overall plot reports and subtype module reports. Use when the user asks for plot HTML/PDF-ready reports, plot warning reports, growth/phenotype/seedling/WOFOST module reports, or saved agricultural operation reports.
+description: Backend-internal SONO report rendering workflow. Use in the second LLM conversation when the prompt contains ##用户问题, ##系统参数, report_no, and report_url from sono-report-request. Do not use for normal user-facing generate/export/create report requests.
 ---
 
 # SONO 地块 HTML 报告生成
 
 ## Quick start
 
-本 Skill 只生成**基于地块的报告**，包括整体地块报告和地块细分模块报告。普通数据查询不要用本 Skill，仍按 `call-mcp-tools` 单工具问答处理。
+本 Skill 是后端内部第二次 LLM 对话的报告渲染流程：只在 prompt 已包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url` 时使用。普通用户要求“生成报告 / 导出报告 / 创建报告”时不要用本 Skill，必须先用 `sono-report-request` 保存报告记录；如果已经存在 `report_no` / `report_url`，也不要再调用 `sono-report-request`，避免重复创建报告记录。
 
 工作流固定为：
 
@@ -21,15 +21,27 @@ description: Generates plot-based SONO agricultural HTML reports from SONO-MCP b
 {
   "skill_name": "sono-report",
   "script_path": "scripts/generate_report.py",
-  "args": ["--output-dir", "/app/report/", "--strict"],
+  "args": [
+    "--output-dir", "/app/report/",
+    "--strict",
+    "--report-no", "{report_no}",
+    "--report-url", "{report_url}",
+    "--plot-id", "{plot_id}",
+    "--cid", "{cid}",
+    "--entity-id", "{entity-id}",
+    "--entity-info-id", "{entity-info-id}"
+  ],
   "input": "<REPORT_DATA JSON>"
 }
 ```
 
-脚本会自动创建唯一工作目录、规范数据、渲染 HTML 并保存最终文件。输出成功后只把脚本返回的 `sono_report` 原样返回给用户，例如 `<sono-report>https://sonoagi.com/report/{file}</sono-report>`；不要直接返回本地 `final_html` 路径。若任一步失败，不要声称已生成或已保存。
+脚本会自动创建唯一工作目录、规范数据、渲染 HTML，并按 `report_url` 对应的文件名保存最终文件。输出成功后只把脚本返回的 `sono_report` 原样返回给调用方，例如 `<sono-report>{report_url}</sono-report>`；不要直接返回本地 `final_html` 路径。生成成功后脚本会回写 `status=1`，失败时会尽量回写 `status=2`。若任一步失败，不要声称已生成或已保存。
 
 ## Critical rules
 
+- 只在后端第二次 LLM 对话中使用：必须从 `##用户问题` 读取原始需求，从 `##系统参数` 提取 `plot_id`、`cid`、`entity-id`、`entity-info-id`、`plot_name`、`report_type`、`report_no`、`report_url`。
+- 必须把 `report_no`、`report_url` 和 header 参数传给 `scripts/generate_report.py`；报告文件名和公开 URL 以 `report_url` 为准，不再重新生成报告地址。
+- 普通用户直接要求生成/导出/创建报告时，不要用本 Skill；已有 `report_no` 和 `report_url` 时，也不要再调用 `sono-report-request`。
 - 只生成基于地块的报告：报告内容必须围绕一个真实地块，不包含 `get_summary_base`、基地报告、企业报告或全局概览。
 - 整体地块报告主数据源必须是 `get_plot_info`，并应补充 `get_plot_warning` 与地块类 `get_report_by_type` 细分模块；天气、设备、WOFOST 模型日报按用户意图追加。
 - 细分模块报告使用 `get_report_by_type` 的指定 `type`，仍需用 `get_plot_info` 或上下文获得真实地块名称后再生成 HTML。
@@ -40,7 +52,7 @@ description: Generates plot-based SONO agricultural HTML reports from SONO-MCP b
 - 使用 `execute_skill_script` 时，`script_path` 只能是 `scripts/generate_report.py` 等 Skill 内脚本路径；不要把 `python3` 当作 `script_path`。
 - `REPORT_DATA` 应通过 `execute_skill_script.input` 传入；不要为了传 JSON 临时调用 `python3` 创建文件。
 - 生成流程必须经过预置规范、HTML 渲染和后置保存，最终保存到 `/app/report/`。
-- 成功回复必须使用 `<sono-report>URL</sono-report>` 包裹公开访问地址，URL 格式为 `https://sonoagi.com/report/{file}`。
+- 成功回复必须使用 `<sono-report>URL</sono-report>` 包裹公开访问地址，URL 必须使用 `##系统参数` 中传入的 `report_url`。
 - 不展示 token、内部 URL、内部配置、原始 JSON、完整 `csv_content[]`。
 - WOFOST 数据必须表述为“模型模拟/预测”，不能说成实测。
 - `get_report_by_type` 的 `plot_wofost` 也是模型/报告口径，不能表述为实际测产。
@@ -53,17 +65,14 @@ description: Generates plot-based SONO agricultural HTML reports from SONO-MCP b
 
 使用：
 
-- “生成某地块报告 / 地块 HTML 报告 / 地块日报周报月报”。
-- “生成某地块整体报告 / 综合地块报告”，但内容范围仍只限该地块。
-- “生成某地块天气预警报告 / 作业窗口报告”。
-- “生成某地块预警报告 / 风险报告”。
-- “生成某地块设备运行报告”。
-- “生成某地块 WOFOST 模型报告”。
-- “生成某地块长势分析、3D 表型、长势动态、苗情监测、WOFOST 细分报告”。
-- “结合 MCP 真实地块数据填充模板并保存 HTML”。
+- 后端 API 发起的第二次 LLM 对话，prompt 中已包含 `##用户问题`、`##系统参数`、`report_no`、`report_url`。
+- 已有 `report_no` / `report_url`，需要结合 MCP 真实地块数据填充模板、保存 HTML，并更新报告状态。
+- 内部渲染整体地块报告、长势分析、3D 表型、生长动态、苗情监控等地块报告文件。
 
 不使用：
 
+- 普通用户首次提出“生成/导出/创建报告”；这类请求必须先使用 `sono-report-request`。
+- 缺少 `report_no` 或 `report_url` 的报告生成请求；不要自行生成新的报告地址。
 - 基地运营报告、企业经营报告、全局概览报告。
 - 只问地块状态、天气、设备详情或 WOFOST 信息，且没有要求生成报告。
 - 闲聊、知识问答、总结、翻译、纯文本任务。
@@ -140,7 +149,16 @@ description: Generates plot-based SONO agricultural HTML reports from SONO-MCP b
 {
   "skill_name": "sono-report",
   "script_path": "scripts/generate_report.py",
-  "args": ["--output-dir", "/app/report/", "--strict"],
+  "args": [
+    "--output-dir", "/app/report/",
+    "--strict",
+    "--report-no", "{report_no}",
+    "--report-url", "{report_url}",
+    "--plot-id", "{plot_id}",
+    "--cid", "{cid}",
+    "--entity-id", "{entity-id}",
+    "--entity-info-id", "{entity-info-id}"
+  ],
   "input": "<REPORT_DATA JSON>"
 }
 ```
@@ -177,5 +195,6 @@ description: Generates plot-based SONO agricultural HTML reports from SONO-MCP b
 - [ ] 标题和文件名使用真实地块名称，不是 `plot_id`。
 - [ ] 页面不显示 `undefined`、`null`、`NaN`。
 - [ ] 页脚不展示具体 MCP 接口名，只写真实地块数据记录来源。
-- [ ] 最终 HTML 已保存到 `/app/report/`。
-- [ ] 用户可见回复只包含或明确包含 `<sono-report>https://sonoagi.com/report/{file}</sono-report>`。
+- [ ] 最终 HTML 已按 `report_url` 的文件名保存到 `/app/report/`。
+- [ ] 成功时已回写报告状态 `status=1`；失败时已尽量回写 `status=2`。
+- [ ] 用户可见回复只包含或明确包含 `<sono-report>{report_url}</sono-report>`。

@@ -11,7 +11,7 @@
 
 ## 触发与边界
 
-使用 `sono-report` 仅限用户明确要求生成**地块**报告、地块 HTML、地块日报/周报/月报、地块细分模块报告、导出或保存地块报告。
+使用 `sono-report` 仅限后端内部第二次 LLM 报告渲染对话：prompt 必须包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url`。普通用户首次要求生成/导出/创建报告时，必须先使用 `sono-report-request` 保存报告记录，不要直接使用本 Skill。
 
 普通查询仍使用 `call-mcp-tools`：一次问题只调最匹配的一个 MCP 工具，不生成 HTML。
 
@@ -30,27 +30,37 @@
 
 ## 执行步骤
 
-1. 判断用户是否要求地块报告；若是基地/企业报告，停止并请用户提供地块范围。
-2. 读取 `sono-mcp/SKILL.md`，按其参数纪律调用 MCP。
-3. 必须先调用或取得 `get_plot_info` 结果，以获得真实 `payload.name`。
-4. 判断报告范围：
+1. 确认当前是后端内部第二次 LLM 对话，并从 `##系统参数` 提取 `plot_id`、`cid`、`entity-id`、`entity-info-id`、`plot_name`、`report_type`、`report_no`、`report_url`；缺少 `report_no` 或 `report_url` 时停止，不要自行创建新地址。
+2. 判断 `##用户问题` 是否要求地块报告；若是基地/企业报告，停止并请用户提供地块范围。
+3. 读取 `sono-mcp/SKILL.md`，按其参数纪律调用 MCP。
+4. 必须先调用或取得 `get_plot_info` 结果，以获得真实 `payload.name`。
+5. 判断报告范围：
    - 整体地块报告：调用 `get_plot_warning`，并用同一 `plot_id` 调用地块类 `get_report_by_type`：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`。空结果或失败模块跳过；有多天数据时必须转成趋势图和分析项。
    - 细分模块报告：只调用用户指定的 `get_report_by_type.type`，但报告正文要比整体报告中的卡片更深入，仍要从多天数据中挖掘趋势、异常点、极值、变化幅度、原因和建议。
    - 天气、设备、WOFOST 模型日报：只有用户明确要求对应内容时追加。
-5. 按已调用工具读取对应 reference：`tool-plot-info.md`、`tool-plot-warning.md`、`tool-report-by-type.md`、`tool-weather.md`、`tool-device-info.md`、`tool-wofost-report.md`。
-6. 构造原始 `REPORT_DATA` JSON：`get_plot_warning` 写入 `plotWarnings[]`，`get_report_by_type` 写入 `moduleReports[]`。`moduleReports[]` 内部字段开放，可写 `trendSeries`、`timeSeries`、`dailyData`、`charts[]`、`analysisItems`、`insights`、`findings`、`sections`、`tables`；不要为了贴合固定字段而丢掉可分析数据。
-7. 用 `execute_skill_script` 执行一体化脚本，并把 `REPORT_DATA` 放入 `input` 字段：
+6. 按已调用工具读取对应 reference：`tool-plot-info.md`、`tool-plot-warning.md`、`tool-report-by-type.md`、`tool-weather.md`、`tool-device-info.md`、`tool-wofost-report.md`。
+7. 构造原始 `REPORT_DATA` JSON：`get_plot_warning` 写入 `plotWarnings[]`，`get_report_by_type` 写入 `moduleReports[]`。`moduleReports[]` 内部字段开放，可写 `trendSeries`、`timeSeries`、`dailyData`、`charts[]`、`analysisItems`、`insights`、`findings`、`sections`、`tables`；不要为了贴合固定字段而丢掉可分析数据。
+8. 用 `execute_skill_script` 执行一体化脚本，并把 `REPORT_DATA` 放入 `input` 字段：
 
 ```json
 {
   "skill_name": "sono-report",
   "script_path": "scripts/generate_report.py",
-  "args": ["--output-dir", "/app/report/", "--strict"],
+  "args": [
+    "--output-dir", "/app/report/",
+    "--strict",
+    "--report-no", "{report_no}",
+    "--report-url", "{report_url}",
+    "--plot-id", "{plot_id}",
+    "--cid", "{cid}",
+    "--entity-id", "{entity-id}",
+    "--entity-info-id", "{entity-info-id}"
+  ],
   "input": "<REPORT_DATA JSON>"
 }
 ```
 
-8. 读取脚本输出 JSON 中的 `sono_report`，原样返回给用户。格式必须是 `<sono-report>https://sonoagi.com/report/{file}</sono-report>`，不要把本地 `final_html` 路径作为用户可见结果。
+9. 读取脚本输出 JSON 中的 `sono_report`，原样返回给调用方。格式必须是 `<sono-report>{report_url}</sono-report>`，不要把本地 `final_html` 路径作为用户可见结果。
 
 ### 手动命令行排查
 
@@ -84,7 +94,7 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - MCP 空结果：不是错误；隐藏模块或写“暂无相关数据”。
 - 预置脚本失败：不要生成报告，先补齐数据。
 - 渲染脚本失败：修正 `REPORT_DATA` 或模板占位符后重试。
-- 保存脚本失败：报告保存失败；说明原因并保留 `$WORKDIR` 路径供排查。
+- 保存脚本失败：报告保存失败；脚本应尽量回写 `status=2`，说明原因并保留 `$WORKDIR` 路径供排查。
 
 ## 验证清单
 
@@ -99,5 +109,6 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - 不显示 `undefined`、`null`、`NaN`。
 - WOFOST 数据表述为“模型模拟/预测”。
 - 页脚不展示 `get_plot_info`、`get_report_by_type` 等具体接口名，只写真实地块数据记录来源。
-- 最终文件路径位于 `/app/report/`。
-- 用户可见结果使用 `<sono-report>https://sonoagi.com/report/{file}</sono-report>` 包裹。
+- 最终文件路径位于 `/app/report/`，且文件名来自 `report_url`。
+- 成功时已回写 `status=1`；失败时已尽量回写 `status=2`。
+- 用户可见结果使用 `<sono-report>{report_url}</sono-report>` 包裹。

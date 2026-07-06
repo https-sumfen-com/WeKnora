@@ -3,11 +3,12 @@
 
 Preferred execute_skill_script usage:
   script_path: scripts/request_report.py
-  input: <JSON containing query, plot_id, cid, entity-id, entity-info-id, plot_name>
+  input: <JSON containing query, user_id, plot_id, cid, entity-id, entity-info-id, plot_name>
 
-The script generates report_no, builds the required headers and JSON body,
-POSTs to the hard-coded default endpoint, and prints a JSON result containing
-`sono_report` for the agent to return to the frontend.
+The script generates report_no, infers report_type from the user query,
+builds the required headers and JSON body, POSTs to the hard-coded default
+endpoint, and prints a JSON result containing `sono_report` for the agent to
+return to the frontend.
 """
 
 from __future__ import annotations
@@ -24,6 +25,40 @@ PUBLIC_REPORT_BASE_URL = "https://sonoagi.com/report/"
 DEFAULT_REPORT_ENDPOINT = "https://api.sumfen.com/api/support/llm/reports/common"
 DEFAULT_AGENT_ID = "builtin-wiki-fixer"
 REQUEST_TIMEOUT_SECONDS = 60
+
+REPORT_TYPE_CN_NAMES = {
+    "overall_report": "整体地块报告",
+    "plot_growth_analysis": "长势分析",
+    "plot_3d_phenotype": "三维表型",
+    "plot_growth_dynamics": "生长动态（wofost）",
+    "plot_seedling_monitoring": "苗情监控",
+}
+
+REPORT_TYPE_KEYWORDS = [
+    ("plot_seedling_monitoring", ("苗情监控", "苗情", "出苗", "幼苗", "苗期")),
+    ("plot_growth_dynamics", ("生长动态", "wofost", "生长模拟", "动态报告")),
+    ("plot_3d_phenotype", ("三维表型", "3d表型", "3d 表型", "三维", "表型")),
+    ("plot_growth_analysis", ("长势分析", "长势", "生长势")),
+    ("overall_report", ("整体地块报告", "整体报告", "地块报告", "综合报告", "总览报告")),
+]
+
+REPORT_TYPE_ALIASES = {
+    "overall_report": "overall_report",
+    "整体地块报告": "overall_report",
+    "整体报告": "overall_report",
+    "地块报告": "overall_report",
+    "plot_growth_analysis": "plot_growth_analysis",
+    "长势分析": "plot_growth_analysis",
+    "plot_3d_phenotype": "plot_3d_phenotype",
+    "三维表型": "plot_3d_phenotype",
+    "plot_growth_dynamics": "plot_growth_dynamics",
+    "生长动态": "plot_growth_dynamics",
+    "生长动态（wofost）": "plot_growth_dynamics",
+    "生长动态(wofost)": "plot_growth_dynamics",
+    "wofost": "plot_growth_dynamics",
+    "plot_seedling_monitoring": "plot_seedling_monitoring",
+    "苗情监控": "plot_seedling_monitoring",
+}
 
 
 class InputError(SystemExit):
@@ -59,9 +94,30 @@ def first_present(payload: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def normalize_report_type(value: str) -> str:
+    report_type = REPORT_TYPE_ALIASES.get(value.strip())
+    if not report_type:
+        report_type = REPORT_TYPE_ALIASES.get(value.strip().lower())
+    if not report_type:
+        supported = ", ".join(REPORT_TYPE_CN_NAMES)
+        raise InputError(f"Unsupported report_type: {value}. Supported: {supported}")
+    return report_type
+
+
+def infer_report_type(query: str) -> str:
+    normalized_query = query.lower().replace(" ", "")
+    for report_type, keywords in REPORT_TYPE_KEYWORDS:
+        for keyword in keywords:
+            if keyword.lower().replace(" ", "") in normalized_query:
+                return report_type
+    supported = "、".join(f"{cn}({code})" for code, cn in REPORT_TYPE_CN_NAMES.items())
+    raise InputError(f"Cannot infer report_type from query. Supported report types: {supported}")
+
+
 def require_fields(payload: dict[str, Any]) -> dict[str, str]:
     values = {
         "query": first_present(payload, "query", "user_query", "userQuestion"),
+        "tgzn_user_id": first_present(payload, "tgzn_user_id", "user_id", "userId", "user-id"),
         "plot_id": first_present(payload, "plot_id", "plotId", "plot-id"),
         "cid": first_present(payload, "cid"),
         "entity-id": first_present(payload, "entity-id", "entity_id", "entityId"),
@@ -72,21 +128,28 @@ def require_fields(payload: dict[str, Any]) -> dict[str, str]:
     missing = [key for key, value in values.items() if key != "agent_id" and not value]
     if missing:
         raise InputError("Missing required fields: " + ", ".join(missing))
+
+    explicit_report_type = first_present(payload, "report_type", "reportType", "report-type")
+    values["report_type"] = normalize_report_type(explicit_report_type) if explicit_report_type else infer_report_type(values["query"])
+    values["report_type_cn_name"] = REPORT_TYPE_CN_NAMES[values["report_type"]]
+    values["title"] = f"{values['plot_name']}【{values['report_type_cn_name']}】"
     return values
 
 
-def build_query(values: dict[str, str], report_no: str) -> str:
+def build_query(values: dict[str, str], report_no: str, report_url: str) -> str:
     return "\n".join([
-        "#用户提问",
+        "##用户问题",
         values["query"],
         "",
-        "#系统参数",
+        "##系统参数",
         f"- plot_id: {values['plot_id']}",
         f"- cid: {values['cid']}",
         f"- entity-id: {values['entity-id']}",
         f"- entity-info-id: {values['entity-info-id']}",
         f"- plot_name: {values['plot_name']}",
+        f"- report_type: {values['report_type']}",
         f"- report_no: {report_no}",
+        f"- report_url: {report_url}",
     ])
 
 
@@ -166,11 +229,14 @@ def main() -> None:
         "entity-info-id": values["entity-info-id"],
     }
     body = {
-        "related_id": values["plot_id"],
+        "related_id": int(values["plot_id"]),
         "report_no": report_no,
         "report_url": report_url,
         "agent_id": values["agent_id"],
-        "query": build_query(values, report_no),
+        "query": build_query(values, report_no, report_url),
+        "tgzn_user_id": int(values["tgzn_user_id"]),
+        "title": values["title"],
+        "report_type": values["report_type"],
     }
 
     status, response_json = post_json(endpoint, headers, body)

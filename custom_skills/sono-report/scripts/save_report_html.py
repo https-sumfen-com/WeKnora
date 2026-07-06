@@ -3,11 +3,12 @@
 
 Usage:
   python scripts/save_report_html.py report.html report_data.json [--output-dir /app/report/]
+  python scripts/save_report_html.py report.html report_data.json --output-filename <report-no>.html
 
-The filename is: <plot-name>_<report-date>_<generated-time>.html
+Without --output-filename, the filename is:
+<plot-name>_<report-date>_<generated-time>.html
 For plot/WOFOST/weather reports this script refuses plot_id-like names such as
-"地块 23181" because user-facing report titles and filenames must use the real
-plot name.
+"地块 23181" because user-facing report titles must use the real plot name.
 """
 
 from __future__ import annotations
@@ -101,11 +102,27 @@ def safe_filename_part(value: str) -> str:
     return cleaned[:80] or "sono-report"
 
 
+def validate_output_filename(value: str) -> str:
+    filename = value.strip()
+    if not filename:
+        raise SystemExit("--output-filename must not be empty")
+    if "/" in filename or "\\" in filename:
+        raise SystemExit("--output-filename must be a filename, not a path")
+    if filename in {".", ".."} or ".." in filename:
+        raise SystemExit("--output-filename must not contain path traversal")
+    if Path(filename).name != filename:
+        raise SystemExit("--output-filename must be a plain filename")
+    if not filename.lower().endswith(".html"):
+        raise SystemExit("--output-filename must end with .html")
+    return filename
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Save generated SONO report HTML")
     parser.add_argument("html_file", help="Generated HTML file to save")
     parser.add_argument("report_data", help="Normalized REPORT_DATA JSON file")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Destination directory")
+    parser.add_argument("--output-filename", help="Exact output filename, used when report_url/report_no was pre-created")
     args = parser.parse_args()
 
     html_path = Path(args.html_file)
@@ -118,14 +135,20 @@ def main() -> None:
     if not plot_name:
         raise SystemExit("Missing real plot name. Do not save reports with plot_id as the title or filename.")
 
-    date_part = safe_filename_part(report_date(data))
-    time_part = safe_filename_part(generated_time(data))
-    name_part = safe_filename_part(plot_name)
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         raise SystemExit("--output-dir must be an absolute path, normally /app/report/")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{name_part}_{date_part}_{time_part}.html"
+
+    if args.output_filename:
+        output_filename = validate_output_filename(args.output_filename)
+    else:
+        date_part = safe_filename_part(report_date(data))
+        time_part = safe_filename_part(generated_time(data))
+        name_part = safe_filename_part(plot_name)
+        output_filename = f"{name_part}_{date_part}_{time_part}.html"
+
+    output_path = output_dir / output_filename
     output_path.write_text(html_path.read_text(encoding="utf-8"), encoding="utf-8")
     print(str(output_path))
 
