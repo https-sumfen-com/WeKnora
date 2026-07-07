@@ -1,6 +1,6 @@
 ---
 name: sono-report
-description: Backend-internal SONO report rendering workflow. Use in the second LLM conversation when the prompt contains ##用户问题, ##系统参数, report_no, and report_url from sono-report-request. Do not use for normal user-facing generate/export/create report requests.
+description: Backend-internal SONO report rendering workflow. Use in the second LLM conversation when the prompt contains ##用户问题, ##系统参数, report_no, and report_url from sono-report-request. Do not use for normal user-facing generate/export/create report requests, and do not invoke agri-operation-workflow during this workflow.
 ---
 
 # SONO 地块 HTML 报告生成
@@ -14,6 +14,8 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 ```text
 地块基础取数 → 按意图补充 4 类专项模块 → 构造论文式 REPORT_DATA → 执行一体化脚本 → 按 demo.html 学术风模板保存 HTML
 ```
+
+本报告渲染流程禁止调用、转交或触发 `agri-operation-workflow`；农事建议只作为报告内容字段整理，不进入农事作业流程编排。
 
 当前活跃模板是 `template.html`；它已按 `demo.html` 的标题页、摘要、数据方法、结果分析、讨论建议、结论附录、图表编号和表格编号风格渲染。不要把报告写成简单指标卡片或口语化总结。
 
@@ -44,6 +46,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 - 只在后端第二次 LLM 对话中使用：必须从 `##用户问题` 读取原始需求，从 `##系统参数` 提取 `plot_id`、`cid`、`entity-id`、`entity-info-id`、`plot_name`、`report_type`、`report_no`、`report_url`。
 - 必须把 `report_no`、`report_url` 和 header 参数传给 `scripts/generate_report.py`；报告文件名和公开 URL 以 `report_url` 为准，不再重新生成报告地址。
 - 普通用户直接要求生成/导出/创建报告时，不要用本 Skill；已有 `report_no` 和 `report_url` 时，也不要再调用 `sono-report-request`。
+- 本 Skill 执行过程中禁止调用、转交或触发 `agri-operation-workflow`；即使报告包含农事建议，也只写入 `REPORT_DATA` 和 HTML，不创建作业流程。
 - 只生成基于地块的报告：报告内容必须围绕一个真实地块，不包含 `get_summary_base`、基地报告、企业报告或全局概览。
 - 整体地块报告主数据源必须是 `get_plot_info`，并应补充 `get_plot_warning` 与地块类 `get_report_by_type` 细分模块；天气、设备、WOFOST 模型日报按用户意图追加。
 - 细分模块报告使用 `get_report_by_type` 的指定 `type`，仍需用 `get_plot_info` 或上下文获得真实地块名称后再生成 HTML。

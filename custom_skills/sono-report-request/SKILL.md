@@ -1,6 +1,6 @@
 ---
 name: sono-report-request
-description: Primary and authoritative workflow for all SONO report generation requests. Use when the user asks to generate/export/create any agricultural report, including overall plot reports, growth analysis, 3D phenotype, WOFOST growth dynamics, or seedling monitoring. Directly call this skill's request flow and do not invoke sono-report, call-mcp-tools, or chart-visualization first.
+description: Primary and authoritative workflow for all SONO report generation requests. Use when the user asks to generate/export/create any agricultural report, including overall plot reports, growth analysis, 3D phenotype, WOFOST growth dynamics, or seedling monitoring. Directly call this skill's request flow and do not invoke sono-report, call-mcp-tools, chart-visualization, or agri-operation-workflow first.
 ---
 
 # SONO 报告请求
@@ -13,15 +13,16 @@ description: Primary and authoritative workflow for all SONO report generation r
 
 当普通用户表达“生成报告 / 导出报告 / 创建报告 / 生成苗情监控报告 / 生成长势分析报告 / 生成整体地块报告 / 生成三维表型报告 / 生成生长动态报告”等意图时，必须直接执行本 Skill 的请求流程。
 
-不要先调用：
+不要先调用，且本 Skill 执行过程中禁止转交或触发：
 
 - `sono-report`
 - `call-mcp-tools`
 - `chart-visualization`
+- `agri-operation-workflow`
 
 例外：如果当前 prompt 已包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url`，说明已经进入后端第二次 LLM 报告渲染对话；不要再次调用本 Skill，改用 `sono-report` 真正生成报告文件。
 
-本 Skill 的 API 后端负责保存报告记录，并用本 Skill 传入的 `query` 再发起一次内部 LLM 对话；第二次对话应调用 `sono-report` 取数、渲染、保存报告并回写状态。
+本 Skill 的 API 后端负责保存报告记录，并用本 Skill 传入的 `query` 再发起一次内部 LLM 对话；第二次对话应调用 `sono-report` 取数、渲染、保存报告并回写状态。整个两阶段报告流程都不使用 `agri-operation-workflow`。
 
 使用 `execute_skill_script` 执行 Python 脚本；由脚本统一生成 `report_no`、从用户问题推断 `report_type`、组装 header/body、发起 POST，并输出 `<sono-report>...</sono-report>`：
 
