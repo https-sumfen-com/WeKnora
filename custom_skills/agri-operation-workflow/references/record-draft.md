@@ -22,7 +22,7 @@ Before calling `add_farming_record`, verify:
 - target identity: `base_id` and `plot_id` when the operation is plot-bound
 - operation identity: `matter_id`
 - operation time: explicit `operate_time`
-- operator: `work_user` or `tgzn_user_id` when required by upstream
+- operator: default to `user_id` when present; send it as `work_user` and also as `tgzn_user_id` when required by upstream
 - materials: confirmed `goodsList` when the operation uses agricultural materials
 
 Optional fields may be passed only when known: `address`, `location`, `area`, `area_unit`, `plot_crop_id`, `tgzn_dept_id`.
@@ -61,6 +61,7 @@ Use the field names expected by the `call-mcp-tools` skill:
   "area": 2.65,
   "area_unit": "亩",
   "goodsList": [],
+  "work_user": 73,
   "tgzn_user_id": 73,
   "tgzn_entity_id": 1,
   "tgzn_dept_id": 1
@@ -68,6 +69,8 @@ Use the field names expected by the `call-mcp-tools` skill:
 ```
 
 Omit unknown optional fields. Do not send placeholders such as `0`, `unknown`, empty coordinates, or guessed dates unless the upstream contract explicitly defines that value as valid.
+
+If `user_id` is available in server/session/gateway context, use it as the default operator. Do not ask the user to choose an operator unless the user explicitly wants a different operator or `user_id` is missing.
 
 ## Result Handling
 

@@ -24,6 +24,7 @@ Rules:
 - `formType` must be `agri-material-usage`.
 - `goodsList` must be a complete array, not a streamed string fragment.
 - Use `goodsList: []` when MCP returns no valid material candidates.
+- Do not pass through every inventory row returned by `get_agri_input_list`; include only candidates matched to the farming operation type.
 - Do not include plot, address, operation, task, or old farming-form fields in this block.
 
 ## Non-Streaming Payload
@@ -90,6 +91,7 @@ Validation:
 - Default `is_formula` to `0`.
 - Default `unit` to `""`.
 - Only use `mu_usage > 0` when MCP or the user supplied that value. Otherwise use `0`.
+- Do not copy `dosage`, package specification, stock quantity, or inventory balance into `mu_usage`.
 
 ## User Submit Message
 
