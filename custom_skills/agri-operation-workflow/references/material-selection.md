@@ -15,7 +15,7 @@ Use only:
 - inventory row fields from `get_agri_input_list`, especially `name`, `stock_goods.name`, `stock_goods.type`, `stock_goods.unit`, `price`, and IDs
 - explicit user choice
 
-Do not use model knowledge to invent product names, IDs, units, prices, stock, or usage.
+Do not use model knowledge to invent product names, IDs, units, prices, or stock. Model agronomic experience may be used only to recommend the internal per-mu rate that is converted into frontend `num` and `dosage`.
 
 ## Filtering Rules
 
@@ -42,9 +42,10 @@ When several rows match:
 
 ## Usage Rules
 
-- Set `mu_usage` from explicit MCP or user usage only.
-- If no usage is provided, set `mu_usage: 0`.
-- Never treat stock balance `num`, package specification, `dosage`, price, or model agronomy knowledge as `mu_usage`.
+- For material-related operation recommendations, actively resolve an internal recommended per-mu rate; see `usage-recommendation.md`.
+- `build-panel` converts the per-mu rate to frontend total `num` using `record_draft.area`, then computes `dosage = num / area * 1000`.
+- If no reasonable usage recommendation or area exists after checking those sources, use `num: 0` and `dosage: 0`.
+- Never treat stock balance `num`, package specification, `dosage`, price, material concentration, or product-name numbers as the per-mu rate.
 - Keep `is_formula: 0`; `get_formula_list` is not part of this workflow.
 
 ## Empty Result

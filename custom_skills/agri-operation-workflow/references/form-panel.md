@@ -2,6 +2,8 @@
 
 Read this reference before returning the material confirmation panel or handling a submitted panel.
 
+Prefer `scripts/agri_material_payload.py build-panel` to create this block from `get_agri_input_list` rows. Hand-build only when script execution is unavailable. Keep the script-produced `pending_draft` internally; do not include it in the frontend block.
+
 ## Assistant Block
 
 Return a `form-panel` block when the user has ordered a farming operation and material confirmation is required.
@@ -25,7 +27,9 @@ Rules:
 - `goodsList` must be a complete array, not a streamed string fragment.
 - Use `goodsList: []` when MCP returns no valid material candidates.
 - Do not pass through every inventory row returned by `get_agri_input_list`; include only candidates matched to the farming operation type.
+- For material-related recommendations, include a recommended total `num` when there is MCP, knowledge-base, technical-standard, user-condition, or model agronomic basis for a per-mu rate and known area.
 - Do not include plot, address, operation, task, or old farming-form fields in this block.
+- Do not include `pending_draft`, `record_draft`, original inventory rows, token, or system parameters in this block. Those are internal state for `build-submit`.
 
 ## Non-Streaming Payload
 
@@ -51,7 +55,7 @@ When returning structured JSON in `answer`, use the frontend parser schema marke
 }
 ```
 
-`schemaVersion` is only the frontend structured-message marker. It does not mean this workflow uses `plant-agent-response-contract`.
+`schemaVersion` is only the frontend structured-message marker for this farming-operation workflow.
 
 ## Streaming Events
 
@@ -75,7 +79,7 @@ interface AgriMaterialUsageGoods {
   stock_goods_id: number
   stock_record_id?: number
   is_formula?: number
-  mu_usage: number
+  num: number
   price: number
   unit?: string
   dosage?: number
@@ -86,12 +90,13 @@ Validation:
 
 - `goods_name` must be non-empty.
 - `stock_goods_id` must be greater than `0`.
-- `mu_usage` must be greater than or equal to `0`.
+- `num` must be greater than or equal to `0`.
 - `price` must be greater than or equal to `0`.
 - Default `is_formula` to `0`.
 - Default `unit` to `""`.
-- Only use `mu_usage > 0` when MCP or the user supplied that value. Otherwise use `0`.
-- Do not copy `dosage`, package specification, stock quantity, or inventory balance into `mu_usage`.
+- Use `num > 0` when MCP, a knowledge-base/technical-standard source, explicit user conditions, or model agronomic experience support a per-mu recommendation and area is known. Otherwise use `0`.
+- `dosage` is computed as `num / area * 1000`; do not copy package specification, stock quantity, inventory balance, or product-name numbers into `dosage`.
+- Do not set `num: 0` merely because the user did not type a value; first check whether the recommendation itself has a supported per-mu rate and whether area is known.
 
 ## User Submit Message
 
@@ -113,4 +118,6 @@ Handle only messages matching all three fields:
 - `formType === "agri-material-usage"`
 - `tag === "agri_material_usage_confirm"`
 
-The submitted `goodsList` is the user's final material decision. It does not include plot, address, operation, task, or old farming-form fields.
+The submitted `goodsList` is the user's final material decision. It carries total `num`, not per-mu `mu_usage`. It does not include plot, address, operation, task, or old farming-form fields.
+
+It does not include original inventory rows. Before creating the record, validate submitted items against the original `get_agri_input_list` rows, then build the compact submit payload as described in `goodslist-submit.md`.
