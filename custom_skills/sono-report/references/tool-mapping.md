@@ -106,15 +106,14 @@
 
 参考：`custom_skills/sono-mcp/references/tool-report-by-type.md`
 
-整体地块报告默认尝试地块类模块：
+整体地块报告默认尝试并综合 4 类地块专项模块：
 
 - `plot_growth_analysis`
 - `plot_3d_phenotype`
 - `plot_growth_dynamics`
 - `plot_seedling_monitoring`
-- `plot_wofost`
 
-`device_analysis` 只有在有明确 `device_id` 且用户要求设备分析时调用。用户只要求某个细分报告时，只调用并展示该 `type`。
+`plot_growth_dynamics` 对应生长动态（WOFOST）报告，`../sono-mcp/wofost-daily-report.csv` 属于该模块的数据来源。`plot_wofost` 不作为整体报告默认第五模块，除非用户明确要求单独 WOFOST 模型报告。`device_analysis` 只有在有明确 `device_id` 且用户要求设备分析时调用。用户只要求某个细分报告时，只调用并展示该 `type`。
 
 通用映射到 `moduleReports[]`：
 
@@ -136,14 +135,16 @@
 
 - 不要被字段名限制。`trendSeries`、`timeSeries`、`dailyData`、`rows`、`records`、`charts[].rows`、`charts[].labels + series[]` 都可以进入 `moduleReports`；模板会尽量渲染。
 - Agent 可以自由挖掘更多分析项，但每一项必须能追溯到 payload 中的时间序列、指标、风险或建议字段。
+- 表格、趋势和分布图可以使用 `trendSeries`、`timeSeries`、`dailyData`、`charts[].labels + series[]` 或表格行；没有有效数值、全空行列或字段不匹配时跳过，不填占位行。
+- `level`、颜色或风险等级字段只用于内部状态和样式，页面可见说明应写成专业中文，不直接输出 `blue/red/green/amber` 等原始值。
 - Python 预处理只做底线校验，不会因为细分模块来源或开放字段名不同而丢弃内容；不要把真实分析数据压缩成一句泛泛结论。
 
 类型专属处理：
 
-- `plot_growth_analysis`：挖掘 NDVI/LAI/覆盖度多天趋势、阶段变化、异常区域、作物/批次关联和建议。
-- `plot_3d_phenotype`：挖掘株高、冠层覆盖、LAI、生物量的分布/变化，识别表型异常或空间差异。
-- `plot_growth_dynamics`：必须形成趋势图或趋势分析项，包含最近值、极值、变化幅度、异常日期；不要逐点展示全量序列。
-- `plot_seedling_monitoring`：挖掘出苗率、苗数/密度、整齐度、缺苗断垄的多天变化和补苗优先级。
+- `plot_growth_analysis`：挖掘 NDVI/LAI/覆盖度多天趋势、阶段变化、异常区域、作物/批次关联和建议；报告写成“遥感长势定量分析报告”。
+- `plot_3d_phenotype`：挖掘株高、冠层覆盖、LAI、生物量的分布/变化，识别表型异常或空间差异；报告写成“三维表型结构与空间异质性分析报告”。
+- `plot_growth_dynamics`：必须形成趋势图或趋势分析项，包含 DVS、LAI、TAGP、WSO、RD、SM、TRA/EVS、NuptakeTotal 的最近值、极值、变化幅度和模型阶段解释；`wofost-daily-report.csv` 无日期列时使用“模型日/序列编号”，不要逐点展示全量序列，不要说成实测。
+- `plot_seedling_monitoring`：挖掘出苗率、苗数/密度、整齐度、缺苗断垄的多天变化和补苗优先级；报告写成“苗情监测与建群质量评估报告”。
 - `plot_wofost`：按模型模拟/报告口径展示，多天模型序列进入 `trendSeries` 或 `charts[]`；不要说成实测产量。
 - `device_analysis`：挖掘在线率、最后通信、核心遥测、异常时段、连续离线/波动规律和维护建议。
 
