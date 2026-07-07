@@ -92,7 +92,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 | `area` / `area_unit` | 仅 `add_farming_record`；作业面积和单位，必须来自用户或表单                                                                                |
 | `matter_id` | 仅 `add_farming_record`；农事操作事项 ID，可从 `get_farming_operation_list` 的用户选择结果取得                                                         |
 | `operate_time` | 仅 `add_farming_record`；作业时间，传明确日期时间字符串，不把模糊时间原样传入                                                                      |
-| `goodsList` | 仅 `add_farming_record`；农资明细数组，条目字段不固定，保留用户/表单/上游选择中的真实字段                                                             |
+| `goodsList` | 仅 `add_farming_record`；提交条目使用 `goods_name`、`stock_goods_id`、`is_formula`、`num`、`price`、`unit`、`dosage` 等字段，值必须来自用户/表单/配方计算结果 |
 | `tgzn_user_id` / `tgzn_entity_id` / `tgzn_dept_id` | 仅 `add_farming_record`；来自网关/会话/表单，不要猜测                                                            |
 
 ## 各工具触发与参数
@@ -236,7 +236,7 @@ description: "Use when the server-side Agent must precisely choose and call curr
 - 这是写操作；必须确认用户有明确保存/提交意图。
 - 必须有企业标识：优先传 `cid`；没有 `cid` 但有 `tgzn_entity_id` 时，服务端会用 `tgzn_entity_id` 作为上游 companyId。
 - 关键字段只能来自上下文/页面表单/用户输入/用户选择结果。缺少地块或基地、作业事项、作业时间、操作人、必要农资明细时先追问。
-- `goodsList` 条目字段不固定；从 `get_agri_input_list` / `get_formula_list` 选择后的原始字段可以保留，禁止自行编造库存、单价、配比、用量。
+- `goodsList` 提交格式详见下例；`num`、`dosage` 是本次作业提交值，必须来自用户/表单/配方计算结果，不要把农资列表返回的库存余量直接当成本次用量。
 - 返回成功后聚焦是否保存成功、记录 ID/编号、地块/基地、事项、时间和农资明细，详见 `references/tool-farming-record.md`。
 
 ```json
@@ -252,9 +252,13 @@ description: "Use when the server-side Agent must precisely choose and call curr
   "area_unit": "亩",
   "goodsList": [
     {
-      "goods_name": "高钾肥",
-      "stock_goods_id": 5,
-      "custom_ratio": "1:2"
+      "goods_name": "吡虫啉",
+      "stock_goods_id": 15,
+      "is_formula": 0,
+      "num": 642,
+      "price": 10,
+      "unit": "",
+      "dosage": 5304.47
     }
   ],
   "tgzn_user_id": 73,
