@@ -15,7 +15,7 @@
 
 普通查询仍使用 `call-mcp-tools`：一次问题只调最匹配的一个 MCP 工具，不生成 HTML。
 
-本 Skill 不生成基地报告、企业报告、全局概览报告，也不使用 `get_summary_base`。如果用户要求基地/企业报告，应说明当前 Skill 只支持地块报告，并请用户提供地块名称或 `plot_id`。整体地块报告指同一地块下的基础信息、预警、细分模块组合，不是基地/企业整体报告。
+本 Skill 不生成基地报告、企业报告、全局概览报告，也不使用 `get_summary_base`。如果用户要求基地/企业报告，应说明当前 Skill 只支持地块报告，并请用户提供地块名称或 `plot_id`。整体地块报告指同一地块下的基础信息、预警和 4 类专项模块综合，不是基地/企业整体报告。所有报告都按 `demo.html` 风格生成论文式技术报告。
 
 ## 地块报告章节
 
@@ -35,11 +35,11 @@
 3. 读取 `sono-mcp/SKILL.md`，按其参数纪律调用 MCP。
 4. 必须先调用或取得 `get_plot_info` 结果，以获得真实 `payload.name`。
 5. 判断报告范围：
-   - 整体地块报告：调用 `get_plot_warning`，并用同一 `plot_id` 调用地块类 `get_report_by_type`：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`。空结果或失败模块跳过；有多天数据时必须转成趋势图和分析项。
-   - 细分模块报告：只调用用户指定的 `get_report_by_type.type`，但报告正文要比整体报告中的卡片更深入，仍要从多天数据中挖掘趋势、异常点、极值、变化幅度、原因和建议。
+   - 整体地块报告：调用 `get_plot_warning`，并用同一 `plot_id` 调用地块类 `get_report_by_type`：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`。空结果或失败模块跳过；有多天数据时必须转成趋势图和分析项。`plot_growth_dynamics` 归入 WOFOST 生长动态，不再默认追加 `plot_wofost`。
+   - 细分模块报告：只调用用户指定的 `get_report_by_type.type`，但报告正文要比整体报告中的卡片更深入，必须形成完整论文式结构，仍要从多天数据中挖掘趋势、异常点、极值、变化幅度、原因和建议。
    - 天气、设备、WOFOST 模型日报：只有用户明确要求对应内容时追加。
 6. 按已调用工具读取对应 reference：`tool-plot-info.md`、`tool-plot-warning.md`、`tool-report-by-type.md`、`tool-weather.md`、`tool-device-info.md`、`tool-wofost-report.md`。
-7. 构造原始 `REPORT_DATA` JSON：`get_plot_warning` 写入 `plotWarnings[]`，`get_report_by_type` 写入 `moduleReports[]`。`moduleReports[]` 内部字段开放，可写 `trendSeries`、`timeSeries`、`dailyData`、`charts[]`、`analysisItems`、`insights`、`findings`、`sections`、`tables`；不要为了贴合固定字段而丢掉可分析数据。
+7. 构造原始 `REPORT_DATA` JSON：`get_plot_warning` 写入 `plotWarnings[]`，`get_report_by_type` 写入 `moduleReports[]`。`moduleReports[]` 内部字段开放，可写 `trendSeries`、`timeSeries`、`dailyData`、`charts[]`、`analysisItems`、`insights`、`findings`、`sections`、`tables`；可选写入 `paper.abstract`、`paper.keywords`、`paper.methods`、`paper.findings`、`paper.discussion`、`paper.conclusions`、`paper.limitations`。不要为了贴合固定字段而丢掉可分析数据。
 8. 用 `execute_skill_script` 执行一体化脚本，并把 `REPORT_DATA` 放入 `input` 字段：
 
 ```json
@@ -102,11 +102,15 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - 中间文件位于 `$WORKDIR`，不在 Skill 根目录。
 - HTML 以 `<!DOCTYPE html>` 开头。
 - `dataSources` 不包含 `get_summary_base`。
-- 整体地块报告已尝试写入 `plotWarnings[]` 和可取得的 `moduleReports[]`。
+- 整体地块报告已尝试写入 `plotWarnings[]` 和 4 类专项 `moduleReports[]`：长势分析、三维表型、生长动态、苗情监控。
+- 报告包含标题页、摘要、数据来源与处理方法、结果与分析、讨论与农事建议、结论与附录。
 - 不展示播种进度图或地块结构图；相关信息只作为 KPI、文本或地块生长状态进度条呈现。
 - 细分模块报告只写入用户指定的 `moduleReports[].type`，但模块内部要包含足够详细的趋势图和分析项。
 - 标题不是 `plot_id` 风格。
 - 不显示 `undefined`、`null`、`NaN`。
+- 风险、建议、分析项必须有真实标题或正文；没有有效内容时跳过，不能渲染空白风险事项。
+- 表格和图表必须有有效行、有效列和真实数值；字段不匹配或全空时跳过，不展示空表或空图。
+- `level`、`green`、`blue`、`amber`、`red` 等状态值只作内部等级/样式，不作为页面可见说明直接输出。
 - WOFOST 数据表述为“模型模拟/预测”。
 - 页脚不展示 `get_plot_info`、`get_report_by_type` 等具体接口名，只写真实地块数据记录来源。
 - 最终文件路径位于 `/app/report/`，且文件名来自 `report_url`。

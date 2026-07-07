@@ -12,8 +12,10 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 工作流固定为：
 
 ```text
-地块基础取数 → 按意图补充预警/细分模块 → 构造 REPORT_DATA → 执行一体化脚本 → 返回最终 HTML 路径
+地块基础取数 → 按意图补充 4 类专项模块 → 构造论文式 REPORT_DATA → 执行一体化脚本 → 按 demo.html 学术风模板保存 HTML
 ```
+
+当前活跃模板是 `template.html`；它已按 `demo.html` 的标题页、摘要、数据方法、结果分析、讨论建议、结论附录、图表编号和表格编号风格渲染。不要把报告写成简单指标卡片或口语化总结。
 
 优先用 `execute_skill_script` 执行一体化脚本。`script_path` 必须是 Skill 内的脚本相对路径，不能写 `python3`、`python` 或绝对解释器路径：
 
@@ -60,6 +62,13 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 - `charts` 只用于有分析价值的趋势图，例如 WOFOST `biomassTrend` 或专项模块内部图表；不要生成播种进度/地块结构图。
 - 播种进度和地块结构不作为图表展示；需要体现时只放入 `overview.kpis[]` 或 `plots[]` 的文本/进度字段。
 - 专项分析不要只摘 3 个指标。必须从 `get_report_by_type` 返回的数据里主动挖掘多天趋势、异常点、极值、变化幅度、风险原因和建议，写入 `moduleReports[].trendSeries`、`analysisItems`、`sections`、`tables` 或 `charts[]`。字段允许开放扩展，模板会尽量渲染。
+- 每种报告都必须按论文式结构组织：摘要与关键词、数据来源与处理方法、结果与分析、讨论与农事建议、结论与附录。可选写入 `paper.abstract`、`paper.keywords`、`paper.methods`、`paper.findings`、`paper.discussion`、`paper.conclusions`、`paper.limitations`。
+- `overall_report` 只汇总 4 类专项：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`；不要把 `plot_wofost` 作为默认第五模块。
+- `plot_growth_dynamics` 的 WOFOST 日序列来自 `../sono-mcp/wofost-daily-report.csv`，属于生长动态报告。CSV 无日期列时使用“模型日/序列编号”作图表标签，禁止编造日期；所有相关指标必须称为模型模拟/预测。
+- 文风必须是学术、论文、技术报告风：证据化、克制、可追溯；不要写营销话术，不写未计算的显著性检验、p 值或因果断言。
+- 风险、建议、表格行和图表序列必须有真实可展示字段；无有效数据时跳过，不生成空白条目、空表或空图。
+- `level`、`green`、`blue`、`amber`、`red` 等状态值只作为内部样式/风险等级，不要作为页面可见说明直接输出；可见文本必须转成专业中文描述。
+- 整体报告必须围绕 4 类专项形成综合证据矩阵；缺失模块只说明未取得数据，不生成示例指标、风险或结论。
 
 ## When to use
 
@@ -90,7 +99,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 
 禁止调用或展示 `get_summary_base`。如果用户要求基地/企业报告，应说明当前 `sono-report` 只支持地块报告，并请用户提供地块名称或 `plot_id`。
 
-整体地块报告的 `get_report_by_type` 默认模块：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`。`device_analysis` 只有在有明确 `device_id` 且用户要求设备分析时调用。某个模块返回空或失败时，只跳过该模块，不编造占位内容。
+整体地块报告的 `get_report_by_type` 默认模块：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`。`plot_growth_dynamics` 使用 WOFOST 生长动态数据；`plot_wofost` 不作为整体报告默认模块。`device_analysis` 只有在有明确 `device_id` 且用户要求设备分析时调用。某个模块返回空或失败时，只跳过该模块，不编造占位内容。
 
 > MCP 工具名按运行时注册名调用；若环境暴露服务器前缀，使用完整形式（例如 `SONO-MCP:get_plot_info`）。
 
@@ -119,6 +128,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
     "generatedAt": "YYYY-MM-DD HH:mm:ss",
     "dataSources": ["get_plot_info"]
   },
+  "paper": { "abstract": "", "keywords": [], "methods": [], "findings": [], "discussion": [], "conclusions": [], "limitations": [], "appendixLinks": [] },
   "overview": { "kpis": [] },
   "charts": { "biomassTrend": [] },
   "weather": { "now": null, "forecast": [], "alerts": [] },
