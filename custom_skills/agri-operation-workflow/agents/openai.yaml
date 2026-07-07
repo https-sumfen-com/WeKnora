@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agri Operation Workflow"
+  short_description: "MCP-backed farming operation workflow"
+  default_prompt: "Use $agri-operation-workflow to recommend MCP-backed farming operations, confirm materials, and create a farming record."
