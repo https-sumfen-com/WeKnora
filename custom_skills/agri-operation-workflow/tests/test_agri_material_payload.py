@@ -3,11 +3,15 @@ import json
 import subprocess
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_DIR / "scripts" / "agri_material_payload.py"
+SKILL_MD = SKILL_DIR / "SKILL.md"
+RECORD_DRAFT_MD = SKILL_DIR / "references" / "record-draft.md"
+GOODSLIST_SUBMIT_MD = SKILL_DIR / "references" / "goodslist-submit.md"
 
 
 def run_script(command, payload):
@@ -25,6 +29,47 @@ def run_script(command, payload):
 
 
 class AgriMaterialPayloadTests(unittest.TestCase):
+    def test_skill_description_includes_material_usage_recommendation_triggers(self):
+        text = SKILL_MD.read_text(encoding="utf-8")
+        frontmatter = text.split("---", 2)[1]
+
+        for trigger in (
+            "推荐农资",
+            "推荐用量",
+            "农资用量",
+            "亩用量",
+            "总用量",
+            "form agri-material-usage",
+        ):
+            self.assertIn(trigger, frontmatter)
+
+    def test_confirmation_draft_hides_default_operator_fields_from_user(self):
+        skill_text = SKILL_MD.read_text(encoding="utf-8")
+        draft_text = RECORD_DRAFT_MD.read_text(encoding="utf-8")
+
+        required = (
+            "Do not display `work_user`, `tgzn_user_id`, or `user_id` in the user-facing confirmation draft"
+        )
+        self.assertIn(required, skill_text)
+        self.assertIn(required, draft_text)
+
+    def test_no_material_second_confirmation_is_documented_as_separate_user_turn(self):
+        skill_text = SKILL_MD.read_text(encoding="utf-8")
+        draft_text = RECORD_DRAFT_MD.read_text(encoding="utf-8")
+        submit_text = GOODSLIST_SUBMIT_MD.read_text(encoding="utf-8")
+
+        separate_turn = (
+            "The operation-order message and the final record-creation confirmation must be two separate user turns."
+        )
+        same_turn_forbidden = (
+            "Never call `add_farming_record`, `build-submit`, or any MCP creation tool in the same assistant turn that receives the user's operation order."
+        )
+
+        self.assertIn(separate_turn, skill_text)
+        self.assertIn(same_turn_forbidden, skill_text)
+        self.assertIn(separate_turn, draft_text)
+        self.assertIn(same_turn_forbidden, submit_text)
+
     def test_build_panel_filters_inventory_by_operation_type(self):
         payload = {
             "operation_name": "中草药开花前追肥",
@@ -70,17 +115,63 @@ class AgriMaterialPayloadTests(unittest.TestCase):
         result = run_script("build-panel", payload)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(len(result["form_panel"]["goodsList"]), 1)
-        item = result["form_panel"]["goodsList"][0]
-        self.assertEqual(item["goods_name"], "50%硫酸钾")
-        self.assertEqual(item["stock_goods_id"], 1)
-        self.assertEqual(item["stock_record_id"], 29)
-        self.assertEqual(item["num"], 3.975)
-        self.assertEqual(item["dosage"], 1500)
+        self.assertNotIn("form_panel", result)
+        syntax = result["form_syntax"]
+        self.assertIn("autoOpen false\n", syntax)
+        self.assertIn("  - goods_name 50%硫酸钾\n", syntax)
+        self.assertIn("    stock_goods_id 1\n", syntax)
+        self.assertIn("    stock_record_id 29\n", syntax)
+        self.assertIn("    num 3.975\n", syntax)
+        self.assertIn("    dosage 1500\n", syntax)
         self.assertEqual(len(result["selected_inventory_rows"]), 1)
         self.assertEqual(result["selected_inventory_rows"][0]["num"], "10.00")
         self.assertEqual(result["pending_draft"]["record_draft"]["matter_id"], 207)
         self.assertEqual(result["pending_draft"]["selected_inventory_rows"][0]["id"], 29)
+
+    def test_build_panel_returns_agri_material_usage_syntax(self):
+        payload = {
+            "operation_name": "追肥",
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+                "area": 2,
+            },
+            "usage_by_stock_record_id": {"7": 12},
+            "inventory_rows": [
+                {
+                    "id": 7,
+                    "name": "氮磷钾复合肥",
+                    "price": "3",
+                    "stock_goods": {
+                        "id": 7,
+                        "name": "氮磷钾复合肥",
+                        "type": "化肥",
+                        "unit": "kg",
+                    },
+                }
+            ],
+        }
+
+        result = run_script("build-panel", payload)
+
+        self.assertTrue(result["ok"])
+        syntax = result["form_syntax"]
+        self.assertTrue(syntax.startswith("form agri-material-usage\n"))
+        self.assertIn("title 补全信息\n", syntax)
+        self.assertIn("autoOpen false\n", syntax)
+        self.assertIn("data\n", syntax)
+        self.assertIn("  - goods_name 氮磷钾复合肥\n", syntax)
+        self.assertIn("    stock_goods_id 7\n", syntax)
+        self.assertIn("    is_formula 0\n", syntax)
+        self.assertIn("    num 24\n", syntax)
+        self.assertIn("    price 3\n", syntax)
+        self.assertIn("    unit kg\n", syntax)
+        self.assertIn("    dosage 12000\n", syntax)
+        self.assertIn("    stock_record_id 7\n", syntax)
+        self.assertNotIn("schemaVersion", syntax)
+        self.assertNotIn("{", syntax)
 
     def test_build_panel_uses_zero_only_when_no_usage_recommendation_is_supplied(self):
         payload = {
@@ -105,11 +196,62 @@ class AgriMaterialPayloadTests(unittest.TestCase):
         result = run_script("build-panel", payload)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["form_panel"]["goodsList"][0]["num"], 0)
-        self.assertEqual(result["form_panel"]["goodsList"][0]["dosage"], 0)
+        self.assertNotIn("form_panel", result)
+        self.assertIn("    num 0\n", result["form_syntax"])
+        self.assertIn("    dosage 0\n", result["form_syntax"])
+
+    def test_build_submit_requires_record_creation_confirmation_before_args(self):
+        payload = {
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+                "operate_time": "2026-07-07 10:30",
+            },
+            "system_params": {"user_id": 48},
+            "submitted_goodsList": [],
+            "original_inventory_rows": [],
+        }
+
+        result = run_script("build-submit", payload)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["requires_user_confirmation"])
+        self.assertIn(
+            "record_creation_confirmed is required before add_farming_record",
+            result["errors"],
+        )
+        self.assertNotIn("add_farming_record_args", result)
+
+    def test_build_submit_rejects_no_material_record_without_draft_review_context(self):
+        payload = {
+            "record_creation_confirmed": True,
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+                "operate_time": "2026-07-07 10:30",
+            },
+            "system_params": {"user_id": 48},
+            "submitted_goodsList": [],
+            "original_inventory_rows": [],
+        }
+
+        result = run_script("build-submit", payload)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["requires_user_confirmation"])
+        self.assertIn(
+            "no-material record creation requires a separate user confirmation after the draft is shown",
+            result["errors"],
+        )
+        self.assertNotIn("add_farming_record_args", result)
 
     def test_build_submit_outputs_compact_frontend_num_contract(self):
         payload = {
+            "record_creation_confirmed": True,
             "record_draft": {
                 "cid": 2007,
                 "base_id": 3,
@@ -212,6 +354,57 @@ class AgriMaterialPayloadTests(unittest.TestCase):
         self.assertIn("record_draft is required", result["errors"])
         self.assertNotIn("goodsList", result)
 
+    def test_build_submit_defaults_missing_operate_time_to_current_minute(self):
+        before = datetime.now().strftime("%Y-%m-%d %H:%M")
+        payload = {
+            "record_creation_confirmed": True,
+            "draft_was_shown_to_user": True,
+            "confirmation_source": "user_confirmed_prepared_draft",
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+            },
+            "system_params": {"user_id": 48},
+            "submitted_goodsList": [],
+            "original_inventory_rows": [],
+        }
+
+        result = run_script("build-submit", payload)
+        after = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        self.assertTrue(result["ok"])
+        operate_time = result["add_farming_record_args"]["operate_time"]
+        self.assertRegex(operate_time, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+        self.assertIn(operate_time, {before, after})
+
+    def test_build_submit_expands_date_only_operate_time_to_current_minute(self):
+        before_time = datetime.now().strftime("%H:%M")
+        payload = {
+            "record_creation_confirmed": True,
+            "draft_was_shown_to_user": True,
+            "confirmation_source": "user_confirmed_prepared_draft",
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+                "operate_time": "2026-07-07",
+            },
+            "system_params": {"user_id": 48},
+            "submitted_goodsList": [],
+            "original_inventory_rows": [],
+        }
+
+        result = run_script("build-submit", payload)
+        after_time = datetime.now().strftime("%H:%M")
+
+        self.assertTrue(result["ok"])
+        operate_time = result["add_farming_record_args"]["operate_time"]
+        self.assertRegex(operate_time, r"^2026-07-07 \d{2}:\d{2}$")
+        self.assertIn(operate_time[-5:], {before_time, after_time})
+
     def test_build_submit_preserves_user_confirmed_units_for_real_submit_payload(self):
         payload = {
             "record_draft": {
@@ -232,26 +425,31 @@ class AgriMaterialPayloadTests(unittest.TestCase):
                 "terminal_id": 1,
                 "token": "do-not-forward",
             },
-            "submitted_goodsList": [
-                {
-                    "goods_name": "磷酸二氢钾",
-                    "stock_goods_id": 9,
-                    "stock_record_id": 9,
-                    "is_formula": 0,
-                    "num": 0.15,
-                    "price": 2.2,
-                    "unit": "kg",
-                },
-                {
-                    "goods_name": "水溶肥",
-                    "stock_goods_id": 4,
-                    "stock_record_id": 3,
-                    "is_formula": 0,
-                    "num": 0.8,
-                    "price": 4.8,
-                    "unit": "kg",
-                },
-            ],
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "agri-material-usage",
+                "tag": "agri_material_usage_confirm",
+                "goodsList": [
+                    {
+                        "goods_name": "磷酸二氢钾",
+                        "stock_goods_id": 9,
+                        "stock_record_id": 9,
+                        "is_formula": 0,
+                        "num": 0.15,
+                        "price": 2.2,
+                        "unit": "kg",
+                    },
+                    {
+                        "goods_name": "水溶肥",
+                        "stock_goods_id": 4,
+                        "stock_record_id": 3,
+                        "is_formula": 0,
+                        "num": 0.8,
+                        "price": 4.8,
+                        "unit": "kg",
+                    },
+                ],
+            },
             "original_inventory_rows": [
                 {
                     "id": 9,
@@ -305,8 +503,58 @@ class AgriMaterialPayloadTests(unittest.TestCase):
         self.assertNotIn("stock_goods", second)
         self.assertNotIn("inventory_num", second)
 
+    def test_build_submit_falls_back_to_mcp_inventory_metadata_without_using_inventory_balance(self):
+        payload = {
+            "record_creation_confirmed": True,
+            "record_draft": {
+                "cid": 2014,
+                "base_id": 71,
+                "plot_id": 19142,
+                "matter_id": 143,
+                "operate_time": "2026-07-07 00:00",
+                "area": 2,
+            },
+            "system_params": {"user_id": 48},
+            "submitted_goodsList": [
+                {
+                    "stock_record_id": 29,
+                    "is_formula": 0,
+                    "num": 3,
+                }
+            ],
+            "original_inventory_rows": [
+                {
+                    "id": 29,
+                    "name": "高钾肥",
+                    "num": "99.00",
+                    "price": "12.80",
+                    "stock_goods": {
+                        "id": 5,
+                        "name": "高钾肥",
+                        "price": "12.80",
+                        "type": "化肥",
+                        "unit": "kg",
+                    },
+                }
+            ],
+        }
+
+        result = run_script("build-submit", payload)
+
+        self.assertTrue(result["ok"])
+        item = result["add_farming_record_args"]["goodsList"][0]
+        self.assertEqual(item["goods_name"], "高钾肥")
+        self.assertEqual(item["stock_goods_id"], 5)
+        self.assertEqual(item["is_formula"], 0)
+        self.assertEqual(item["num"], 3)
+        self.assertEqual(item["price"], 12.8)
+        self.assertEqual(item["unit"], "kg")
+        self.assertEqual(item["dosage"], 1500)
+        self.assertNotIn("stock_record_id", item)
+
     def test_build_submit_fails_when_original_inventory_row_is_missing(self):
         payload = {
+            "record_creation_confirmed": True,
             "record_draft": {
                 "cid": 2007,
                 "base_id": 3,

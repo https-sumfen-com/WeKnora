@@ -1,6 +1,6 @@
 # Operation-Aware Material Selection
 
-Read this reference after `get_agri_input_list` returns and before building the `form-panel.goodsList`.
+Read this reference after `get_agri_input_list` returns and before building the `form agri-material-usage` Syntax.
 
 ## Goal
 
@@ -27,9 +27,9 @@ First classify the operation by its real name/category. Then keep only inventory
 | 用药, 植保, 病害防治, 虫害防治 | `stock_goods.type` or name indicates pesticide, fungicide, insecticide, bactericide, or plant protection material |
 | 除草, 草害防控 | `stock_goods.type` or name indicates herbicide or weed-control material |
 | 播种, 补种 | `stock_goods.type` or name indicates seed or seed-treatment material |
-| 灌溉, 排水, 整地, 中耕, 巡田, 采收, 机械作业, 观察复核 | Usually no agricultural material. Return `goodsList: []` unless MCP/user context explicitly names a material |
+| 灌溉, 排水, 整地, 中耕, 巡田, 采收, 机械作业, 观察复核 | Usually no agricultural material. Return Syntax with `data` and no `-` items unless MCP/user context explicitly names a material |
 
-If the operation name is ambiguous, do not guess. Return `goodsList: []` and let the user add materials in the frontend panel, or ask the user which material category should be used.
+If the operation name is ambiguous, do not guess. Return Syntax with `data` and no `-` items so the user can add materials in the frontend panel, or ask the user which material category should be used.
 
 ## Ranking
 
@@ -50,7 +50,7 @@ When several rows match:
 
 ## Empty Result
 
-Return `goodsList: []` when:
+Return Syntax with `data` and no `-` items when:
 
 - the operation normally does not use materials,
 - the inventory pool has no confident match,

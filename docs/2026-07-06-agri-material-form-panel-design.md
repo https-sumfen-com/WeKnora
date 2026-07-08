@@ -1,5 +1,7 @@
 # 农资用量确认面板前后端设计文档
 
+> 历史方案文档。新的推荐农资输出必须使用 `docs/agri-material-usage-syntax-contract.md` 中的 `form agri-material-usage` Syntax，不再使用 `schemaVersion` JSON 或 `form-panel` JSON 作为主链路。
+
 ## 目标
 
 在 `ConversationView` 中支持由 AI 消息触发的农资用量确认面板。后端通过固定消息块告诉前端“需要用户确认农资”，前端自动弹出面板，默认带入大模型推荐的农资；用户可以修改亩用量、新增农资、删除农资，确认后仅把最终农资列表回传给 AI。
@@ -20,7 +22,7 @@ AI 返回 `form-panel` block。触发标签固定为 `agri_material_usage_confir
   "tag": "agri_material_usage_confirm",
   "title": "补全信息",
   "formType": "agri-material-usage",
-  "autoOpen": true,
+  "autoOpen": false,
   "goodsList": [
     {
       "goods_name": "高钾肥",
@@ -44,7 +46,7 @@ AI 返回 `form-panel` block。触发标签固定为 `agri_material_usage_confir
 | `tag` | string | 是 | 固定 `agri_material_usage_confirm` |
 | `title` | string | 否 | 面板标题，默认 `补全信息` |
 | `formType` | string | 是 | 固定 `agri-material-usage` |
-| `autoOpen` | boolean | 否 | 是否自动弹出，默认 `true` |
+| `autoOpen` | boolean | 否 | 是否自动弹出，默认 `false` |
 | `goodsList` | array | 是 | AI 推荐好的农资列表 |
 
 `goodsList[]` 字段：
@@ -70,7 +72,7 @@ AI 返回 `form-panel` block。触发标签固定为 `agri_material_usage_confir
 参考现有 `report` block。推荐返回：
 
 ```txt
-data: {"op":"block-start","blockIndex":2,"kind":"form-panel","tag":"agri_material_usage_confirm","title":"补全信息","formType":"agri-material-usage","autoOpen":true}
+data: {"op":"block-start","blockIndex":2,"kind":"form-panel","tag":"agri_material_usage_confirm","title":"补全信息","formType":"agri-material-usage","autoOpen":false}
 data: {"op":"form-panel-payload","blockIndex":2,"goodsList":[{"goods_name":"高钾肥","stock_goods_id":5,"stock_record_id":5,"is_formula":0,"mu_usage":1,"price":12.8,"unit":"","dosage":1000}]}
 data: {"op":"block-end","blockIndex":2}
 ```
@@ -100,7 +102,7 @@ data: {"op":"block-end","blockIndex":2}
       "tag": "agri_material_usage_confirm",
       "title": "补全信息",
       "formType": "agri-material-usage",
-      "autoOpen": true,
+      "autoOpen": false,
       "goodsList": []
     }
   ]
@@ -115,7 +117,7 @@ data: {"op":"block-end","blockIndex":2}
 
 - 只处理 `message.status === 'done'`。
 - 找到 `kind === 'form-panel'`、`tag === 'agri_material_usage_confirm'` 的 block。
-- `autoOpen !== false` 时自动弹出。
+- `autoOpen === true` 时自动弹出；默认不自动弹出。
 - 同一个 `message.id + blockIndex` 只自动弹一次。
 - 历史消息加载时不自动弹，只在面板关闭后保留当前消息触发入口。
 

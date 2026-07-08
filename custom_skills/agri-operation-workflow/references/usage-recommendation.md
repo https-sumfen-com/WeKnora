@@ -35,7 +35,7 @@ When area is unknown, do not invent area and do not compute `dosage`; keep `num:
 
 - For 施肥/追肥/补肥, try to produce a per-mu fertilizer usage recommendation.
 - For 用药/植保/病虫害防治/除草, try to produce a per-mu pesticide/herbicide usage recommendation when the material label or knowledge source provides an area rate.
-- For operations that usually do not use materials, keep `goodsList: []` unless the user or MCP evidence names a material.
+- For operations that usually do not use materials, return Syntax with `data` and no `-` items unless the user or MCP evidence names a material.
 - If evidence or model agronomic experience gives a range, choose a conservative midpoint or context-appropriate value when it fits the current crop/stage/problem.
 
 ## What Not To Use As Rate Or Quantity
@@ -51,4 +51,4 @@ Never copy these into the internal per-mu rate, frontend `num`, or computed `dos
 
 ## Submit Boundary
 
-The final `add_farming_record.goodsList` does not include `mu_usage`. It includes compact frontend-confirmed fields only: `goods_name`, `stock_goods_id`, `is_formula`, `num`, `price`, `unit`, and computed `dosage`.
+The final `add_farming_record.goodsList` does not include `mu_usage`. It includes only the compact submit fields: `goods_name`, `stock_goods_id`, `is_formula`, frontend-confirmed `num`, `price`, `unit`, and computed `dosage`. Missing metadata may be filled only from the matched MCP inventory row.
