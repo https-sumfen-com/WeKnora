@@ -1,5 +1,7 @@
 # 农资确认面板后端对接实施文档
 
+> 历史方案文档。新的推荐农资输出必须使用 `docs/agri-material-usage-syntax-contract.md` 中的 `form agri-material-usage` Syntax，不再使用 `schemaVersion` JSON 或 `form-panel` JSON 作为主链路。
+
 ## 目标
 
 后端在 AI 判断需要用户确认农资时，返回固定 `form-panel` 消息块。前端识别后自动弹出补全面板，并在用户确认后把最终 `goodsList` 回传给后端继续处理。
@@ -14,7 +16,7 @@
   "tag": "agri_material_usage_confirm",
   "title": "补全信息",
   "formType": "agri-material-usage",
-  "autoOpen": true,
+  "autoOpen": false,
   "goodsList": []
 }
 ```
@@ -24,7 +26,7 @@
 推荐后端按现有 report block 模式返回：
 
 ```txt
-data: {"op":"block-start","blockIndex":2,"kind":"form-panel","tag":"agri_material_usage_confirm","title":"补全信息","formType":"agri-material-usage","autoOpen":true}
+data: {"op":"block-start","blockIndex":2,"kind":"form-panel","tag":"agri_material_usage_confirm","title":"补全信息","formType":"agri-material-usage","autoOpen":false}
 data: {"op":"form-panel-payload","blockIndex":2,"goodsList":[{"goods_name":"高钾肥","stock_goods_id":5,"stock_record_id":5,"is_formula":0,"mu_usage":1,"price":12.8,"unit":"","dosage":1000}]}
 data: {"op":"block-end","blockIndex":2}
 ```
@@ -34,6 +36,7 @@ data: {"op":"block-end","blockIndex":2}
 - `kind` 固定 `form-panel`
 - `tag` 固定 `agri_material_usage_confirm`
 - `formType` 固定 `agri-material-usage`
+- `autoOpen` 默认 `false`；只有需要前端立即弹出时才传 `true`
 - `goodsList` 必须一次性返回完整数组
 - 没有推荐农资时传 `goodsList: []`
 - `blockIndex` 和同条消息内其他 block 不冲突
@@ -55,7 +58,7 @@ data: {"op":"block-end","blockIndex":2}
       "tag": "agri_material_usage_confirm",
       "title": "补全信息",
       "formType": "agri-material-usage",
-      "autoOpen": true,
+      "autoOpen": false,
       "goodsList": [
         {
           "goods_name": "高钾肥",
