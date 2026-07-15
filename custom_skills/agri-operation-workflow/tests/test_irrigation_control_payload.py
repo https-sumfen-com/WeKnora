@@ -422,6 +422,13 @@ class IrrigationControlPayloadTests(unittest.TestCase):
 
     def test_valve_control_references_select_id_from_batch_payload_item(self):
         repo = SKILL_DIR.parents[1]
+        sono_skill = (repo / "custom_skills" / "sono-mcp" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertGreaterEqual(
+            sono_skill.count("所选 `get_valve_bank_by_device.payload[].id`"),
+            3,
+        )
         refs = repo / "custom_skills" / "sono-mcp" / "references"
         for name in ("tool-start-valve-bank.md", "tool-stop-valve-bank.md"):
             with self.subTest(name=name):

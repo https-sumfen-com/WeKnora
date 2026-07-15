@@ -59,7 +59,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 问单个设备详情 → `get_plot_device_info`；问某地块有哪些传感器 → `get_plot_device_list`；问地块设备关联哪个阀门组 → `get_valve_bank_by_device`。三个 ID 含义不同，不得混用。
 - `get_valve_bank_by_device.plot_device_ids` 必须是由地块设备关联 ID 组成的逗号字符串；若来自 `get_plot_device_list`，按列表顺序连接各项最外层 `id`，**禁止**使用嵌套的 `device.id`。
 - 问阀门组名称/状态 → `get_valve_bank_by_device`；只有用户明确说“启动/打开”或“停止/关闭”时，才分别调用 `start_valve_bank` 或 `stop_valve_bank`。
-- `start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；可取 `get_valve_bank_by_device` 返回的 `id`，不得传 `plot_device_id` 或 `device.id`。
+- `start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；可取所选 `get_valve_bank_by_device.payload[].id`，不得传 `plot_device_id` 或 `device.id`。
 - 没有明确地块分析意图时，禁止调 `get_plot_info` 和 `get_wofost_report`；"可能有帮助"或"补全信息"不是调用理由。
 
 ### 调用纪律
@@ -249,7 +249,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 这是设备控制写操作；仅在动作和阀门组都无歧义时调用，查询状态、查看名称或一般灌溉咨询均不得触发。
 - **必填参数**：`cid`、阀门组 `id`，两者都必须为正整数。
 - **可选参数**：`auto_off_minutes`，只接受用户明确指定的正整数分钟数；未指定时省略，不猜测默认时长。
-- 阀门组 `id` 可取 `get_valve_bank_by_device` 返回的 `id`（示例 `31`），不得传 `plot_device_id`（示例 `16`）或设备 `device.id`（示例 `424`）。
+- 阀门组 `id` 可取所选 `get_valve_bank_by_device.payload[].id`（示例 `31`），不得传 `plot_device_id`（示例 `16`）或设备 `device.id`（示例 `424`）。
 - 返回结构由上游透传，成功确认和空响应处理详见 `references/tool-start-valve-bank.md`。
 
 ```json
@@ -270,7 +270,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - **必填参数**：阀门组 `id`，必须为正整数。
 - **可选参数**：`cid`、`token`、`entity_id`、`entity_info_id`；当前服务层不强制 `cid`，但上下文有值时一并传入。
 - 不传 `auto_off_minutes`；停止逻辑不会使用该字段。
-- 阀门组 `id` 可取 `get_valve_bank_by_device` 返回的 `id`，不得传 `plot_device_id` 或设备 `device.id`。
+- 阀门组 `id` 可取所选 `get_valve_bank_by_device.payload[].id`，不得传 `plot_device_id` 或设备 `device.id`。
 - 返回结构由上游透传，成功确认和空响应处理详见 `references/tool-stop-valve-bank.md`。
 
 ```json
