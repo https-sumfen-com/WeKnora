@@ -15,8 +15,9 @@ The script output is authoritative. Extraction follows these rules:
 - A telemetry row is soil moisture only when `key == "SHUM"`. Do not match `shum`, a localized `name`, or another moisture-looking key.
 - For each device, use the first exact `SHUM` row whose value is a finite number.
 - Use the device-list item's outer `id` as its plot-device association ID; never use nested `device.id`.
-- Reject duplicate valid outer IDs instead of silently deduplicating them.
-- `plot_device_ids` is a comma-separated string such as `"16,21,35"`. The internal numeric list is `plot_device_id_values`.
+- Deduplicate repeated outer IDs in first-occurrence order. Across repeated items for one ID, keep the first finite exact `SHUM` encountered; after one valid reading is selected, later duplicates do not contribute another reading or another average weight.
+- `plot_device_ids` is a comma-separated string such as `"16,21,35"`. The internal ordered identifier list is `plot_device_id_values`.
+- Despite its legacy name, `plot_device_id_values` contains canonical decimal strings such as `["16", "21", "35"]`. Every int64 identifier in JSON, form, trusted pending state, or MCP arguments remains a decimal string so JavaScript JSON round trips cannot round large IDs.
 - If `has_valid_shum` is false, do not continue to a valve lookup or control action.
 
 Do not reduce the script result to a bare average. Preserve the complete `sensor_analysis`, including `ok`, `has_valid_shum`, `sensor_readings`, `average_soil_moisture`, `plot_device_ids`, and `plot_device_id_values`. `build-panel` must revalidate all of those fields, recompute the average from readings, and verify both ID representations before it can emit form state.
@@ -38,7 +39,7 @@ Call get_valve_bank_by_device exactly once with the authoritative IDs:
 
 ```json
 {
-  "cid": 2007,
+  "cid": "2007",
   "plot_device_ids": "16,21,35"
 }
 ```
@@ -67,7 +68,7 @@ On a matching irrigation form submit, run `prepare-execution`. It validates subm
 - `pending_execution_draft` to keep in trusted state;
 - a deterministic `draft_fingerprint` binding `cid`, `plot_id`, ordered valve IDs, and durations.
 
-The fingerprint is version binding, not authentication; the application must protect pending state. Show the execution draft and end the assistant turn. A separate later user reply must confirm that displayed draft.
+The fingerprint binds `cid`, `plot_id`, `plot_name`, `average_soil_moisture`, `reason`, and every ordered selected valve ID/title/final duration. The `pending_execution_draft` and confirmation text carry and display the same plot, moisture, reason, valve, and duration facts. The fingerprint is version binding, not authentication; the application must protect pending state. Show the execution draft and end the assistant turn. A separate later user reply must confirm that displayed draft.
 
 Only then run `build-execution` with all of:
 
@@ -85,7 +86,7 @@ Never call `start_valve_bank` in the same assistant turn that receives the irrig
 
 ## 6. Execute in Order and Report Partial Results
 
-Use the script-produced `start_valve_bank_args` directly and call `start_valve_bank` in list order. For each call, require an upstream response that explicitly confirms success.
+Use the script-produced `start_valve_bank_args` directly and call `start_valve_bank` in list order. Its `cid` and `id` values are decimal strings accepted by SONO's FlexibleInt64 contract; do not coerce them to JavaScript numbers. For each call, require an upstream response that explicitly confirms success.
 
 At the first failure, error, empty/unconfirmed response, or interruption:
 

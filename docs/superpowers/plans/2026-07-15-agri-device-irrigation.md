@@ -15,8 +15,11 @@
 - Only exact `key == "SHUM"` telemetry contributes to the average; one value per sensor device.
 - The form submit turn never calls or authorizes `start_valve_bank`; a later user turn must confirm the displayed execution draft.
 - Missing valid telemetry, insufficient irrigation evidence, or an empty valve-bank list never triggers device control.
+- All int64 identifiers crossing JSON, form, trusted-state, or MCP boundaries are canonical decimal strings; this includes `cid`, `plot_id`, plot-device IDs, and valve-bank IDs.
+- A direct request with a unique valve-bank ID and duration uses a separate later-turn-confirmed SONO direct-control route and does not require `plot_id` or sensor-assisted discovery.
 - Preserve the user's pre-existing changes in `custom_skills/sono-mcp/SKILL.md` and do not stage unrelated files.
 - Run Python with `D:\Program Files\uv\global_python\Scripts\python.exe` in this terminal.
+- Set `$env:PYTHONUTF8 = '1'` in documented Windows validation commands; the payload scripts also configure UTF-8 stdio so unprefixed `unittest discover` remains reproducible under the default Windows code page.
 
 ---
 
@@ -79,7 +82,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["has_valid_shum"])
         self.assertEqual(result["average_soil_moisture"], 25.25)
         self.assertEqual(result["plot_device_ids"], "16,21")
-        self.assertEqual(result["plot_device_id_values"], [16, 21])
+        self.assertEqual(result["plot_device_id_values"], ["16", "21"])
         self.assertEqual([row["value"] for row in result["sensor_readings"]], [20, 30.5])
 ```
 
@@ -123,7 +126,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("form irrigation-valve-duration", result["form_syntax"])
         self.assertIn("average_soil_moisture 25.25", result["form_syntax"])
-        self.assertIn("valve_bank_id 31", result["form_syntax"])
+        self.assertIn('valve_bank_id "31"', result["form_syntax"])
         self.assertEqual(len(result["pending_irrigation_draft"]["valve_banks"]), 2)
 
     def test_build_panel_empty_valves_falls_back_to_farming_operation(self):
@@ -143,7 +146,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
                 "formType": "irrigation-valve-duration",
                 "tag": "irrigation_valve_duration_confirm",
                 "valveBanks": [{
-                    "valve_bank_id": 999,
+                    "valve_bank_id": "999",
                     "duration_minutes": 20,
                     "selected": True,
                 }],
@@ -162,8 +165,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
                 "formType": "irrigation-valve-duration",
                 "tag": "irrigation_valve_duration_confirm",
                 "valveBanks": [
-                    {"valve_bank_id": 31, "duration_minutes": 15, "selected": True},
-                    {"valve_bank_id": 32, "duration_minutes": 25, "selected": True},
+                    {"valve_bank_id": "31", "duration_minutes": 15, "selected": True},
+                    {"valve_bank_id": "32", "duration_minutes": 25, "selected": True},
                 ],
             },
         })
@@ -186,8 +189,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         })
         self.assertTrue(execution["ok"])
         self.assertEqual(execution["start_valve_bank_args"], [
-            {"cid": 2007, "id": 31, "auto_off_minutes": 15},
-            {"cid": 2007, "id": 32, "auto_off_minutes": 25},
+            {"cid": "2007", "id": "31", "auto_off_minutes": 15},
+            {"cid": "2007", "id": "32", "auto_off_minutes": 25},
         ])
 ```
 
@@ -225,6 +228,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
 Run:
 
 ```powershell
+$env:PYTHONUTF8 = '1'
 & 'D:\Program Files\uv\global_python\Scripts\python.exe' 'custom_skills/agri-operation-workflow/tests/test_irrigation_control_payload.py' -v
 ```
 
@@ -278,12 +282,13 @@ def analyze_sensors(payload):
                       and _finite_number(row.get("value")) is not None), None)
         if value is None:
             continue
-        readings.append({"plot_device_id": plot_device_id,
+        canonical_id = str(plot_device_id)
+        readings.append({"plot_device_id": canonical_id,
                          "sensor_name": str(item.get("name") or item.get("device", {}).get("name") or ""),
                          "value": value})
-        if plot_device_id not in seen_ids:
-            seen_ids.add(plot_device_id)
-            ids.append(plot_device_id)
+        if canonical_id not in seen_ids:
+            seen_ids.add(canonical_id)
+            ids.append(canonical_id)
     average = None if not readings else _clean_number(sum(row["value"] for row in readings) / len(readings))
     return {"ok": True, "has_valid_shum": bool(readings),
             "sensor_readings": readings, "average_soil_moisture": average,
@@ -332,7 +337,7 @@ def build_panel(payload):
 
 - [ ] **Step 3: Implement form validation and execution preparation**
 
-`prepare_execution()` must require the exact form triple, reject unknown and duplicate IDs, reject non-boolean `selected`, reject non-positive/non-integer durations, require at least one selected bank, recover titles only from `pending_irrigation_draft`, and return no MCP arguments.
+`prepare_execution()` must require the exact form triple, reject unknown and duplicate IDs, reject non-boolean `selected`, reject non-positive/non-integer durations, require at least one selected bank, recover titles only from `pending_irrigation_draft`, and return no MCP arguments. It must carry and bind `plot_name`, `average_soil_moisture`, `reason`, valve IDs/titles, and final durations in its trusted draft, fingerprint, and confirmation text.
 
 ```python
 return {
@@ -370,7 +375,7 @@ def build_execution(payload):
         duration = _positive_int(bank.get("duration_minutes")) if isinstance(bank, dict) else None
         if bank_id is None or duration is None:
             return {"ok": False, "errors": ["pending execution valve is invalid"]}
-        args.append({"cid": cid, "id": bank_id,
+        args.append({"cid": str(cid), "id": str(bank_id),
                      "auto_off_minutes": duration})
     return {"ok": True, "start_valve_bank_args": args}
 ```
@@ -475,6 +480,7 @@ Run the Task 1 command. Expected: all irrigation script and documentation contra
 - [ ] **Step 1: Run all agri-operation workflow tests**
 
 ```powershell
+$env:PYTHONUTF8 = '1'
 & 'D:\Program Files\uv\global_python\Scripts\python.exe' -m unittest discover -s 'custom_skills/agri-operation-workflow/tests' -p 'test_*.py' -v
 ```
 
@@ -483,6 +489,7 @@ Expected: all existing material tests and new irrigation tests pass with no warn
 - [ ] **Step 2: Validate both skills**
 
 ```powershell
+$env:PYTHONUTF8 = '1'
 & 'D:\Program Files\uv\global_python\Scripts\python.exe' 'C:\Users\38304\.codex\skills\.system\skill-creator\scripts\quick_validate.py' 'custom_skills/agri-operation-workflow'
 & 'D:\Program Files\uv\global_python\Scripts\python.exe' 'C:\Users\38304\.codex\skills\.system\skill-creator\scripts\quick_validate.py' 'custom_skills/sono-mcp'
 ```

@@ -28,7 +28,7 @@
 
 ```json
 {
-  "cid": 2007,
+  "cid": "2007",
   "plot_device_ids": "16,21,35"
 }
 ```
@@ -41,7 +41,7 @@
 
 新增 `scripts/irrigation_control_payload.py`，提供四个子命令：
 
-1. `analyze-sensors`：提取每台设备的一个有效 `SHUM` 值，输出传感器明细、平均湿度、去重后的 `plot_device_ids` 数组及逗号字符串。
+1. `analyze-sensors`：提取每台设备的一个有效 `SHUM` 值，输出传感器明细、平均湿度、去重后的十进制字符串 ID 列表 `plot_device_id_values` 及逗号字符串 `plot_device_ids`。
 2. `build-panel`：验证服务端返回的阀门组列表，结合 Agent 给出的灌溉判断和推荐时长，生成专用 Syntax 及内部 `pending_irrigation_draft`。
 3. `prepare-execution`：校验前端提交的阀门组 ID、选择状态和时长，输出用户可见的最终执行草稿及内部 `pending_execution_draft`；此阶段不产生 MCP 控制参数。
 4. `build-execution`：仅在后来一轮用户明确确认已展示的执行草稿后，生成逐个调用 `start_valve_bank` 的参数列表。
@@ -58,6 +58,7 @@
 4. 每台设备最多贡献一个湿度值。若同一设备出现多个有效 `SHUM`，取数组中第一个有效值，避免单台设备因重复字段在总体平均值中获得更高权重。
 5. 平均湿度等于所有有效设备湿度值的算术平均值。保留原始传感器明细，并输出用于展示的稳定小数结果。
 6. 只把具有有效 `SHUM` 的设备最外层 `id` 纳入 `plot_device_ids`。
+7. 重复的外层 `id` 按首次出现顺序去重；同一 ID 的重复项中只保留首次遇到的有效 `SHUM`。所有跨 JSON、表单、可信草稿和 MCP 边界的 int64 标识符均保存为十进制字符串，不能经过 JavaScript Number 转换。
 
 若没有有效 `SHUM`，不得自动判断需要灌溉或查询阀门组；转为常规农事建议，并说明缺少有效土壤湿度遥测。
 
@@ -76,7 +77,7 @@
 
 ```json
 {
-  "cid": 2007,
+  "cid": "2007",
   "plot_device_ids": "16,21,35"
 }
 ```
@@ -95,7 +96,7 @@ plot_name "示例地块"
 average_soil_moisture 27
 reason "土壤湿度偏低且未来三天无明显降雨"
 data
-  - valve_bank_id 31
+  - valve_bank_id "31"
     valve_bank_title "水肥阀门组01"
     duration_minutes 20
     selected true
@@ -113,7 +114,7 @@ data
   "sourceMessageId": "assistant-message-id",
   "valveBanks": [
     {
-      "valve_bank_id": 31,
+      "valve_bank_id": "31",
       "duration_minutes": 20,
       "selected": true
     }
@@ -125,7 +126,7 @@ data
 
 ### 二次确认与执行
 
-表单提交只是对阀门组和时长的首次确认。`prepare-execution` 输出包含地块、平均湿度、判断依据、阀门组名称和最终时长的执行草稿，Agent 展示后结束当前轮次。
+表单提交只是对阀门组和时长的首次确认。`prepare-execution` 输出包含地块、平均湿度、判断依据、阀门组 ID/名称和最终时长的执行草稿、确认文本和指纹；三者绑定并展示相同字段，Agent 展示后结束当前轮次。
 
 只有后来一轮用户明确确认这份已展示草稿时，才调用 `build-execution`，并同时传入：
 
@@ -143,8 +144,8 @@ data
 {
   "start_valve_bank_args": [
     {
-      "cid": 2007,
-      "id": 31,
+      "cid": "2007",
+      "id": "31",
       "auto_off_minutes": 20
     }
   ]
@@ -152,6 +153,8 @@ data
 ```
 
 禁止在推荐轮、表单生成轮或表单提交轮调用 `start_valve_bank`。禁止根据自然语言中的模糊同意自行伪造确认标记。
+
+用户直接给出唯一阀门组 ID 和正整数时长时，走独立的直接控制分支：不要求 `plot_id`，也不查询传感器、地块、天气或阀门关联；先展示该 ID 和时长，后来一轮用户确认后再按 SONO 直接控制合同调用 `start_valve_bank`。
 
 多个阀门组按脚本返回顺序逐个执行。若某一组返回错误，停止调用后续阀门组；不得自动关闭已经成功启动的阀门组作为补偿。最终结果分别列出已启动、失败和未执行项，只有上游明确确认成功时才描述为启动成功。
 

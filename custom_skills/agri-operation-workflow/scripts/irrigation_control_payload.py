@@ -10,6 +10,16 @@ import sys
 from typing import Any
 
 
+def _configure_utf8_stdio() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
+
+_configure_utf8_stdio()
+
+
 def _finite_number(value: Any) -> int | float | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -46,6 +56,11 @@ def _positive_int(value: Any) -> int | None:
     return None
 
 
+def _positive_identifier(value: Any) -> str | None:
+    number = _positive_int(value)
+    return str(number) if number is not None else None
+
+
 def _finite_average(values: list[int | float]) -> int | float | None:
     if not values:
         return None
@@ -66,23 +81,21 @@ def analyze_sensors(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(devices, list):
         return {"ok": False, "errors": ["devices must be a list"]}
 
-    readings: list[dict[str, Any]] = []
-    plot_device_id_values: list[int] = []
-    seen_device_ids: set[int] = set()
+    reading_by_device_id: dict[str, dict[str, Any]] = {}
+    device_id_order: list[str] = []
+    seen_device_ids: set[str] = set()
 
     for item in devices:
         if not isinstance(item, dict):
             continue
-        plot_device_id = _positive_int(item.get("id"))
+        plot_device_id = _positive_identifier(item.get("id"))
         if plot_device_id is None:
             continue
-        if plot_device_id in seen_device_ids:
-            return {
-                "ok": False,
-                "has_valid_shum": False,
-                "errors": [f"duplicate plot_device_id: {plot_device_id}"],
-            }
-        seen_device_ids.add(plot_device_id)
+        if plot_device_id not in seen_device_ids:
+            seen_device_ids.add(plot_device_id)
+            device_id_order.append(plot_device_id)
+        if plot_device_id in reading_by_device_id:
+            continue
         device = item.get("device")
         if not isinstance(device, dict):
             continue
@@ -101,14 +114,18 @@ def analyze_sensors(payload: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             continue
 
-        readings.append(
-            {
-                "plot_device_id": plot_device_id,
-                "sensor_name": str(item.get("name") or device.get("name") or ""),
-                "value": value,
-            }
-        )
-        plot_device_id_values.append(plot_device_id)
+        reading_by_device_id[plot_device_id] = {
+            "plot_device_id": plot_device_id,
+            "sensor_name": str(item.get("name") or device.get("name") or ""),
+            "value": value,
+        }
+
+    readings = [
+        reading_by_device_id[plot_device_id]
+        for plot_device_id in device_id_order
+        if plot_device_id in reading_by_device_id
+    ]
+    plot_device_id_values = [row["plot_device_id"] for row in readings]
 
     average = _finite_average([row["value"] for row in readings])
     if readings and average is None:
@@ -145,14 +162,14 @@ def _validated_sensor_analysis(
         return None, errors
 
     normalized_readings: list[dict[str, Any]] = []
-    reading_ids: list[int] = []
+    reading_ids: list[str] = []
     reading_values: list[int | float] = []
-    seen_ids: set[int] = set()
+    seen_ids: set[str] = set()
     for index, row in enumerate(readings):
         if not isinstance(row, dict):
             errors.append(f"sensor_analysis.sensor_readings[{index}] must be an object")
             continue
-        plot_device_id = _positive_int(row.get("plot_device_id"))
+        plot_device_id = _positive_identifier(row.get("plot_device_id"))
         sensor_value = _finite_number(row.get("value"))
         sensor_name = row.get("sensor_name")
         row_valid = True
@@ -200,9 +217,9 @@ def _validated_sensor_analysis(
         errors.append("sensor_analysis.plot_device_ids does not match readings")
 
     raw_id_values = value.get("plot_device_id_values")
-    normalized_id_values: list[int] | None = None
+    normalized_id_values: list[str] | None = None
     if isinstance(raw_id_values, list):
-        candidates = [_positive_int(item) for item in raw_id_values]
+        candidates = [_positive_identifier(item) for item in raw_id_values]
         if all(item is not None for item in candidates):
             normalized_id_values = [item for item in candidates if item is not None]
     if normalized_id_values != reading_ids:
@@ -227,13 +244,13 @@ def _validated_valve_banks(value: Any) -> tuple[list[dict[str, Any]], list[str]]
 
     banks: list[dict[str, Any]] = []
     errors: list[str] = []
-    seen_ids: set[int] = set()
+    seen_ids: set[str] = set()
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             errors.append(f"valve_banks[{index}] must be an object")
             continue
 
-        bank_id = _positive_int(item.get("id"))
+        bank_id = _positive_identifier(item.get("id"))
         title = item.get("title")
         valid_title = isinstance(title, str) and bool(title.strip())
         item_valid = True
@@ -270,23 +287,21 @@ def _quoted(value: Any) -> str:
 def _render_form_syntax(pending: dict[str, Any]) -> str:
     lines = [
         "form irrigation-valve-duration",
-        "tag irrigation_valve_duration_confirm",
-        f"cid {pending['cid']}",
-        f"plot_id {pending['plot_id']}",
+        "title 灌溉时长确认",
+        "autoOpen false",
         f"plot_name {_quoted(pending['plot_name'])}",
         f"average_soil_moisture {pending['average_soil_moisture']}",
         f"reason {_quoted(pending['reason'])}",
-        "valveBanks",
+        "data",
     ]
     for bank in pending["valve_banks"]:
         lines.extend(
             [
-                f"  - valve_bank_id {bank['id']}",
-                f"    title {_quoted(bank['title'])}",
-                f"    run_status {_quoted(bank['run_status'])}",
-                "    selected true",
+                f"  - valve_bank_id {_quoted(bank['id'])}",
+                f"    valve_bank_title {_quoted(bank['title'])}",
                 "    duration_minutes "
                 f"{bank['recommended_duration_minutes']}",
+                "    selected true",
             ]
         )
     return "\n".join(lines) + "\n"
@@ -310,14 +325,17 @@ def build_panel(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("sensor_analysis")
     )
     errors.extend(sensor_errors)
-    cid = _positive_int(payload.get("cid"))
-    plot_id = _positive_int(payload.get("plot_id"))
+    cid = _positive_identifier(payload.get("cid"))
+    plot_id = _positive_identifier(payload.get("plot_id"))
+    plot_name = str(payload.get("plot_name") or "").strip()
     reason = str(payload.get("reason") or "").strip()
     duration = _positive_int(payload.get("recommended_duration_minutes"))
     if cid is None:
         errors.append("cid must be a positive integer")
     if plot_id is None:
         errors.append("plot_id must be a positive integer")
+    if not plot_name:
+        errors.append("plot_name is required")
     if not reason:
         errors.append("reason is required")
     if duration is None:
@@ -329,7 +347,7 @@ def build_panel(payload: dict[str, Any]) -> dict[str, Any]:
     pending = {
         "cid": cid,
         "plot_id": plot_id,
-        "plot_name": str(payload.get("plot_name") or "").strip(),
+        "plot_name": plot_name,
         "sensor_analysis": sensor_analysis,
         "average_soil_moisture": sensor_analysis["average_soil_moisture"],
         "reason": reason,
@@ -346,9 +364,9 @@ def build_panel(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _pending_valve_index(
     pending: dict[str, Any],
-) -> tuple[int | None, int | None, dict[int, dict[str, Any]] | None]:
-    cid = _positive_int(pending.get("cid"))
-    plot_id = _positive_int(pending.get("plot_id"))
+) -> tuple[str | None, str | None, dict[str, dict[str, Any]] | None]:
+    cid = _positive_identifier(pending.get("cid"))
+    plot_id = _positive_identifier(pending.get("plot_id"))
     source_banks = pending.get("valve_banks")
     if (
         cid is None
@@ -358,11 +376,11 @@ def _pending_valve_index(
     ):
         return None, None, None
 
-    index: dict[int, dict[str, Any]] = {}
+    index: dict[str, dict[str, Any]] = {}
     for bank in source_banks:
         if not isinstance(bank, dict):
             return None, None, None
-        bank_id = _positive_int(bank.get("id"))
+        bank_id = _positive_identifier(bank.get("id"))
         title = bank.get("title")
         if (
             bank_id is None
@@ -376,16 +394,25 @@ def _pending_valve_index(
 
 
 def _draft_fingerprint(
-    cid: int, plot_id: int, valve_banks: list[dict[str, Any]]
+    cid: str,
+    plot_id: str,
+    plot_name: str,
+    average_soil_moisture: int | float,
+    reason: str,
+    valve_banks: list[dict[str, Any]],
 ) -> str:
     # This is deterministic version binding for a trusted session draft, not an
     # authenticity mechanism or HMAC. The caller must protect pending state.
     fingerprint_payload = {
         "cid": cid,
         "plot_id": plot_id,
+        "plot_name": plot_name,
+        "average_soil_moisture": average_soil_moisture,
+        "reason": reason,
         "valve_banks": [
             {
                 "id": bank["id"],
+                "title": bank["title"],
                 "duration_minutes": bank["duration_minutes"],
             }
             for bank in valve_banks
@@ -427,12 +454,12 @@ def prepare_execution(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "errors": errors}
 
     selected_banks: list[dict[str, Any]] = []
-    seen_ids: set[int] = set()
+    seen_ids: set[str] = set()
     for index, item in enumerate(submitted_banks):
         if not isinstance(item, dict):
             errors.append(f"submitted valveBanks[{index}] must be an object")
             continue
-        bank_id = _positive_int(item.get("valve_bank_id"))
+        bank_id = _positive_identifier(item.get("valve_bank_id"))
         if bank_id is None:
             errors.append(
                 f"valve_bank_id must be a positive integer at index {index}"
@@ -474,18 +501,43 @@ def prepare_execution(payload: dict[str, Any]) -> dict[str, Any]:
     if errors:
         return {"ok": False, "errors": errors}
 
+    plot_name = pending.get("plot_name")
+    average = _finite_number(pending.get("average_soil_moisture"))
+    reason = pending.get("reason")
+    if (
+        not isinstance(plot_name, str)
+        or not plot_name.strip()
+        or average is None
+        or not isinstance(reason, str)
+        or not reason.strip()
+    ):
+        return {"ok": False, "errors": ["pending irrigation evidence is invalid"]}
+
     execution_draft = {
         "cid": cid,
         "plot_id": plot_id,
-        "plot_name": pending.get("plot_name", ""),
+        "plot_name": plot_name,
+        "average_soil_moisture": average,
+        "reason": reason,
         "valve_banks": selected_banks,
     }
-    draft_fingerprint = _draft_fingerprint(cid, plot_id, selected_banks)
+    draft_fingerprint = _draft_fingerprint(
+        cid,
+        plot_id,
+        plot_name,
+        average,
+        reason,
+        selected_banks,
+    )
     execution_draft["draft_fingerprint"] = draft_fingerprint
     details = "；".join(
-        f"{bank['title']} {bank['duration_minutes']} 分钟" for bank in selected_banks
+        f"{bank['title']}（ID {bank['id']}）{bank['duration_minutes']} 分钟"
+        for bank in selected_banks
     )
-    confirmation_text = f"即将执行灌溉：{details}。请确认是否执行。"
+    confirmation_text = (
+        f"即将执行灌溉：地块：{plot_name}；平均土壤湿度：{average}；"
+        f"判断依据：{reason}；阀门：{details}。请确认是否执行。"
+    )
     return {
         "ok": True,
         "requires_execution_confirmation": True,
@@ -530,36 +582,65 @@ def build_execution(payload: dict[str, Any]) -> dict[str, Any]:
             ],
             "requires_execution_confirmation": True,
         }
-    cid = _positive_int(draft.get("cid"))
-    plot_id = _positive_int(draft.get("plot_id"))
+    cid = _positive_identifier(draft.get("cid"))
+    plot_id = _positive_identifier(draft.get("plot_id"))
+    plot_name = draft.get("plot_name")
+    average = _finite_number(draft.get("average_soil_moisture"))
+    reason = draft.get("reason")
     selected = draft.get("valve_banks")
     if (
         cid is None
         or plot_id is None
+        or not isinstance(plot_name, str)
+        or not plot_name.strip()
+        or average is None
+        or not isinstance(reason, str)
+        or not reason.strip()
         or not isinstance(selected, list)
         or not selected
     ):
         return {"ok": False, "errors": ["pending execution draft is invalid"]}
 
-    args: list[dict[str, int]] = []
-    fingerprint_banks: list[dict[str, int]] = []
-    seen_ids: set[int] = set()
+    args: list[dict[str, str | int]] = []
+    fingerprint_banks: list[dict[str, str | int]] = []
+    seen_ids: set[str] = set()
     for bank in selected:
-        bank_id = _positive_int(bank.get("id")) if isinstance(bank, dict) else None
+        bank_id = (
+            _positive_identifier(bank.get("id")) if isinstance(bank, dict) else None
+        )
         duration = (
             _positive_int(bank.get("duration_minutes"))
             if isinstance(bank, dict)
             else None
         )
-        if bank_id is None or duration is None or bank_id in seen_ids:
+        title = bank.get("title") if isinstance(bank, dict) else None
+        if (
+            bank_id is None
+            or duration is None
+            or bank_id in seen_ids
+            or not isinstance(title, str)
+            or not title.strip()
+        ):
             return {
                 "ok": False,
                 "errors": ["pending execution valve is invalid"],
             }
         seen_ids.add(bank_id)
         args.append({"cid": cid, "id": bank_id, "auto_off_minutes": duration})
-        fingerprint_banks.append({"id": bank_id, "duration_minutes": duration})
-    if _draft_fingerprint(cid, plot_id, fingerprint_banks) != pending_fingerprint:
+        fingerprint_banks.append(
+            {"id": bank_id, "title": title, "duration_minutes": duration}
+        )
+    if (
+        _draft_fingerprint(
+            cid,
+            plot_id,
+            plot_name,
+            average,
+            reason,
+            fingerprint_banks,
+        )
+        != pending_fingerprint
+    ):
         return {
             "ok": False,
             "errors": ["pending execution draft fingerprint is invalid"],

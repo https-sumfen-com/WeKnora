@@ -16,6 +16,16 @@ from datetime import datetime
 from typing import Any
 
 
+def _configure_utf8_stdio() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
+
+
+_configure_utf8_stdio()
+
+
 FERTILIZER_OP = ("施肥", "追肥", "基肥", "补肥", "营养")
 FERTILIZER_MATERIAL = (
     "肥",

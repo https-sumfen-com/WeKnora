@@ -13,14 +13,14 @@
 | `entity_info_id` | 否 | 实体信息 ID；没有时省略 |
 | `auto_off_minutes` | 否，不应传 | 启动专用参数；停止逻辑不会使用该字段 |
 
-所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组 ID，不是 `plot_device_id` 或设备 `device.id`。
+所有数字参数支持 JSON 整数或整数字符串。跨前端/JSON 可信草稿传递 `cid` 和 `id` 时优先使用十进制字符串，避免 int64 经 JavaScript Number 丢失精度。`id` 是阀门组 ID，不是 `plot_device_id` 或设备 `device.id`。
 
 推荐调用：
 
 ```json
 {
-  "cid": 2007,
-  "id": 31
+  "cid": "2007",
+  "id": "31"
 }
 ```
 
@@ -28,7 +28,7 @@
 
 ```json
 {
-  "id": 31
+  "id": "31"
 }
 ```
 

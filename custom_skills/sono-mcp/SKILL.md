@@ -79,7 +79,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 参数只能来自：服务端/会话/网关上下文 → 当前页面路由 → 用户本轮输入 → 历史对话（按此优先级取值）。**禁止编造或猜测** `plot_id`、`device_id`、`plot_device_ids`、`id`、`auto_off_minutes`、`dept_id`、`base_id`、`cid`、`matter_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
 
-所有数字字段用 `FlexibleInt64` 解码：JSON 数字 `123` 或整数字符串 `"123"` 均可；非整数字符串报错。
+所有数字字段用 `FlexibleInt64` 解码：JSON 数字 `123` 或整数字符串 `"123"` 均可；非整数字符串报错。跨前端/JSON 可信草稿传递 int64 标识符时优先使用十进制字符串，避免 JavaScript Number 精度丢失。
 
 **字段映射速查**：
 
@@ -235,7 +235,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ```json
 {
-  "cid": 2007,
+  "cid": "2007",
   "plot_device_ids": "16,21,35"
 }
 ```
@@ -254,13 +254,14 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ```json
 {
-  "cid": 2007,
-  "id": 31,
+  "cid": "2007",
+  "id": "31",
   "auto_off_minutes": 10
 }
 ```
 
 - `cid <= 0` 或 `id <= 0` → 参数错误，不执行启动。
+- 当上层 `agri-operation-workflow` 已进入直接控制或传感器辅助灌溉分支时，最初请求/表单提交只用于展示控制草稿；必须等后来一轮用户确认该草稿后才调用本工具。
 
 ### stop_valve_bank
 

@@ -25,15 +25,17 @@ get_plot_device_list -> exact SHUM analysis -> plot and weather evidence
 -> execution draft -> later user confirmation -> ordered valve starts
 ```
 
+Keep direct valve control separate from sensor-assisted irrigation. When the user explicitly provides a known valve-bank ID and duration, follow the SONO direct-control contract and a later-turn confirmation; that branch does not require `plot_id`, `get_plot_device_list`, `SHUM`, plot evidence, weather evidence, or valve discovery.
+
 ## Script-First Payload Control
 
 Use `scripts/agri_material_payload.py` for the fragile material payload steps. Do not hand-build or hand-merge panel, draft, or submit payloads when the script is available. The script output is the authority for `form_syntax`, `pending_draft`, and `add_farming_record_args`.
 
 Use `scripts/irrigation_control_payload.py` for every irrigation payload transition. Its four commands are:
 
-- `analyze-sensors`: validate exact `SHUM` readings and produce authoritative `sensor_analysis`, `plot_device_ids`, and internal `plot_device_id_values`.
+- `analyze-sensors`: validate exact `SHUM` readings and produce authoritative `sensor_analysis`, `plot_device_ids`, and internal `plot_device_id_values`. All identifier values crossing JSON boundaries are canonical decimal strings.
 - `build-panel`: revalidate the complete `sensor_analysis` and produce authoritative `form_syntax` plus `pending_irrigation_draft`.
-- `prepare-execution`: validate the irrigation form submit and produce authoritative `pending_execution_draft`, `draft_fingerprint`, and confirmation text.
+- `prepare-execution`: validate the irrigation form submit and produce authoritative `pending_execution_draft`, `draft_fingerprint`, and confirmation text that all bind and display plot name, average moisture, reason, selected valves, and final durations.
 - `build-execution`: bind a later user confirmation to the trusted pending draft and produce authoritative ordered `start_valve_bank_args`.
 
 Do not hand-build or merge irrigation form or execution payloads. Preserve the complete script-produced pending state across turns.
@@ -151,8 +153,10 @@ If `record_draft` is missing, the script returns `ok: false` with `record_draft 
 - The frontend-visible material recommendation must be `form agri-material-usage` Syntax only. Do not output `schemaVersion`, `blocks`, `kind`, `form-panel`, JSON wrappers, SSE JSON events, Markdown explanation, plot, address, operation, task, or old farming-form fields in that Syntax.
 - When a recommended farming operation involves materials, compute a recommended total `num` for the frontend whenever there is a reasonable per-mu rate basis and known area. Check MCP results, relevant recommendation text, user conditions, knowledge-base/technical-standard evidence, and then the model's own agronomic experience.
 - The model may use its own agronomic experience to recommend the internal per-mu rate when stronger sources are absent. Keep the resulting `num` conservative and editable. Use `num: 0` and `dosage: 0` only when no reasonable rate can be recommended or area is unavailable.
+- Route an explicit request containing a known valve-bank ID and duration to **Direct Valve Control**, not to the sensor-assisted sequence. Show the exact valve ID and duration, wait for a later user turn to confirm that displayed control draft, then follow the SONO `start_valve_bank` direct-control contract. This direct branch does not require `plot_id` or any sensor, plot, weather, or valve-discovery call.
+- Preserve every int64 identifier crossing JSON, form, trusted state, or MCP boundaries as a canonical decimal string. In particular, never coerce `cid`, `plot_id`, plot-device IDs, or valve-bank IDs through a JavaScript number; SONO accepts decimal strings for FlexibleInt64 fields.
 - Use the device-assisted sequence only for a known `cid` and `plot_id`: `get_plot_device_list` -> exact `SHUM` extraction -> `get_plot_info` + `get_weather` -> explicit irrigation-necessity decision -> one `get_valve_bank_by_device` call -> dedicated irrigation form -> separate confirmation -> ordered `start_valve_bank` calls.
-- Accept soil-moisture telemetry only when `key == "SHUM"`; similar names, labels, and case variants are not substitutes. Use the first finite exact match per device and the outer device-list `id`.
+- Accept soil-moisture telemetry only when `key == "SHUM"`; similar names, labels, and case variants are not substitutes. Deduplicate repeated outer device-list IDs in first-occurrence order, and use only the first finite exact match encountered for each canonical ID so each device ID has one average weight.
 - Never call `get_valve_bank_by_device` unless the authoritative sensor analysis has valid readings and irrigation is explicitly judged necessary. Pass `plot_device_ids` as the script-produced comma-separated string; do not send internal `plot_device_id_values`.
 - Call `get_valve_bank_by_device` once for the whole comma-separated ID string. Treat its `payload[]` as the server-deduplicated valve-bank list.
 - Before displaying the irrigation form, run `build-panel` so the entire `sensor_analysis` is revalidated. Do not trust a bare average or a manually reconstructed analysis object.
@@ -230,7 +234,19 @@ Use this phase when the operation draft is complete, no material confirmation pa
 5. If `missing_fields` is returned, ask for or recover the missing fields and then ask for final creation confirmation again.
 6. Call `add_farming_record` only with script-produced `add_farming_record_args`.
 
-### 5. Device-Assisted Irrigation Control
+### 5. Direct Valve Control
+
+Use this phase when the user explicitly asks to start/open a uniquely identified valve-bank ID and supplies the intended positive duration. It is distinct from a request to judge whether a plot needs irrigation.
+
+1. Require a known `cid`, unique valve-bank `id`, and explicit positive integer `auto_off_minutes`. Keep `cid` and `id` as canonical decimal strings. This branch does not require `plot_id`, sensor telemetry, or a plot-device association.
+2. Do not call `get_plot_device_list`, `get_plot_info`, `get_weather`, or `get_valve_bank_by_device`; the user has already identified the direct-control target and duration.
+3. Display a direct-control draft with the exact valve-bank ID and duration and ask whether to start it. Do not call `start_valve_bank` in this turn.
+4. Only on a later user turn that explicitly confirms the displayed direct-control draft, call `start_valve_bank` under the SONO direct-control contract with the trusted `cid`, `id`, and `auto_off_minutes`.
+5. Preserve the real upstream result. Claim success only when the response explicitly confirms it; an empty or unconfirmed response means the request was sent but actual opening is unconfirmed.
+
+If the user asks whether irrigation is needed, refers to soil moisture or a plot rather than a known valve-bank ID, or wants the system to choose valves/durations, use Device-Assisted Irrigation Control instead.
+
+### 6. Device-Assisted Irrigation Control
 
 Use this phase for 设备操作, 土壤湿度, 灌溉判断, `SHUM`, `irrigation-valve-duration`, or guarded `start_valve_bank` execution.
 
@@ -240,8 +256,8 @@ Use this phase for 设备操作, 土壤湿度, 灌溉判断, `SHUM`, `irrigation
 4. If irrigation is not necessary or remains uncertain, explain the evidence and do not query or control valves.
 5. When irrigation is necessary, call `get_valve_bank_by_device` exactly once with `plot_device_ids` equal to the script-produced comma-separated string. Use the returned deduplicated `payload[]` as `valve_banks`.
 6. If no valve banks are returned, call `get_farming_operation_list` and fall back to recommending/preparing an ordinary irrigation farming operation; do not fabricate valve IDs.
-7. Run `build-panel` with the complete `sensor_analysis`, evidence-backed reason, positive recommended duration, and returned valves. Preserve `pending_irrigation_draft` and send only its `form_syntax`. Read `references/irrigation-control.md` and `references/irrigation-form.md` first.
-8. When the matching form submit arrives, run `prepare-execution`. Preserve the trusted `pending_execution_draft` and `draft_fingerprint`, show `confirmation_text`, and end the turn without calling `start_valve_bank`.
+7. Run `build-panel` with the complete `sensor_analysis`, evidence-backed reason, positive recommended duration, and returned valves. Preserve `pending_irrigation_draft` and send only its `form_syntax`, which uses `title 灌溉时长确认`, `autoOpen false`, `data`, and `valve_bank_title`. Read `references/irrigation-control.md` and `references/irrigation-form.md` first.
+8. When the matching form submit arrives, run `prepare-execution`. Preserve the trusted `pending_execution_draft` and `draft_fingerprint`, show the complete `confirmation_text` containing plot name, average moisture, reason, valve IDs/titles, and final durations, and end the turn without calling `start_valve_bank`.
 9. On a later user turn that confirms the displayed draft, run `build-execution` with `execution_confirmed: true`, `draft_was_shown_to_user: true`, `confirmation_source: "user_confirmed_irrigation_execution_draft"`, and the matching `confirmed_draft_fingerprint`.
 10. Call `start_valve_bank` once per script-produced argument object, in list order. Stop after the first failed or unconfirmed result, skip the rest, never perform an automatic compensating close, and report the partial execution accurately.
 
@@ -296,7 +312,7 @@ Do not replace the script-produced item with the original inventory row after th
 
 ## Completion Checklist
 
-Use only the checklist for the branch actually executed. The device-irrigation branch does not require material selection or farming-record creation.
+Use only the checklist for the branch actually executed. The device-irrigation and direct-valve branches do not require material selection or farming-record creation.
 
 ### Farming-record branch checklist
 
@@ -315,7 +331,15 @@ Use only the checklist for the branch actually executed. The device-irrigation b
 
 ### Device-irrigation branch checklist
 
-- Irrigation used the first finite exact `SHUM` per device, retained the authoritative full `sensor_analysis`, and passed only the script-produced comma-separated `plot_device_ids` to one batch valve lookup.
+- Irrigation deduplicated outer device IDs in first-occurrence order, used only the first finite exact `SHUM` from each retained device, retained the authoritative full `sensor_analysis`, and passed only the script-produced comma-separated `plot_device_ids` to one batch valve lookup.
+- Every int64 identifier remained a canonical decimal string across JSON, form, trusted-state, and MCP boundaries.
 - The form submit included every candidate `valve_bank_id` from the trusted pending irrigation draft exactly once; unselected candidates remained present with `selected: false`.
-- The irrigation form submit only prepared and displayed an execution draft; a later user confirmation with matching `draft_fingerprint` was required before ordered valve starts.
+- The irrigation form submit only prepared and displayed a complete execution draft binding plot name, average moisture, reason, valve IDs/titles, and final durations; a later user confirmation with matching `draft_fingerprint` was required before ordered valve starts.
 - Valve starts stopped on the first failure, later calls were skipped, and no automatic compensating close was attempted.
+
+### Direct-valve branch checklist
+
+- The user supplied a unique valve-bank ID and positive duration; `cid` and valve ID remained decimal strings.
+- No `plot_id`, sensor, plot, weather, or valve-discovery call was required.
+- The exact valve ID and duration were displayed before control, and `start_valve_bank` was called only after a later user turn confirmed that draft.
+- The response was reported as successful only when upstream explicitly confirmed success.
