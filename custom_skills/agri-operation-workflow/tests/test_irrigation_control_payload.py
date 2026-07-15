@@ -1,0 +1,177 @@
+# -*- coding: utf-8 -*-
+import json
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+
+SKILL_DIR = Path(__file__).resolve().parents[1]
+SCRIPT = SKILL_DIR / "scripts" / "irrigation_control_payload.py"
+
+
+def run_script(command, payload):
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), command],
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"script failed: {proc.stderr}\nstdout={proc.stdout}")
+    return json.loads(proc.stdout)
+
+
+class IrrigationControlPayloadTests(unittest.TestCase):
+    def test_analyze_sensors_uses_first_exact_shum_per_device(self):
+        result = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "name": "传感器A", "device": {"device_data": [
+                {"key": "trsd", "value": 99},
+                {"key": "SHUM", "value": 20},
+                {"key": "SHUM", "value": 80},
+            ]}},
+            {"id": "21", "name": "传感器B", "device": {"device_data": [
+                {"key": "shum", "value": 90},
+                {"key": "SHUM", "value": "30.5"},
+            ]}},
+            {"id": 22, "name": "无效传感器", "device": {"device_data": [
+                {"key": "SHUM", "value": "not-a-number"},
+            ]}},
+        ]})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["has_valid_shum"])
+        self.assertEqual(result["average_soil_moisture"], 25.25)
+        self.assertEqual(result["plot_device_ids"], [16, 21])
+        self.assertEqual(result["plot_device_ids_csv"], "16,21")
+        self.assertEqual([row["value"] for row in result["sensor_readings"]], [20, 30.5])
+
+    def test_analyze_sensors_returns_no_control_input_without_valid_shum(self):
+        result = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "device": {"device_data": [
+                {"key": "SHUM", "value": None},
+                {"key": "SHUM", "value": True},
+                {"key": "SHUM", "value": "NaN"},
+            ]}},
+        ]})
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["has_valid_shum"])
+        self.assertIsNone(result["average_soil_moisture"])
+        self.assertEqual(result["plot_device_ids_csv"], "")
+
+    def _panel_payload(self):
+        return {
+            "cid": 2007,
+            "plot_id": 130,
+            "plot_name": "示例地块",
+            "average_soil_moisture": 25.25,
+            "reason": "土壤湿度偏低且近期无明显降雨",
+            "recommended_duration_minutes": 20,
+            "valve_banks": [
+                {"id": 31, "run_status": "0", "title": "阀门组A"},
+                {"id": 32, "run_status": "0", "title": "阀门组B"},
+            ],
+        }
+
+    def test_build_panel_returns_irrigation_syntax_and_internal_draft(self):
+        result = run_script("build-panel", self._panel_payload())
+        self.assertTrue(result["ok"])
+        self.assertIn("form irrigation-valve-duration", result["form_syntax"])
+        self.assertIn("average_soil_moisture 25.25", result["form_syntax"])
+        self.assertIn("valve_bank_id 31", result["form_syntax"])
+        self.assertEqual(len(result["pending_irrigation_draft"]["valve_banks"]), 2)
+
+    def test_build_panel_empty_valves_falls_back_to_farming_operation(self):
+        payload = self._panel_payload()
+        payload["valve_banks"] = []
+        result = run_script("build-panel", payload)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["fallback_to_farming_operation"])
+        self.assertNotIn("form_syntax", result)
+
+    def test_prepare_execution_rejects_unknown_valve_id(self):
+        panel = run_script("build-panel", self._panel_payload())
+        result = run_script("prepare-execution", {
+            "pending_irrigation_draft": panel["pending_irrigation_draft"],
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "irrigation-valve-duration",
+                "tag": "irrigation_valve_duration_confirm",
+                "valveBanks": [{
+                    "valve_bank_id": 999,
+                    "duration_minutes": 20,
+                    "selected": True,
+                }],
+            },
+        })
+        self.assertFalse(result["ok"])
+        self.assertIn("unknown valve_bank_id: 999", result["errors"])
+        self.assertNotIn("start_valve_bank_args", result)
+
+    def test_form_submit_only_prepares_draft_and_later_confirmation_builds_args(self):
+        panel = run_script("build-panel", self._panel_payload())
+        prepared = run_script("prepare-execution", {
+            "pending_irrigation_draft": panel["pending_irrigation_draft"],
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "irrigation-valve-duration",
+                "tag": "irrigation_valve_duration_confirm",
+                "valveBanks": [
+                    {"valve_bank_id": 31, "duration_minutes": 15, "selected": True},
+                    {"valve_bank_id": 32, "duration_minutes": 25, "selected": True},
+                ],
+            },
+        })
+        self.assertTrue(prepared["ok"])
+        self.assertTrue(prepared["requires_execution_confirmation"])
+        self.assertNotIn("start_valve_bank_args", prepared)
+
+        blocked = run_script("build-execution", {
+            "pending_execution_draft": prepared["pending_execution_draft"],
+            "execution_confirmed": True,
+        })
+        self.assertFalse(blocked["ok"])
+        self.assertTrue(blocked["requires_execution_confirmation"])
+
+        execution = run_script("build-execution", {
+            "pending_execution_draft": prepared["pending_execution_draft"],
+            "execution_confirmed": True,
+            "draft_was_shown_to_user": True,
+            "confirmation_source": "user_confirmed_irrigation_execution_draft",
+        })
+        self.assertTrue(execution["ok"])
+        self.assertEqual(execution["start_valve_bank_args"], [
+            {"cid": 2007, "id": 31, "auto_off_minutes": 15},
+            {"cid": 2007, "id": 32, "auto_off_minutes": 25},
+        ])
+
+    def test_skill_documents_batch_valve_lookup_and_separate_execution_turn(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        irrigation_text = (SKILL_DIR / "references" / "irrigation-control.md").read_text(encoding="utf-8")
+        form_text = (SKILL_DIR / "references" / "irrigation-form.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill_text, irrigation_text, form_text))
+        for required in (
+            'key == "SHUM"',
+            "plot_device_ids",
+            "form irrigation-valve-duration",
+            "irrigation_valve_duration_confirm",
+            "user_confirmed_irrigation_execution_draft",
+            "Never call `start_valve_bank` in the same assistant turn that receives the irrigation form submit",
+        ):
+            self.assertIn(required, combined)
+
+    def test_sono_mcp_contract_uses_batch_string_and_list_response(self):
+        repo = SKILL_DIR.parents[1]
+        sono_skill = (repo / "custom_skills" / "sono-mcp" / "SKILL.md").read_text(encoding="utf-8")
+        valve_ref = (repo / "custom_skills" / "sono-mcp" / "references" / "tool-valve-bank-by-device.md").read_text(encoding="utf-8")
+        plot_devices_ref = (repo / "custom_skills" / "sono-mcp" / "references" / "tool-plot-device-list.md").read_text(encoding="utf-8")
+        combined = "\n".join((sono_skill, valve_ref, plot_devices_ref))
+        self.assertIn('"plot_device_ids": "16,21,35"', combined)
+        self.assertIn("服务端已去重", combined)
+        self.assertNotIn('"plot_device_id": 16', combined)
+
+
+if __name__ == "__main__":
+    unittest.main()
