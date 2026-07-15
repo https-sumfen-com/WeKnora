@@ -1,6 +1,6 @@
 ---
 name: agri-operation-workflow
-description: "Use when SONO Agent recommends farming operations/农事操作/农事建议/作业安排, recommends materials or usage/推荐农资/推荐用量/用量推荐/农资用量/亩用量/总用量 for 施肥/用药/植保/除草, returns form agri-material-usage Syntax, handles agri-material-usage form_submit, or prepares/calls add_farming_record through SONO-MCP."
+description: "Use when SONO Agent recommends farming operations/农事操作/农事建议/作业安排, handles device operations/设备操作, soil moisture/土壤湿度, irrigation decisions/灌溉判断 or SHUM, recommends materials or usage/推荐农资/推荐用量/用量推荐/农资用量/亩用量/总用量 for 施肥/用药/植保/除草, returns form agri-material-usage or irrigation-valve-duration Syntax, handles either form_submit, or safely prepares/calls add_farming_record or start_valve_bank through SONO-MCP."
 ---
 
 # SONO Farming Operation Workflow
@@ -17,9 +17,26 @@ MCP-grounded recommendation -> user orders an operation -> prepare record draft
 
 This is a new workflow skill for farming-operation recommendation, material confirmation, and record creation.
 
+Use it also for the guarded device-assisted irrigation loop:
+
+```text
+get_plot_device_list -> exact SHUM analysis -> plot and weather evidence
+-> irrigation decision -> one batched valve lookup -> duration form
+-> execution draft -> later user confirmation -> ordered valve starts
+```
+
 ## Script-First Payload Control
 
 Use `scripts/agri_material_payload.py` for the fragile material payload steps. Do not hand-build or hand-merge panel, draft, or submit payloads when the script is available. The script output is the authority for `form_syntax`, `pending_draft`, and `add_farming_record_args`.
+
+Use `scripts/irrigation_control_payload.py` for every irrigation payload transition. Its four commands are:
+
+- `analyze-sensors`: validate exact `SHUM` readings and produce authoritative `sensor_analysis`, `plot_device_ids`, and internal `plot_device_id_values`.
+- `build-panel`: revalidate the complete `sensor_analysis` and produce authoritative `form_syntax` plus `pending_irrigation_draft`.
+- `prepare-execution`: validate the irrigation form submit and produce authoritative `pending_execution_draft`, `draft_fingerprint`, and confirmation text.
+- `build-execution`: bind a later user confirmation to the trusted pending draft and produce authoritative ordered `start_valve_bank_args`.
+
+Do not hand-build or merge irrigation form or execution payloads. Preserve the complete script-produced pending state across turns.
 
 Use `execute_skill_script` with this skill's script path:
 
@@ -134,6 +151,16 @@ If `record_draft` is missing, the script returns `ok: false` with `record_draft 
 - The frontend-visible material recommendation must be `form agri-material-usage` Syntax only. Do not output `schemaVersion`, `blocks`, `kind`, `form-panel`, JSON wrappers, SSE JSON events, Markdown explanation, plot, address, operation, task, or old farming-form fields in that Syntax.
 - When a recommended farming operation involves materials, compute a recommended total `num` for the frontend whenever there is a reasonable per-mu rate basis and known area. Check MCP results, relevant recommendation text, user conditions, knowledge-base/technical-standard evidence, and then the model's own agronomic experience.
 - The model may use its own agronomic experience to recommend the internal per-mu rate when stronger sources are absent. Keep the resulting `num` conservative and editable. Use `num: 0` and `dosage: 0` only when no reasonable rate can be recommended or area is unavailable.
+- Use the device-assisted sequence only for a known `cid` and `plot_id`: `get_plot_device_list` -> exact `SHUM` extraction -> `get_plot_info` + `get_weather` -> explicit irrigation-necessity decision -> one `get_valve_bank_by_device` call -> dedicated irrigation form -> separate confirmation -> ordered `start_valve_bank` calls.
+- Accept soil-moisture telemetry only when `key == "SHUM"`; similar names, labels, and case variants are not substitutes. Use the first finite exact match per device and the outer device-list `id`.
+- Never call `get_valve_bank_by_device` unless the authoritative sensor analysis has valid readings and irrigation is explicitly judged necessary. Pass `plot_device_ids` as the script-produced comma-separated string; do not send internal `plot_device_id_values`.
+- Call `get_valve_bank_by_device` once for the whole comma-separated ID string. Treat its `payload[]` as the server-deduplicated valve-bank list.
+- Before displaying the irrigation form, run `build-panel` so the entire `sensor_analysis` is revalidated. Do not trust a bare average or a manually reconstructed analysis object.
+- If the batch valve lookup returns no valve banks, do not display the valve form and do not call a valve control tool. Fall back to `get_farming_operation_list` and offer an ordinary farming-operation workflow.
+- The frontend-visible irrigation confirmation must use only the dedicated `form irrigation-valve-duration` Syntax described in `references/irrigation-form.md`.
+- Never call `start_valve_bank` in the same assistant turn that receives the irrigation form submit.
+- The form-submit turn may only run `prepare-execution`, preserve the trusted `pending_execution_draft` and `draft_fingerprint`, display the execution draft, and ask for confirmation. Run `build-execution` only after another user turn explicitly confirms that displayed draft.
+- Execute script-produced `start_valve_bank_args` in order. On the first failure, stop and mark all later calls skipped. Do not automatically call `stop_valve_bank` to compensate for valves that already started; report succeeded, failed, and skipped valves explicitly.
 
 ## Workflow
 
@@ -203,6 +230,21 @@ Use this phase when the operation draft is complete, no material confirmation pa
 5. If `missing_fields` is returned, ask for or recover the missing fields and then ask for final creation confirmation again.
 6. Call `add_farming_record` only with script-produced `add_farming_record_args`.
 
+### 5. Device-Assisted Irrigation Control
+
+Use this phase for 设备操作, 土壤湿度, 灌溉判断, `SHUM`, `irrigation-valve-duration`, or guarded `start_valve_bank` execution.
+
+1. Call `get_plot_device_list` for the known `cid + plot_id`, then run `scripts/irrigation_control_payload.py analyze-sensors` on its full device list.
+2. If the script reports no valid exact `SHUM`, explain that device evidence is insufficient and stop the device-control path.
+3. Call `get_plot_info` and `get_weather`. Judge whether irrigation is necessary using the sensor average first, then plot/crop evidence, then recent and forecast rain/weather. Set `irrigation_needed: true` only when that combined evidence supports irrigation.
+4. If irrigation is not necessary or remains uncertain, explain the evidence and do not query or control valves.
+5. When irrigation is necessary, call `get_valve_bank_by_device` exactly once with `plot_device_ids` equal to the script-produced comma-separated string. Use the returned deduplicated `payload[]` as `valve_banks`.
+6. If no valve banks are returned, call `get_farming_operation_list` and fall back to recommending/preparing an ordinary irrigation farming operation; do not fabricate valve IDs.
+7. Run `build-panel` with the complete `sensor_analysis`, evidence-backed reason, positive recommended duration, and returned valves. Preserve `pending_irrigation_draft` and send only its `form_syntax`. Read `references/irrigation-control.md` and `references/irrigation-form.md` first.
+8. When the matching form submit arrives, run `prepare-execution`. Preserve the trusted `pending_execution_draft` and `draft_fingerprint`, show `confirmation_text`, and end the turn without calling `start_valve_bank`.
+9. On a later user turn that confirms the displayed draft, run `build-execution` with `execution_confirmed: true`, `draft_was_shown_to_user: true`, `confirmation_source: "user_confirmed_irrigation_execution_draft"`, and the matching `confirmed_draft_fingerprint`.
+10. Call `start_valve_bank` once per script-produced argument object, in list order. Stop after the first failed or unconfirmed result, skip the rest, never perform an automatic compensating close, and report the partial execution accurately.
+
 ## Material Mapping
 
 Read the `call-mcp-tools` reference `tool-agri-input-list.md`, this skill's `references/material-selection.md`, this skill's `references/usage-recommendation.md`, and this skill's `references/form-panel.md` when preparing material candidates.
@@ -243,7 +285,10 @@ Do not replace the script-produced item with the original inventory row after th
 - `references/material-selection.md`: operation-aware material filtering rules.
 - `references/usage-recommendation.md`: evidence-backed per-mu rate and frontend `num/dosage` recommendation rules.
 - `references/goodslist-submit.md`: validate original inventory rows and build compact `add_farming_record.goodsList`.
+- `references/irrigation-control.md`: exact sensor analysis, evidence order, batch valve lookup, confirmation gate, and partial-execution rules.
+- `references/irrigation-form.md`: dedicated irrigation Syntax, submit JSON, editable fields, and validation.
 - `scripts/agri_material_payload.py`: deterministic build/validation for material Syntax and submit-ready goodsList.
+- `scripts/irrigation_control_payload.py`: deterministic sensor, form, draft-binding, and valve execution payloads.
 - `call-mcp-tools`: MCP tool selection and parameter discipline.
 - `call-mcp-tools` reference `tool-agri-input-list.md`: material list source fields.
 - `call-mcp-tools` reference `tool-farming-operation-list.md`: operation list and `matter_id`.
@@ -263,3 +308,6 @@ Do not replace the script-produced item with the original inventory row after th
 - Operator defaults to `user_id` when available.
 - User-facing confirmation drafts did not display `work_user`, `tgzn_user_id`, or `user_id`.
 - `add_farming_record` was not called until final record-creation confirmation and required draft fields were complete; no-material operations used `record_creation_confirmed: true`, `draft_was_shown_to_user: true`, and `confirmation_source: "user_confirmed_prepared_draft"` only after the user confirmed the prepared draft in a separate user turn.
+- Irrigation used the first finite exact `SHUM` per device, retained the authoritative full `sensor_analysis`, and passed only the script-produced comma-separated `plot_device_ids` to one batch valve lookup.
+- The irrigation form submit only prepared and displayed an execution draft; a later user confirmation with matching `draft_fingerprint` was required before ordered valve starts.
+- Valve starts stopped on the first failure, later calls were skipped, and no automatic compensating close was attempted.

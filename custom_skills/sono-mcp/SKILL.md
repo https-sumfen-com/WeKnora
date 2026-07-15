@@ -22,23 +22,23 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 本 Skill 只允许调用以下 15 个已注册工具。禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
 
-| 用户意图 | 唯一匹配工具 | 必要参数 |
-|---|---|---|
-| 某个地块的状态、作物、长势、面积、生长阶段、农事建议 | `get_plot_info` | `plot_id` 或地块名 `keyword` |
-| 天气、气象、降雨温湿风、适不适合打药/喷灌/作业 | `get_weather` | `plot_id` 或地块名 `keyword`；未来/预报追加 `days=7` |
-| 基地汇总、基地看板、基地统计、基地报告；以及全局概览（见下） | `get_summary_base` | `cid` + `dept_id` 或 `base_id` |
-| 某个设备的详情、遥测数据、所属地块 | `get_plot_device_info` | `device_id` |
-| 某个地块的传感器设备列表、设备实时读数、地块设备关联 ID | `get_plot_device_list` | `cid` + `plot_id` |
-| 某个地块设备关联的阀门组、阀门组运行状态 | `get_valve_bank_by_device` | `cid` + `plot_device_id` |
-| 明确启动、开启、打开某个阀门组 | `start_valve_bank` | `cid` + 阀门组 `id`；定时关闭时追加 `auto_off_minutes` |
-| 明确停止、关闭某个阀门组 | `stop_valve_bank` | 阀门组 `id`；有 `cid` 时一并传入 |
-| WOFOST、作物模型/生长模拟报告、模型预测产量、模拟生物量、LAI、根深、氮吸收、水分平衡 | `get_wofost_report` | `cid` + `plot_id` |
-| 地块预警、风险告警、病虫害/气象/设备/长势异常提醒 | `get_plot_warning` | `cid` + `plot_id`；无地块上下文先追问 |
-| 查询/查看已有细分报告、模块报告：长势分析、3D 表型、长势动态、苗情监测、WOFOST 分析、设备分析 | `get_report_by_type` | `type` + `id`；地块类 `id=plot_id`，设备类 `id=device_id` |
-| 新增/保存/提交农事记录、作业记录、施肥/用药/灌溉等农事操作记录 | `add_farming_record` | `cid` 或 `tgzn_entity_id`；记录字段必须来自上下文/表单/用户 |
-| 查询/选择农资库存、农资/肥料/药剂/物料列表 | `get_agri_input_list` | `cid` + `base_id` |
-| 查询/选择农资配方/套餐/施肥配方 | `get_formula_list` | `cid` + `base_id` |
-| 查询/选择农事操作、作业事项、事项列表 | `get_farming_operation_list` | `cid` |
+| 用户意图                                                                                      | 唯一匹配工具                 | 必要参数                                                    |
+| --------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------- |
+| 某个地块的状态、作物、长势、面积、生长阶段、农事建议                                          | `get_plot_info`              | `plot_id` 或地块名 `keyword`                                |
+| 天气、气象、降雨温湿风、适不适合打药/喷灌/作业                                                | `get_weather`                | `plot_id` 或地块名 `keyword`；未来/预报追加 `days=7`        |
+| 基地汇总、基地看板、基地统计、基地报告；以及全局概览（见下）                                  | `get_summary_base`           | `cid` + `dept_id` 或 `base_id`                              |
+| 某个设备的详情、遥测数据、所属地块                                                            | `get_plot_device_info`       | `device_id`                                                 |
+| 某个地块的传感器设备列表、设备实时读数、地块设备关联 ID                                       | `get_plot_device_list`       | `cid` + `plot_id`                                           |
+| 某个地块设备关联的阀门组、阀门组运行状态                                                      | `get_valve_bank_by_device`   | `cid` + `plot_device_ids`                                   |
+| 明确启动、开启、打开某个阀门组                                                                | `start_valve_bank`           | `cid` + 阀门组 `id`；定时关闭时追加 `auto_off_minutes`      |
+| 明确停止、关闭某个阀门组                                                                      | `stop_valve_bank`            | 阀门组 `id`；有 `cid` 时一并传入                            |
+| WOFOST、作物模型/生长模拟报告、模型预测产量、模拟生物量、LAI、根深、氮吸收、水分平衡          | `get_wofost_report`          | `cid` + `plot_id`                                           |
+| 地块预警、风险告警、病虫害/气象/设备/长势异常提醒                                             | `get_plot_warning`           | `cid` + `plot_id`；无地块上下文先追问                       |
+| 查询/查看已有细分报告、模块报告：长势分析、3D 表型、长势动态、苗情监测、WOFOST 分析、设备分析 | `get_report_by_type`         | `type` + `id`；地块类 `id=plot_id`，设备类 `id=device_id`   |
+| 新增/保存/提交农事记录、作业记录、施肥/用药/灌溉等农事操作记录                                | `add_farming_record`         | `cid` 或 `tgzn_entity_id`；记录字段必须来自上下文/表单/用户 |
+| 查询/选择农资库存、农资/肥料/药剂/物料列表                                                    | `get_agri_input_list`        | `cid` + `base_id`                                           |
+| 查询/选择农资配方/套餐/施肥配方                                                               | `get_formula_list`           | `cid` + `base_id`                                           |
+| 查询/选择农事操作、作业事项、事项列表                                                         | `get_farming_operation_list` | `cid`                                                       |
 
 **全局概览意图**（归 `get_summary_base`）：
 
@@ -57,7 +57,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 全局概览 → 只调 `get_summary_base`；其响应已内嵌实时天气和 7 天预报（`summary.weather` / `summary.weather_7days`），**禁止再追加 `get_weather` 或任何其他工具**。
 - 上下文存在 `device_id` 不构成调用理由：用户没有明确设备查询意图时，禁止调 `get_plot_device_info`。
 - 问单个设备详情 → `get_plot_device_info`；问某地块有哪些传感器 → `get_plot_device_list`；问地块设备关联哪个阀门组 → `get_valve_bank_by_device`。三个 ID 含义不同，不得混用。
-- `get_valve_bank_by_device.plot_device_id` 必须取地块设备关联 ID；若来自 `get_plot_device_list`，使用列表项最外层 `id`，**禁止**使用嵌套的 `device.id`。
+- `get_valve_bank_by_device.plot_device_ids` 必须是由地块设备关联 ID 组成的逗号字符串；若来自 `get_plot_device_list`，按列表顺序连接各项最外层 `id`，**禁止**使用嵌套的 `device.id`。
 - 问阀门组名称/状态 → `get_valve_bank_by_device`；只有用户明确说“启动/打开”或“停止/关闭”时，才分别调用 `start_valve_bank` 或 `stop_valve_bank`。
 - `start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；可取 `get_valve_bank_by_device` 返回的 `id`，不得传 `plot_device_id` 或 `device.id`。
 - 没有明确地块分析意图时，禁止调 `get_plot_info` 和 `get_wofost_report`；"可能有帮助"或"补全信息"不是调用理由。
@@ -75,37 +75,37 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ## 第二步：参数纪律（不猜参数）
 
-参数只能来自：服务端/会话/网关上下文 → 当前页面路由 → 用户本轮输入 → 历史对话（按此优先级取值）。**禁止编造或猜测** `plot_id`、`device_id`、`plot_device_id`、`id`、`auto_off_minutes`、`dept_id`、`base_id`、`cid`、`matter_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
+参数只能来自：服务端/会话/网关上下文 → 当前页面路由 → 用户本轮输入 → 历史对话（按此优先级取值）。**禁止编造或猜测** `plot_id`、`device_id`、`plot_device_ids`、`id`、`auto_off_minutes`、`dept_id`、`base_id`、`cid`、`matter_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
 
 所有数字字段用 `FlexibleInt64` 解码：JSON 数字 `123` 或整数字符串 `"123"` 均可；非整数字符串报错。
 
 **字段映射速查**：
 
-| 参数        | 说明                                                                                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cid`       | 企业标识；是否必填以各工具章节为准。`start_valve_bank` 必填；`stop_valve_bank` 当前可选，但上下文有值时一并传入                                      |
-| `dept_id`   | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                        |
-| `base_id`   | `get_summary_base`、`add_farming_record`、`get_agri_input_list`、`get_formula_list`；在 `get_summary_base` 中有值时优先于 `dept_id`                    |
-| `plot_id`   | `get_plot_info`、`get_weather`、`get_plot_device_list`、`get_wofost_report`、`get_plot_warning`、`add_farming_record`；`get_report_by_type` 的地块类报告用作 `id` |
-| `keyword`   | `get_plot_info`、`get_weather`：只传地块名/区域名，**不传天气词/时间词**（"今天""下雨""适合打药"不是 keyword）；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
-| `device_id` | 仅 `get_plot_device_info`；设备 ID，不得作为 `plot_device_id` 使用                                                                                      |
-| `plot_device_id` | 仅 `get_valve_bank_by_device`；地块与设备的关联 ID。来自 `get_plot_device_list` 时取列表项最外层 `id`，不是 `device.id`                              |
-| `page` / `limit` / `name` | 仅 `get_plot_device_list`；均可选，分别用于分页和设备名称筛选；用户未指定时不要猜测                                                             |
-| `report_date` | 仅 `get_wofost_report`；格式 `YYYY-MM-DD`，只接受明确日期语义，不要把"今天/最新"原样传入；不传时服务端默认当天                                       |
-| `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
-| `type`      | 仅 `get_report_by_type`；只允许 `plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis` |
-| `id`        | `get_report_by_type`：地块类报告传 `plot_id`，设备分析传 `device_id`；`start_valve_bank` / `stop_valve_bank`：传阀门组 ID，不是 `plot_device_id`       |
-| `auto_off_minutes` | 仅 `start_valve_bank`；可选的正整数分钟数，只在用户明确要求定时关闭时传，禁止猜测默认时长                                                     |
-| `period_type` | 仅 `get_report_by_type`；只允许 `7d`、`week`、`month`，不明确时不传，让服务端默认 `7d`                                                               |
-| `start_date` / `end_date` | `get_plot_warning`、`get_report_by_type`；只接受明确日期范围，不明确时不传                                                                  |
-| `planting_start_date` | 仅 `get_report_by_type`；只在上层已有明确种植开始日期时传                                                                                  |
-| `limit`     | 仅 `get_plot_warning`；不明确时不传，让服务端默认 `20`                                                                                                  |
-| `address` / `location` | 仅 `add_farming_record`；作业地址和经纬度/位置文本，缺失时不要编造                                                                        |
-| `area` / `area_unit` | 仅 `add_farming_record`；作业面积和单位，必须来自用户或表单                                                                                |
-| `matter_id` | 仅 `add_farming_record`；农事操作事项 ID，可从 `get_farming_operation_list` 的用户选择结果取得                                                         |
-| `operate_time` | 仅 `add_farming_record`；作业时间，传明确日期时间字符串，不把模糊时间原样传入                                                                      |
-| `goodsList` | 仅 `add_farming_record`；提交条目使用 `goods_name`、`stock_goods_id`、`is_formula`、`num`、`price`、`unit`、`dosage` 等字段，值必须来自用户/表单/配方计算结果 |
-| `tgzn_user_id` / `tgzn_entity_id` / `tgzn_dept_id` | 仅 `add_farming_record`；来自网关/会话/表单，不要猜测                                                            |
+| 参数                                               | 说明                                                                                                                                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cid`                                              | 企业标识；是否必填以各工具章节为准。`start_valve_bank` 必填；`stop_valve_bank` 当前可选，但上下文有值时一并传入                                                                                     |
+| `dept_id`                                          | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                                                                    |
+| `base_id`                                          | `get_summary_base`、`add_farming_record`、`get_agri_input_list`、`get_formula_list`；在 `get_summary_base` 中有值时优先于 `dept_id`                                                                 |
+| `plot_id`                                          | `get_plot_info`、`get_weather`、`get_plot_device_list`、`get_wofost_report`、`get_plot_warning`、`add_farming_record`；`get_report_by_type` 的地块类报告用作 `id`                                   |
+| `keyword`                                          | `get_plot_info`、`get_weather`：只传地块名/区域名，**不传天气词/时间词**（"今天""下雨""适合打药"不是 keyword）；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
+| `device_id`                                        | 仅 `get_plot_device_info`；设备 ID，不得作为 `plot_device_id` 使用                                                                                                                                  |
+| `plot_device_ids`                                  | 仅 `get_valve_bank_by_device`；逗号分隔的地块设备关联 ID 字符串，例如 `"16,21,35"`。来自 `get_plot_device_list` 时按顺序连接各项最外层 `id`，不是 `device.id`                                      |
+| `page` / `limit` / `name`                          | 仅 `get_plot_device_list`；均可选，分别用于分页和设备名称筛选；用户未指定时不要猜测                                                                                                                 |
+| `report_date`                                      | 仅 `get_wofost_report`；格式 `YYYY-MM-DD`，只接受明确日期语义，不要把"今天/最新"原样传入；不传时服务端默认当天                                                                                      |
+| `days`                                             | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                                                                 |
+| `type`                                             | 仅 `get_report_by_type`；只允许 `plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis`                                   |
+| `id`                                               | `get_report_by_type`：地块类报告传 `plot_id`，设备分析传 `device_id`；`start_valve_bank` / `stop_valve_bank`：传阀门组 ID，不是 `plot_device_id`                                                    |
+| `auto_off_minutes`                                 | 仅 `start_valve_bank`；可选的正整数分钟数，只在用户明确要求定时关闭时传，禁止猜测默认时长                                                                                                           |
+| `period_type`                                      | 仅 `get_report_by_type`；只允许 `7d`、`week`、`month`，不明确时不传，让服务端默认 `7d`                                                                                                              |
+| `start_date` / `end_date`                          | `get_plot_warning`、`get_report_by_type`；只接受明确日期范围，不明确时不传                                                                                                                          |
+| `planting_start_date`                              | 仅 `get_report_by_type`；只在上层已有明确种植开始日期时传                                                                                                                                           |
+| `limit`                                            | 仅 `get_plot_warning`；不明确时不传，让服务端默认 `20`                                                                                                                                              |
+| `address` / `location`                             | 仅 `add_farming_record`；作业地址和经纬度/位置文本，缺失时不要编造                                                                                                                                  |
+| `area` / `area_unit`                               | 仅 `add_farming_record`；作业面积和单位，必须来自用户或表单                                                                                                                                         |
+| `matter_id`                                        | 仅 `add_farming_record`；农事操作事项 ID，可从 `get_farming_operation_list` 的用户选择结果取得                                                                                                      |
+| `operate_time`                                     | 仅 `add_farming_record`；作业时间，传明确日期时间字符串，不把模糊时间原样传入                                                                                                                       |
+| `goodsList`                                        | 仅 `add_farming_record`；提交条目使用 `goods_name`、`stock_goods_id`、`is_formula`、`num`、`price`、`unit`、`dosage` 等字段，值必须来自用户/表单/配方计算结果                                       |
+| `tgzn_user_id` / `tgzn_entity_id` / `tgzn_dept_id` | 仅 `add_farming_record`；来自网关/会话/表单，不要猜测                                                                                                                                               |
 
 ## 各工具触发与参数
 
@@ -225,20 +225,20 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ### get_valve_bank_by_device
 
-触发：用户**明确**查询某个地块设备关联的阀门组、阀门组名称或运行状态。
+触发：用户**明确**查询一个或多个地块设备关联的阀门组、阀门组名称或运行状态。
 
-- **必填参数**：`cid`、`plot_device_id`，两者都必须为正整数；缺任一项时先追问。
-- `plot_device_id` 表示地块设备关联 ID。若它来自 `get_plot_device_list`，必须使用列表项最外层 `id`，不能使用嵌套 `device.id`。
-- 返回结果必须完整保留 `id`、`run_status`、`title`，详见 `references/tool-valve-bank-by-device.md`。
+- **必填参数**：正整数 `cid`，以及非空 `plot_device_ids` 逗号字符串；缺任一项时先追问。
+- `plot_device_ids` 由一个或多个地块设备关联 ID 组成，例如 `"16,21,35"`。若来自 `get_plot_device_list`，按列表顺序连接各项最外层 `id`，不能使用嵌套 `device.id`。
+- 对同一批 ID 只调用一次；服务端返回已去重的 `payload[]`。每项必须完整保留 `id`、`run_status`、`title`，详见 `references/tool-valve-bank-by-device.md`。
 
 ```json
 {
   "cid": 2007,
-  "plot_device_id": 16
+  "plot_device_ids": "16,21,35"
 }
 ```
 
-- `cid <= 0` 或 `plot_device_id <= 0` → 参数错误，不返回默认数据。
+- `cid <= 0`，或 `plot_device_ids` 为空、含非正整数/空片段 → 参数错误，不返回默认数据。
 
 ### start_valve_bank
 
