@@ -7,7 +7,7 @@
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `cid` | 是 | 企业 ID，必须为正整数 |
-| `id` | 是 | 阀门组 ID，必须为正整数；可取 `get_valve_bank_by_device.id` |
+| `id` | 是 | 阀门组 ID，必须为正整数；可取选中的 `get_valve_bank_by_device.payload[].id` |
 | `auto_off_minutes` | 否 | 自动关闭等待分钟数；只传用户明确指定的正整数 |
 | `token` | 否 | 会话中的上游访问令牌；没有时省略，禁止编造 |
 | `entity_id` | 否 | 实体 ID；没有时省略 |

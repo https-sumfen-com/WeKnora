@@ -58,6 +58,9 @@ Validation:
 
 - `type` must equal `form_submit`, `formType` must equal `irrigation-valve-duration`, and `tag` must equal `irrigation_valve_duration_confirm`.
 - `valveBanks` must be a list with no duplicate `valve_bank_id` values.
+- The submit must contain every candidate `valve_bank_id` from the trusted pending draft exactly once.
+- Row order may differ from the pending draft; identity is checked as an exact set before selected rows keep their submitted execution order.
+- Use `selected: false` to cancel execution; deleting a row does not cancel it.
 - Every `valve_bank_id` must be a positive integer present in the trusted `pending_irrigation_draft`; reject unknown IDs.
 - `selected` must be a JSON boolean and `duration_minutes` must be a positive integer.
 - At least one valve must remain selected.

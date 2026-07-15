@@ -296,6 +296,10 @@ Do not replace the script-produced item with the original inventory row after th
 
 ## Completion Checklist
 
+Use only the checklist for the branch actually executed. The device-irrigation branch does not require material selection or farming-record creation.
+
+### Farming-record branch checklist
+
 - Recommendation used MCP evidence and did not invent an operation.
 - `matter_id` came from `get_farming_operation_list` or prior MCP-backed context.
 - Materials came only from filtered `get_agri_input_list` results; `get_formula_list` was not used and full inventory was not returned by default.
@@ -308,6 +312,10 @@ Do not replace the script-produced item with the original inventory row after th
 - Operator defaults to `user_id` when available.
 - User-facing confirmation drafts did not display `work_user`, `tgzn_user_id`, or `user_id`.
 - `add_farming_record` was not called until final record-creation confirmation and required draft fields were complete; no-material operations used `record_creation_confirmed: true`, `draft_was_shown_to_user: true`, and `confirmation_source: "user_confirmed_prepared_draft"` only after the user confirmed the prepared draft in a separate user turn.
+
+### Device-irrigation branch checklist
+
 - Irrigation used the first finite exact `SHUM` per device, retained the authoritative full `sensor_analysis`, and passed only the script-produced comma-separated `plot_device_ids` to one batch valve lookup.
+- The form submit included every candidate `valve_bank_id` from the trusted pending irrigation draft exactly once; unselected candidates remained present with `selected: false`.
 - The irrigation form submit only prepared and displayed an execution draft; a later user confirmation with matching `draft_fingerprint` was required before ordered valve starts.
 - Valve starts stopped on the first failure, later calls were skipped, and no automatic compensating close was attempted.

@@ -455,6 +455,8 @@ def prepare_execution(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
+    if seen_ids != set(source_by_id):
+        errors.append("submitted valve IDs must exactly match pending valve IDs")
     if not selected_banks:
         errors.append("at least one valve bank must be selected")
     if errors:

@@ -261,6 +261,28 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertIn("unknown valve_bank_id: 999", result["errors"])
         self.assertNotIn("start_valve_bank_args", result)
 
+    def test_prepare_execution_rejects_omitted_pending_valve_id(self):
+        panel = run_script("build-panel", self._panel_payload())
+        result = run_script("prepare-execution", {
+            "pending_irrigation_draft": panel["pending_irrigation_draft"],
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "irrigation-valve-duration",
+                "tag": "irrigation_valve_duration_confirm",
+                "valveBanks": [
+                    {"valve_bank_id": 31, "duration_minutes": 20, "selected": True},
+                ],
+            },
+        })
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "submitted valve IDs must exactly match pending valve IDs",
+            result["errors"],
+        )
+        self.assertNotIn("pending_execution_draft", result)
+        self.assertNotIn("start_valve_bank_args", result)
+
     def test_form_submit_only_prepares_draft_and_later_confirmation_builds_args(self):
         panel = run_script("build-panel", self._panel_payload())
         prepared = run_script("prepare-execution", {
@@ -270,8 +292,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
                 "formType": "irrigation-valve-duration",
                 "tag": "irrigation_valve_duration_confirm",
                 "valveBanks": [
-                    {"valve_bank_id": 31, "duration_minutes": 15, "selected": True},
                     {"valve_bank_id": 32, "duration_minutes": 25, "selected": True},
+                    {"valve_bank_id": 31, "duration_minutes": 15, "selected": True},
                 ],
             },
         })
@@ -300,8 +322,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         })
         self.assertTrue(execution["ok"])
         self.assertEqual(execution["start_valve_bank_args"], [
-            {"cid": 2007, "id": 31, "auto_off_minutes": 15},
             {"cid": 2007, "id": 32, "auto_off_minutes": 25},
+            {"cid": 2007, "id": 31, "auto_off_minutes": 15},
         ])
 
     def _prepared_execution(self):
@@ -397,6 +419,61 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertIn("服务端已去重", valve_ref)
         self.assertNotIn('"plot_device_id": 16', valve_ref)
         self.assertIn("plot_device_ids", plot_devices_ref)
+
+    def test_valve_control_references_select_id_from_batch_payload_item(self):
+        repo = SKILL_DIR.parents[1]
+        refs = repo / "custom_skills" / "sono-mcp" / "references"
+        for name in ("tool-start-valve-bank.md", "tool-stop-valve-bank.md"):
+            with self.subTest(name=name):
+                text = (refs / name).read_text(encoding="utf-8")
+                self.assertIn("get_valve_bank_by_device.payload[].id", text)
+                self.assertNotIn("get_valve_bank_by_device.id", text)
+
+    def test_sono_mcp_documents_coordinated_irrigation_exception(self):
+        repo = SKILL_DIR.parents[1]
+        sono_skill = (repo / "custom_skills" / "sono-mcp" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("普通请求仍然单工具优先", sono_skill)
+        self.assertIn("device-assisted irrigation workflow", sono_skill)
+        for tool_name in (
+            "get_plot_device_list",
+            "get_plot_info",
+            "get_weather",
+            "get_valve_bank_by_device",
+        ):
+            self.assertIn(tool_name, sono_skill)
+        self.assertIn("仍禁止扫描或无目的调用", sono_skill)
+
+    def test_skill_has_branch_specific_checklists_and_complete_form_rows(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        form_text = (SKILL_DIR / "references" / "irrigation-form.md").read_text(encoding="utf-8")
+
+        farm_heading = "### Farming-record branch checklist"
+        irrigation_heading = "### Device-irrigation branch checklist"
+        self.assertIn(farm_heading, skill_text)
+        self.assertIn(irrigation_heading, skill_text)
+        farm_start = skill_text.index(farm_heading)
+        irrigation_start = skill_text.index(irrigation_heading)
+        farm_checklist = skill_text[farm_start:irrigation_start]
+        irrigation_checklist = skill_text[irrigation_start:]
+        self.assertIn("matter_id", farm_checklist)
+        self.assertIn("add_farming_record", farm_checklist)
+        for farming_only_term in (
+            "matter_id",
+            "get_agri_input_list",
+            "goodsList",
+            "add_farming_record",
+        ):
+            self.assertNotIn(farming_only_term, irrigation_checklist)
+
+        self.assertIn(
+            "The submit must contain every candidate `valve_bank_id` from the trusted pending draft exactly once.",
+            form_text,
+        )
+        self.assertIn(
+            "Use `selected: false` to cancel execution; deleting a row does not cancel it.",
+            form_text,
+        )
 
 
 if __name__ == "__main__":

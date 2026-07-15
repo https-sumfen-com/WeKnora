@@ -65,6 +65,8 @@ description: "Use when the server-side Agent must precisely choose and call supp
 ### 调用纪律
 
 - **单工具优先**：能用一个工具回答就只调一个。
+- **普通请求仍然单工具优先**：不由上层工作流协调的普通用户请求，继续按一个意图匹配一个工具，不默认联动。
+- **设备灌溉协调例外**：仅当明确由 `agri-operation-workflow` 的 device-assisted irrigation workflow 协调时，允许按该工作流的证据需要和既定顺序调用 `get_plot_device_list`、`get_plot_info`、`get_weather`、`get_valve_bank_by_device`；仍禁止扫描或无目的调用。
 - **禁止全量扫描**：不得在单次用户问题中把多个工具都调一遍"以防遗漏"。
 - **禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查 WOFOST 报告不自动查地块/天气；查基地汇总不联动其他工具。
 - **农事辅助列表不默认联动**：新增农事记录不自动查农资/配方/事项列表；只有用户明确要选项，或缺少对应 ID 且上下文允许列选项时，才单独调用对应列表工具。
