@@ -16,7 +16,7 @@
 - The form submit turn never calls or authorizes `start_valve_bank`; a later user turn must confirm the displayed execution draft.
 - Missing valid telemetry, insufficient irrigation evidence, or an empty valve-bank list never triggers device control.
 - All int64 identifiers crossing JSON, form, trusted-state, or MCP boundaries are canonical decimal strings; this includes `cid`, `plot_id`, plot-device IDs, and valve-bank IDs.
-- A direct request with a unique valve-bank ID and duration uses a separate later-turn-confirmed SONO direct-control route and does not require `plot_id` or sensor-assisted discovery.
+- A direct request with a unique valve-bank ID uses a separate later-turn-confirmed SONO direct-control route and does not require `plot_id` or sensor-assisted discovery. Its `auto_off_minutes` remains optional and must be omitted when the user did not specify a duration.
 - Preserve the user's pre-existing changes in `custom_skills/sono-mcp/SKILL.md` and do not stage unrelated files.
 - Run Python with `D:\Program Files\uv\global_python\Scripts\python.exe` in this terminal.
 - Set `$env:PYTHONUTF8 = '1'` in documented Windows validation commands; the payload scripts also configure UTF-8 stdio so unprefixed `unittest discover` remains reproducible under the default Windows code page.

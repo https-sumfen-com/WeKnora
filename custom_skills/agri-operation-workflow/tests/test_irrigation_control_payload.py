@@ -580,6 +580,24 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertIn("does not require `plot_id`", skill_text)
         self.assertIn("later user turn", skill_text)
 
+    def test_direct_valve_control_keeps_optional_duration_contract(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "A direct request with a known valve-bank ID may omit "
+            "`auto_off_minutes`",
+            skill_text,
+        )
+        self.assertIn(
+            "omit `auto_off_minutes` from the trusted draft and tool arguments",
+            skill_text,
+        )
+        self.assertNotIn(
+            "Require a known `cid`, unique valve-bank `id`, and explicit positive "
+            "integer `auto_off_minutes`",
+            skill_text,
+        )
+
     def test_irrigation_form_and_windows_validation_commands_match_contract(self):
         form_text = (SKILL_DIR / "references" / "irrigation-form.md").read_text(
             encoding="utf-8"

@@ -25,7 +25,7 @@ get_plot_device_list -> exact SHUM analysis -> plot and weather evidence
 -> execution draft -> later user confirmation -> ordered valve starts
 ```
 
-Keep direct valve control separate from sensor-assisted irrigation. When the user explicitly provides a known valve-bank ID and duration, follow the SONO direct-control contract and a later-turn confirmation; that branch does not require `plot_id`, `get_plot_device_list`, `SHUM`, plot evidence, weather evidence, or valve discovery.
+Keep direct valve control separate from sensor-assisted irrigation. When the user explicitly provides a known valve-bank ID, follow the SONO direct-control contract and a later-turn confirmation; that branch does not require `plot_id`, `get_plot_device_list`, `SHUM`, plot evidence, weather evidence, or valve discovery. A direct request with a known valve-bank ID may omit `auto_off_minutes`; never invent a default duration.
 
 ## Script-First Payload Control
 
@@ -153,7 +153,7 @@ If `record_draft` is missing, the script returns `ok: false` with `record_draft 
 - The frontend-visible material recommendation must be `form agri-material-usage` Syntax only. Do not output `schemaVersion`, `blocks`, `kind`, `form-panel`, JSON wrappers, SSE JSON events, Markdown explanation, plot, address, operation, task, or old farming-form fields in that Syntax.
 - When a recommended farming operation involves materials, compute a recommended total `num` for the frontend whenever there is a reasonable per-mu rate basis and known area. Check MCP results, relevant recommendation text, user conditions, knowledge-base/technical-standard evidence, and then the model's own agronomic experience.
 - The model may use its own agronomic experience to recommend the internal per-mu rate when stronger sources are absent. Keep the resulting `num` conservative and editable. Use `num: 0` and `dosage: 0` only when no reasonable rate can be recommended or area is unavailable.
-- Route an explicit request containing a known valve-bank ID and duration to **Direct Valve Control**, not to the sensor-assisted sequence. Show the exact valve ID and duration, wait for a later user turn to confirm that displayed control draft, then follow the SONO `start_valve_bank` direct-control contract. This direct branch does not require `plot_id` or any sensor, plot, weather, or valve-discovery call.
+- Route an explicit request containing a known valve-bank ID to **Direct Valve Control**, not to the sensor-assisted sequence. Show the exact valve ID and any user-specified duration, wait for a later user turn to confirm that displayed control draft, then follow the SONO `start_valve_bank` direct-control contract. When duration was not specified, omit `auto_off_minutes` from the trusted draft and tool arguments. This direct branch does not require `plot_id` or any sensor, plot, weather, or valve-discovery call.
 - Preserve every int64 identifier crossing JSON, form, trusted state, or MCP boundaries as a canonical decimal string. In particular, never coerce `cid`, `plot_id`, plot-device IDs, or valve-bank IDs through a JavaScript number; SONO accepts decimal strings for FlexibleInt64 fields.
 - Use the device-assisted sequence only for a known `cid` and `plot_id`: `get_plot_device_list` -> exact `SHUM` extraction -> `get_plot_info` + `get_weather` -> explicit irrigation-necessity decision -> one `get_valve_bank_by_device` call -> dedicated irrigation form -> separate confirmation -> ordered `start_valve_bank` calls.
 - Accept soil-moisture telemetry only when `key == "SHUM"`; similar names, labels, and case variants are not substitutes. Deduplicate repeated outer device-list IDs in first-occurrence order, and use only the first finite exact match encountered for each canonical ID so each device ID has one average weight.
@@ -236,12 +236,12 @@ Use this phase when the operation draft is complete, no material confirmation pa
 
 ### 5. Direct Valve Control
 
-Use this phase when the user explicitly asks to start/open a uniquely identified valve-bank ID and supplies the intended positive duration. It is distinct from a request to judge whether a plot needs irrigation.
+Use this phase when the user explicitly asks to start/open a uniquely identified valve-bank ID, with or without an intended duration. It is distinct from a request to judge whether a plot needs irrigation.
 
-1. Require a known `cid`, unique valve-bank `id`, and explicit positive integer `auto_off_minutes`. Keep `cid` and `id` as canonical decimal strings. This branch does not require `plot_id`, sensor telemetry, or a plot-device association.
-2. Do not call `get_plot_device_list`, `get_plot_info`, `get_weather`, or `get_valve_bank_by_device`; the user has already identified the direct-control target and duration.
-3. Display a direct-control draft with the exact valve-bank ID and duration and ask whether to start it. Do not call `start_valve_bank` in this turn.
-4. Only on a later user turn that explicitly confirms the displayed direct-control draft, call `start_valve_bank` under the SONO direct-control contract with the trusted `cid`, `id`, and `auto_off_minutes`.
+1. Require a known `cid` and unique valve-bank `id`. Keep both as canonical decimal strings. If the user supplies `auto_off_minutes`, require a positive integer; if omitted, do not ask for or invent a default. This branch does not require `plot_id`, sensor telemetry, or a plot-device association.
+2. Do not call `get_plot_device_list`, `get_plot_info`, `get_weather`, or `get_valve_bank_by_device`; the user has already identified the direct-control target.
+3. Display a direct-control draft with the exact valve-bank ID and, when supplied, the duration. When duration is omitted, state that no automatic-off duration will be sent. Ask whether to start it, and do not call `start_valve_bank` in this turn.
+4. Only on a later user turn that explicitly confirms the displayed direct-control draft, call `start_valve_bank` under the SONO direct-control contract with the trusted `cid` and `id`. Include `auto_off_minutes` only when the confirmed draft contained the user's positive duration; otherwise omit `auto_off_minutes` from the trusted draft and tool arguments.
 5. Preserve the real upstream result. Claim success only when the response explicitly confirms it; an empty or unconfirmed response means the request was sent but actual opening is unconfirmed.
 
 If the user asks whether irrigation is needed, refers to soil moisture or a plot rather than a known valve-bank ID, or wants the system to choose valves/durations, use Device-Assisted Irrigation Control instead.
@@ -339,7 +339,7 @@ Use only the checklist for the branch actually executed. The device-irrigation a
 
 ### Direct-valve branch checklist
 
-- The user supplied a unique valve-bank ID and positive duration; `cid` and valve ID remained decimal strings.
+- The user supplied a unique valve-bank ID; `cid` and valve ID remained decimal strings. Any supplied duration was a positive integer, while an unspecified duration remained omitted without a fabricated default.
 - No `plot_id`, sensor, plot, weather, or valve-discovery call was required.
-- The exact valve ID and duration were displayed before control, and `start_valve_bank` was called only after a later user turn confirmed that draft.
+- The exact valve ID and optional duration state were displayed before control, and `start_valve_bank` was called only after a later user turn confirmed that draft.
 - The response was reported as successful only when upstream explicitly confirmed success.
