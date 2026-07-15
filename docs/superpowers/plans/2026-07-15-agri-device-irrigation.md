@@ -448,7 +448,7 @@ Apply precise patches around the user's current changes:
 `plot_device_ids` | only `get_valve_bank_by_device`; comma-separated outer IDs such as `"16,21,35"`
 ```
 
-Update the detailed request example to the batch string, describe `payload[]`, and state that the service returns a deduplicated list. Update `tool-plot-device-list.md` to join valid outer IDs and call the batch tool once. Remove the obsolete example `"plot_device_id": 16` without changing unrelated table formatting.
+Update the detailed request example to the batch string and describe the backend's top-level returned valve-bank list with complete `devices[]`. Keep the batch call to one request and take every control ID only from the returned list item's outer `id`. Remove the obsolete example `"plot_device_id": 16` without changing unrelated table formatting.
 
 - [ ] **Step 5: Refresh openai.yaml metadata**
 

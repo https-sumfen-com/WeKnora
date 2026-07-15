@@ -665,27 +665,48 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         plot_devices_ref = (repo / "custom_skills" / "sono-mcp" / "references" / "tool-plot-device-list.md").read_text(encoding="utf-8")
 
         self.assertIn("plot_device_ids", sono_skill)
-        self.assertIn('"plot_device_ids": "16,21,35"', valve_ref)
+        self.assertIn('"plot_device_ids": "16,17"', valve_ref)
+        self.assertIn("直接返回阀门组列表", valve_ref)
         self.assertIn("payload[]", valve_ref)
-        self.assertIn("服务端已去重", valve_ref)
+        self.assertIn("devices[]", valve_ref)
+        self.assertIn("列表项最外层 `id`", valve_ref)
         self.assertNotIn('"plot_device_id": 16', valve_ref)
         self.assertIn("plot_device_ids", plot_devices_ref)
+        for text in (sono_skill, valve_ref, plot_devices_ref):
+            self.assertNotIn("<<<<<<<", text)
+            self.assertNotIn("=======", text)
+            self.assertNotIn(">>>>>>>", text)
 
     def test_valve_control_references_select_id_from_batch_payload_item(self):
         repo = SKILL_DIR.parents[1]
         sono_skill = (repo / "custom_skills" / "sono-mcp" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        self.assertGreaterEqual(
-            sono_skill.count("所选 `get_valve_bank_by_device.payload[].id`"),
-            3,
+        self.assertIn(
+            "`start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；"
+            "只取 `get_valve_bank_by_device` 返回列表项最外层 `id`",
+            sono_skill,
         )
+        self.assertNotIn("get_valve_bank_by_device.payload[].id", sono_skill)
         refs = repo / "custom_skills" / "sono-mcp" / "references"
         for name in ("tool-start-valve-bank.md", "tool-stop-valve-bank.md"):
             with self.subTest(name=name):
                 text = (refs / name).read_text(encoding="utf-8")
-                self.assertIn("get_valve_bank_by_device.payload[].id", text)
+                self.assertIn("返回列表项最外层 `id`", text)
+                self.assertNotIn("get_valve_bank_by_device.payload[].id", text)
                 self.assertNotIn("get_valve_bank_by_device.id", text)
+                self.assertNotIn("<<<<<<<", text)
+
+    def test_irrigation_workflow_consumes_backend_top_level_valve_list(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        control_text = (
+            SKILL_DIR / "references" / "irrigation-control.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("top-level returned valve-bank list", skill_text)
+        self.assertIn("top-level returned valve-bank list", control_text)
+        self.assertNotIn("returned `payload[]`", control_text)
+        self.assertNotIn("get_valve_bank_by_device.payload[].id", control_text)
 
     def test_sono_mcp_documents_coordinated_irrigation_exception(self):
         repo = SKILL_DIR.parents[1]

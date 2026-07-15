@@ -44,9 +44,9 @@ Call get_valve_bank_by_device exactly once with the authoritative IDs:
 }
 ```
 
-The `plot_device_ids` input is a comma-separated string. Do not loop over IDs, do not send `plot_device_id_values`, and do not make one tool call per device. The returned `payload[]` is the service's already-deduplicated valve-bank list; keep its order and validate each `id`, `title`, and `run_status` through `build-panel`.
+The `plot_device_ids` input is a comma-separated string. Do not loop over IDs, do not send `plot_device_id_values`, and do not make one tool call per device. The top-level returned valve-bank list is the authoritative service result; pass that list directly as `valve_banks`, keep its order, and validate each `id`, `title`, and `run_status` through `build-panel`. Do not wrap the list under `payload` or derive control IDs from any nested `devices[]` field.
 
-When `payload[]` is empty, do not display a valve form and do not call `start_valve_bank`. Call `get_farming_operation_list` and fall back to the ordinary farming-operation path so the user can arrange an irrigation record/task without device control.
+When the top-level returned valve-bank list is empty, do not display a valve form and do not call `start_valve_bank`. Call `get_farming_operation_list` and fall back to the ordinary farming-operation path so the user can arrange an irrigation record/task without device control.
 
 ## 4. Build the Form and Preserve Trusted State
 

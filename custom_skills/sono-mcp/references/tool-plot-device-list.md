@@ -32,7 +32,7 @@
 
 ```text
 payload[]
-├── id                       # 地块设备关联 ID（plot_device_id）
+├── id                       # 地块设备关联 ID（用于 plot_device_ids）
 ├── name                     # 地块设备显示名称
 ├── device_type              # 设备大类，例如 sensor
 └── device
@@ -92,5 +92,5 @@ payload[]
 - 每个设备项都输出 `id`、`name`、`device_type`、`device.id`、`device.name` 和完整的 `device.device_data[]`。
 - 每条遥测都输出 `key`、`name`、`value`、`field_unit`；`field_unit=""` 时保留空字符串，不猜测单位。
 - 即使遥测名称相近，也按不同 `key` 保留为独立读数，例如 `trwd` 与 `STEM`。
-- 查询关联阀门组时，收集所有有效外层 `id`，按列表顺序用逗号连接为 `plot_device_ids`（例如 `"16,21,35"`），并只调用一次批量 `get_valve_bank_by_device`；不得传嵌套 `device.id`（示例 `424`）。
+- 查询关联阀门组时，把一个或多个外层 `id` 用英文逗号连接为字符串（例如 `"16,17"`），传给 `get_valve_bank_by_device.plot_device_ids`；不得传嵌套 `device.id`（示例 `424`）。
 - 返回空数组时说明“未查询到该地块的传感器设备”，不要生成虚构设备或读数。

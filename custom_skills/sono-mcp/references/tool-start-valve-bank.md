@@ -7,20 +7,20 @@
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `cid` | 是 | 企业 ID，必须为正整数 |
-| `id` | 是 | 阀门组 ID，必须为正整数；可取选中的 `get_valve_bank_by_device.payload[].id` |
+| `id` | 是 | 阀门组 ID，必须为正整数；取 `get_valve_bank_by_device` 返回列表项最外层 `id` |
 | `auto_off_minutes` | 否 | 自动关闭等待分钟数；只传用户明确指定的正整数 |
 | `token` | 否 | 会话中的上游访问令牌；没有时省略，禁止编造 |
 | `entity_id` | 否 | 实体 ID；没有时省略 |
 | `entity_info_id` | 否 | 实体信息 ID；没有时省略 |
 
-所有数字参数支持 JSON 整数或整数字符串。跨前端/JSON 可信草稿传递 `cid` 和 `id` 时优先使用十进制字符串，避免 int64 经 JavaScript Number 丢失精度。`id` 是阀门组 ID，不是 `plot_device_id` 或设备 `device.id`。`auto_off_minutes` 未指定或为 `0` 时不发送该字段；不得替用户设定默认时长。
+所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组列表项最外层 ID，不是 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。`auto_off_minutes` 未指定或为 `0` 时不发送该字段；不得替用户设定默认时长。
 
 立即启动示例：
 
 ```json
 {
-  "cid": "2007",
-  "id": "31"
+  "cid": 2007,
+  "id": 31
 }
 ```
 
@@ -28,8 +28,8 @@
 
 ```json
 {
-  "cid": "2007",
-  "id": "31",
+  "cid": 2007,
+  "id": 31,
   "auto_off_minutes": 10
 }
 ```
@@ -40,7 +40,6 @@
 
 - 用户只查询阀门组、运行状态或灌溉知识时不得调用。
 - 不得仅因 `get_valve_bank_by_device` 返回了阀门组就自动启动；查询结果不是控制授权。
-- 上层 `agri-operation-workflow` 已展示直接控制草稿或传感器辅助执行草稿时，必须等后来一轮用户确认该草稿后才调用；最初的控制请求或表单提交不能代替这次确认。
 - 用户指定多个阀门组、名称存在歧义或缺少唯一 `id` 时先追问。
 - 不得把 `run_status` 自行解释成启动指令。
 
