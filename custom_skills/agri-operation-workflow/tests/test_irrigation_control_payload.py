@@ -45,6 +45,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["has_valid_shum"])
         self.assertEqual(result["average_soil_moisture"], 25.25)
         self.assertEqual(result["plot_device_ids"], [16, 21])
+        self.assertIsInstance(result["plot_device_ids_csv"], str)
         self.assertEqual(result["plot_device_ids_csv"], "16,21")
         self.assertEqual([row["value"] for row in result["sensor_readings"]], [20, 30.5])
 
@@ -60,6 +61,12 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertFalse(result["has_valid_shum"])
         self.assertIsNone(result["average_soil_moisture"])
         self.assertEqual(result["plot_device_ids_csv"], "")
+        for forbidden in (
+            "pending_irrigation_draft",
+            "pending_execution_draft",
+            "start_valve_bank_args",
+        ):
+            self.assertNotIn(forbidden, result)
 
     def _panel_payload(self):
         return {
@@ -67,6 +74,7 @@ class IrrigationControlPayloadTests(unittest.TestCase):
             "plot_id": 130,
             "plot_name": "示例地块",
             "average_soil_moisture": 25.25,
+            "irrigation_needed": True,
             "reason": "土壤湿度偏低且近期无明显降雨",
             "recommended_duration_minutes": 20,
             "valve_banks": [
@@ -83,13 +91,39 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertIn("valve_bank_id 31", result["form_syntax"])
         self.assertEqual(len(result["pending_irrigation_draft"]["valve_banks"]), 2)
 
+    def test_build_panel_requires_explicit_irrigation_needed_gate(self):
+        for gate_value in (None, False):
+            with self.subTest(gate_value=gate_value):
+                payload = self._panel_payload()
+                if gate_value is None:
+                    payload.pop("irrigation_needed")
+                else:
+                    payload["irrigation_needed"] = gate_value
+
+                result = run_script("build-panel", payload)
+
+                self.assertFalse(result["ok"])
+                for forbidden in (
+                    "form_syntax",
+                    "pending_irrigation_draft",
+                    "pending_execution_draft",
+                    "start_valve_bank_args",
+                ):
+                    self.assertNotIn(forbidden, result)
+
     def test_build_panel_empty_valves_falls_back_to_farming_operation(self):
         payload = self._panel_payload()
         payload["valve_banks"] = []
         result = run_script("build-panel", payload)
         self.assertFalse(result["ok"])
         self.assertTrue(result["fallback_to_farming_operation"])
-        self.assertNotIn("form_syntax", result)
+        for forbidden in (
+            "form_syntax",
+            "pending_irrigation_draft",
+            "pending_execution_draft",
+            "start_valve_bank_args",
+        ):
+            self.assertNotIn(forbidden, result)
 
     def test_prepare_execution_rejects_unknown_valve_id(self):
         panel = run_script("build-panel", self._panel_payload())
@@ -151,26 +185,39 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
         irrigation_text = (SKILL_DIR / "references" / "irrigation-control.md").read_text(encoding="utf-8")
         form_text = (SKILL_DIR / "references" / "irrigation-form.md").read_text(encoding="utf-8")
-        combined = "\n".join((skill_text, irrigation_text, form_text))
+
         for required in (
             'key == "SHUM"',
+            "Call get_valve_bank_by_device exactly once",
             "plot_device_ids",
+            "comma-separated string",
+        ):
+            self.assertIn(required, irrigation_text)
+
+        for required in (
             "form irrigation-valve-duration",
             "irrigation_valve_duration_confirm",
             "user_confirmed_irrigation_execution_draft",
-            "Never call `start_valve_bank` in the same assistant turn that receives the irrigation form submit",
         ):
-            self.assertIn(required, combined)
+            self.assertIn(required, form_text)
+
+        self.assertIn(
+            "Never call `start_valve_bank` in the same assistant turn that receives the irrigation form submit",
+            skill_text,
+        )
 
     def test_sono_mcp_contract_uses_batch_string_and_list_response(self):
         repo = SKILL_DIR.parents[1]
         sono_skill = (repo / "custom_skills" / "sono-mcp" / "SKILL.md").read_text(encoding="utf-8")
         valve_ref = (repo / "custom_skills" / "sono-mcp" / "references" / "tool-valve-bank-by-device.md").read_text(encoding="utf-8")
         plot_devices_ref = (repo / "custom_skills" / "sono-mcp" / "references" / "tool-plot-device-list.md").read_text(encoding="utf-8")
-        combined = "\n".join((sono_skill, valve_ref, plot_devices_ref))
-        self.assertIn('"plot_device_ids": "16,21,35"', combined)
-        self.assertIn("服务端已去重", combined)
-        self.assertNotIn('"plot_device_id": 16', combined)
+
+        self.assertIn("plot_device_ids", sono_skill)
+        self.assertIn('"plot_device_ids": "16,21,35"', valve_ref)
+        self.assertIn("payload[]", valve_ref)
+        self.assertIn("服务端已去重", valve_ref)
+        self.assertNotIn('"plot_device_id": 16', valve_ref)
+        self.assertIn("plot_device_ids", plot_devices_ref)
 
 
 if __name__ == "__main__":
