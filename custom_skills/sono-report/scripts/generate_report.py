@@ -8,8 +8,8 @@ Preferred execute_skill_script usage:
 
 This script reads REPORT_DATA from stdin (or --input-json/--input-file), creates a
 unique workspace, normalizes the data, renders template.html, saves the final
-HTML under the output directory, posts report status when report_no is provided,
-and prints a JSON result.
+HTML under the output directory, retries generation failures, posts the final
+report status once when report_no is provided, and prints a JSON result.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ DEFAULT_OUTPUT_DIR = "/app/report/"
 PUBLIC_REPORT_BASE_URL = "https://sonoagi.com/report/"
 DEFAULT_STATUS_ENDPOINT = "https://api.sumfen.com/api/support/llm/reports/common/status"
 REQUEST_TIMEOUT_SECONDS = 60
+DEFAULT_MAX_ATTEMPTS = 2
 STATUS_SUCCESS = "1"
 STATUS_FAILURE = "2"
 
@@ -151,12 +152,11 @@ def post_status(endpoint: str, headers: dict[str, str], report_no: str, status: 
         return response_status, {"raw": response_text}
 
 
-def generate(args: argparse.Namespace, headers: dict[str, str] | None) -> dict[str, Any]:
+def generate(args: argparse.Namespace, raw: str) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         raise ReportGenerationError("--output-dir must be an absolute path, normally /app/report/")
 
-    raw = read_input(args)
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -209,11 +209,6 @@ def generate(args: argparse.Namespace, headers: dict[str, str] | None) -> dict[s
     public_url = report_url or PUBLIC_REPORT_BASE_URL + quote(final_file)
     sono_report = f"<sono-report>{public_url}</sono-report>"
 
-    status_result: dict[str, Any] | None = None
-    if headers and args.report_no:
-        status_code, status_response = post_status(args.status_endpoint, headers, args.report_no, STATUS_SUCCESS)
-        status_result = {"status_code": status_code, "response": status_response}
-
     result = {
         "ok": True,
         "work_dir": str(work_dir),
@@ -226,9 +221,33 @@ def generate(args: argparse.Namespace, headers: dict[str, str] | None) -> dict[s
     }
     if args.report_no:
         result["report_no"] = args.report_no
-    if status_result is not None:
-        result["status_update"] = status_result
     return result
+
+
+def generate_with_retries(args: argparse.Namespace, raw: str) -> tuple[dict[str, Any], int]:
+    attempts = max(1, int(args.max_attempts))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result = generate(args, raw)
+            result["attempts"] = attempt
+            return result, attempt
+        except Exception as exc:  # noqa: BLE001 - preserve the final generation failure
+            last_error = exc
+            if attempt >= attempts:
+                break
+    raise ReportGenerationError(f"report generation failed after {attempts} attempt(s): {last_error}") from last_error
+
+
+def update_final_status_once(
+    args: argparse.Namespace,
+    headers: dict[str, str] | None,
+    final_status: str,
+) -> dict[str, Any] | None:
+    if not headers or not args.report_no:
+        return None
+    status_code, status_response = post_status(args.status_endpoint, headers, args.report_no, final_status)
+    return {"status": final_status, "status_code": status_code, "response": status_response}
 
 
 def main() -> None:
@@ -245,21 +264,33 @@ def main() -> None:
     parser.add_argument("--entity-id", help="entity-id header value for report status callback")
     parser.add_argument("--entity-info-id", help="entity-info-id header value for report status callback")
     parser.add_argument("--status-endpoint", default=DEFAULT_STATUS_ENDPOINT, help="Report status callback endpoint")
+    parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS, help="Maximum report-generation attempts before posting the final status once")
     args = parser.parse_args()
 
-    headers: dict[str, str] | None = None
-    try:
-        headers = status_headers(args)
-        result = generate(args, headers)
-    except Exception as exc:
-        failure_update_error = ""
-        if headers and args.report_no:
-            try:
-                post_status(args.status_endpoint, headers, args.report_no, STATUS_FAILURE)
-            except Exception as status_exc:  # noqa: BLE001 - include callback failure in script error
-                failure_update_error = f"; failure status update also failed: {status_exc}"
-        raise SystemExit(f"{exc}{failure_update_error}") from exc
+    headers = status_headers(args)
+    raw = read_input(args)
+    result: dict[str, Any] | None = None
+    generation_error: Exception | None = None
 
+    try:
+        result, _attempts = generate_with_retries(args, raw)
+        final_status = STATUS_SUCCESS
+    except Exception as exc:  # noqa: BLE001 - final status is posted after all retries finish
+        generation_error = exc
+        final_status = STATUS_FAILURE
+
+    try:
+        status_result = update_final_status_once(args, headers, final_status)
+    except Exception as status_exc:  # noqa: BLE001 - never post a second status after callback failure
+        if generation_error is not None:
+            raise SystemExit(f"{generation_error}; final status update failed: {status_exc}") from status_exc
+        raise SystemExit(f"report generated but final status update failed: {status_exc}") from status_exc
+
+    if generation_error is not None:
+        raise SystemExit(str(generation_error)) from generation_error
+
+    if status_result is not None and result is not None:
+        result["status_update"] = status_result
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

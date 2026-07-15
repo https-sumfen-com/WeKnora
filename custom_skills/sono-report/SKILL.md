@@ -1,13 +1,13 @@
 ---
 name: sono-report
-description: Backend-internal SONO report rendering workflow. Use in the second LLM conversation when the prompt contains ##用户问题, ##系统参数, report_no, and report_url from sono-report-request. Do not use for normal user-facing generate/export/create report requests, and do not invoke agri-operation-workflow during this workflow.
+description: Backend-internal SONO report rendering workflow. Use in the second LLM conversation when the prompt contains ##用户问题, ##Skill访问机制 or ##系统参数, report_no, and report_url from sono-report-request. Never call sono-report-request from this skill, and do not invoke agri-operation-workflow during this workflow.
 ---
 
 # SONO 地块 HTML 报告生成
 
 ## Quick start
 
-本 Skill 是后端内部第二次 LLM 对话的报告渲染流程：只在 prompt 已包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url` 时使用。普通用户要求“生成报告 / 导出报告 / 创建报告”时不要用本 Skill，必须先用 `sono-report-request` 保存报告记录；如果已经存在 `report_no` / `report_url`，也不要再调用 `sono-report-request`，避免重复创建报告记录。
+本 Skill 是后端内部第二次 LLM 对话的报告渲染流程：只在 prompt 已包含 `##用户问题`、`##系统参数` 或 `##Skill访问机制`、`report_no` 和 `report_url` 时使用。普通用户要求“生成报告 / 导出报告 / 创建报告”时不要用本 Skill，必须先用 `sono-report-request` 保存报告记录；如果已经存在 `report_no` / `report_url` 或 `force_skill: sono-report`，说明已进入内部渲染阶段，严禁再调用 `sono-report-request`，避免重复创建报告记录。
 
 工作流固定为：
 
@@ -15,7 +15,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 地块基础取数 → 按意图补充 4 类专项模块 → 构造论文式 REPORT_DATA → 执行一体化脚本 → 按 demo.html 学术风模板保存 HTML
 ```
 
-本报告渲染流程禁止调用、转交或触发 `agri-operation-workflow`；农事建议只作为报告内容字段整理，不进入农事作业流程编排。
+本报告渲染流程禁止调用、转交或触发 `sono-report-request` 和 `agri-operation-workflow`；农事建议只作为报告内容字段整理，不进入农事作业流程编排。若 prompt 的 `##Skill访问机制` 包含 `force_skill: sono-report`，必须继续执行本 Skill，不得重新路由。
 
 当前活跃模板是 `template.html`；它已按 `demo.html` 的标题页、摘要、数据方法、结果分析、讨论建议、结论附录、图表编号和表格编号风格渲染。不要把报告写成简单指标卡片或口语化总结。
 
@@ -39,13 +39,15 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 }
 ```
 
-脚本会自动创建唯一工作目录、规范数据、渲染 HTML，并按 `report_url` 对应的文件名保存最终文件。输出成功后只把脚本返回的 `sono_report` 原样返回给调用方，例如 `<sono-report>{report_url}</sono-report>`；不要直接返回本地 `final_html` 路径。生成成功后脚本会回写 `status=1`，失败时会尽量回写 `status=2`。若任一步失败，不要声称已生成或已保存。
+脚本会自动创建唯一工作目录、规范数据、渲染 HTML，并按 `report_url` 对应的文件名保存最终文件。输出成功后只把脚本返回的 `sono_report` 原样返回给调用方，例如 `<sono-report>{report_url}</sono-report>`；不要直接返回本地 `final_html` 路径。脚本会先完成内部重试，再只回写一次最终报告状态：最终成功写 `status=1`，最终失败写 `status=2`；禁止先写失败、重试成功后再写成功。若任一步最终失败，不要声称已生成或已保存。
 
 ## Critical rules
 
 - 只在后端第二次 LLM 对话中使用：必须从 `##用户问题` 读取原始需求，从 `##系统参数` 提取 `plot_id`、`cid`、`entity-id`、`entity-info-id`、`plot_name`、`report_type`、`report_no`、`report_url`。
 - 必须把 `report_no`、`report_url` 和 header 参数传给 `scripts/generate_report.py`；报告文件名和公开 URL 以 `report_url` 为准，不再重新生成报告地址。
 - 普通用户直接要求生成/导出/创建报告时，不要用本 Skill；已有 `report_no` 和 `report_url` 时，也不要再调用 `sono-report-request`。
+- 如果 prompt 含 `##Skill访问机制`、`force_skill: sono-report`、`report_no`、`report_url`，必须视为内部渲染对话，只能继续本 Skill。
+- 本 Skill 执行过程中禁止调用、转交或触发 `sono-report-request`；不得为了“生成报告记录”或“重新发起请求”再次创建报告。
 - 本 Skill 执行过程中禁止调用、转交或触发 `agri-operation-workflow`；即使报告包含农事建议，也只写入 `REPORT_DATA` 和 HTML，不创建作业流程。
 - 只生成基于地块的报告：报告内容必须围绕一个真实地块，不包含 `get_summary_base`、基地报告、企业报告或全局概览。
 - 整体地块报告主数据源必须是 `get_plot_info`，并应补充 `get_plot_warning` 与地块类 `get_report_by_type` 细分模块；天气、设备、WOFOST 模型日报按用户意图追加。
@@ -58,6 +60,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 - `REPORT_DATA` 应通过 `execute_skill_script.input` 传入；不要为了传 JSON 临时调用 `python3` 创建文件。
 - 生成流程必须经过预置规范、HTML 渲染和后置保存，最终保存到 `/app/report/`。
 - 成功回复必须使用 `<sono-report>URL</sono-report>` 包裹公开访问地址，URL 必须使用 `##系统参数` 中传入的 `report_url`。
+- 报告状态回写只能发生一次，且只能在全部生成/保存重试结束后写入最终状态；不要在单次脚本失败时立刻回写失败。
 - 不展示 token、内部 URL、内部配置、原始 JSON、完整 `csv_content[]`。
 - WOFOST 数据必须表述为“模型模拟/预测”，不能说成实测。
 - `get_report_by_type` 的 `plot_wofost` 也是模型/报告口径，不能表述为实际测产。
@@ -77,13 +80,15 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 
 使用：
 
-- 后端 API 发起的第二次 LLM 对话，prompt 中已包含 `##用户问题`、`##系统参数`、`report_no`、`report_url`。
+- 后端 API 发起的第二次 LLM 对话，prompt 中已包含 `##用户问题`、`##系统参数` 或 `##Skill访问机制`、`report_no`、`report_url`。
+- prompt 明确包含 `force_skill: sono-report`，需要结合 MCP 真实地块数据填充模板、保存 HTML，并更新报告状态。
 - 已有 `report_no` / `report_url`，需要结合 MCP 真实地块数据填充模板、保存 HTML，并更新报告状态。
 - 内部渲染整体地块报告、长势分析、3D 表型、生长动态、苗情监控等地块报告文件。
 
 不使用：
 
 - 普通用户首次提出“生成/导出/创建报告”；这类请求必须先使用 `sono-report-request`。
+- 已进入本 Skill 的内部渲染流程后，禁止再使用 `sono-report-request`；缺数据时补齐 `REPORT_DATA` 或失败退出，不重新发起报告请求。
 - 缺少 `report_no` 或 `report_url` 的报告生成请求；不要自行生成新的报告地址。
 - 基地运营报告、企业经营报告、全局概览报告。
 - 只问地块状态、天气、设备详情或 WOFOST 信息，且没有要求生成报告。
