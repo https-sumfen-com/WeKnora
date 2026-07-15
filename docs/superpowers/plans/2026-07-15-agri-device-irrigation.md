@@ -78,8 +78,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["has_valid_shum"])
         self.assertEqual(result["average_soil_moisture"], 25.25)
-        self.assertEqual(result["plot_device_ids"], [16, 21])
-        self.assertEqual(result["plot_device_ids_csv"], "16,21")
+        self.assertEqual(result["plot_device_ids"], "16,21")
+        self.assertEqual(result["plot_device_id_values"], [16, 21])
         self.assertEqual([row["value"] for row in result["sensor_readings"]], [20, 30.5])
 ```
 
@@ -97,7 +97,8 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["has_valid_shum"])
         self.assertIsNone(result["average_soil_moisture"])
-        self.assertEqual(result["plot_device_ids_csv"], "")
+        self.assertEqual(result["plot_device_ids"], "")
+        self.assertEqual(result["plot_device_id_values"], [])
 ```
 
 - [ ] **Step 3: Add form, tamper, and cross-turn confirmation tests**
@@ -239,7 +240,7 @@ Expected: FAIL because `scripts/irrigation_control_payload.py`, `references/irri
 
 **Interfaces:**
 - Consumes: JSON stdin for `analyze-sensors`, `build-panel`, `prepare-execution`, and `build-execution`.
-- Produces: `plot_device_ids_csv`, `form_syntax`, `pending_irrigation_draft`, `pending_execution_draft`, and guarded `start_valve_bank_args`.
+- Produces: the MCP-ready `plot_device_ids` comma-separated string, internal `plot_device_id_values`, `form_syntax`, `pending_irrigation_draft`, `pending_execution_draft`, and guarded `start_valve_bank_args`.
 
 - [ ] **Step 1: Implement JSON helpers and sensor analysis**
 
@@ -286,7 +287,8 @@ def analyze_sensors(payload):
     average = None if not readings else _clean_number(sum(row["value"] for row in readings) / len(readings))
     return {"ok": True, "has_valid_shum": bool(readings),
             "sensor_readings": readings, "average_soil_moisture": average,
-            "plot_device_ids": ids, "plot_device_ids_csv": ",".join(map(str, ids))}
+            "plot_device_ids": ",".join(map(str, ids)),
+            "plot_device_id_values": ids}
 ```
 
 - [ ] **Step 2: Implement valve-list validation and Syntax generation**
