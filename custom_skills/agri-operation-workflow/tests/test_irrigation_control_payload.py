@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import copy
 import json
 import subprocess
 import sys
@@ -44,9 +45,10 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["has_valid_shum"])
         self.assertEqual(result["average_soil_moisture"], 25.25)
-        self.assertEqual(result["plot_device_ids"], [16, 21])
-        self.assertIsInstance(result["plot_device_ids_csv"], str)
-        self.assertEqual(result["plot_device_ids_csv"], "16,21")
+        self.assertIsInstance(result["plot_device_ids"], str)
+        self.assertEqual(result["plot_device_ids"], "16,21")
+        self.assertEqual(result["plot_device_id_values"], [16, 21])
+        self.assertNotIn("plot_device_ids_csv", result)
         self.assertEqual([row["value"] for row in result["sensor_readings"]], [20, 30.5])
 
     def test_analyze_sensors_returns_no_control_input_without_valid_shum(self):
@@ -60,7 +62,9 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["has_valid_shum"])
         self.assertIsNone(result["average_soil_moisture"])
-        self.assertEqual(result["plot_device_ids_csv"], "")
+        self.assertEqual(result["plot_device_ids"], "")
+        self.assertEqual(result["plot_device_id_values"], [])
+        self.assertNotIn("plot_device_ids_csv", result)
         for forbidden in (
             "pending_irrigation_draft",
             "pending_execution_draft",
@@ -68,12 +72,77 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, result)
 
+    def test_analyze_sensors_rejects_duplicate_outer_device_id(self):
+        result = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "device": {"device_data": [
+                {"key": "SHUM", "value": 20},
+            ]}},
+            {"id": "16", "device": {"device_data": [
+                {"key": "SHUM", "value": 30},
+            ]}},
+        ]})
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["has_valid_shum"])
+        self.assertIn("duplicate plot_device_id: 16", result["errors"])
+        for forbidden in (
+            "plot_device_ids",
+            "plot_device_id_values",
+            "pending_irrigation_draft",
+            "pending_execution_draft",
+            "start_valve_bank_args",
+        ):
+            self.assertNotIn(forbidden, result)
+
+    def test_analyze_sensors_rejects_non_finite_aggregate(self):
+        result = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "device": {"device_data": [
+                {"key": "SHUM", "value": 1e308},
+            ]}},
+            {"id": 21, "device": {"device_data": [
+                {"key": "SHUM", "value": 1e308},
+            ]}},
+        ]})
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["has_valid_shum"])
+        self.assertIn("average_soil_moisture must be finite", result["errors"])
+        for forbidden in (
+            "plot_device_ids",
+            "plot_device_id_values",
+            "pending_irrigation_draft",
+            "pending_execution_draft",
+            "start_valve_bank_args",
+        ):
+            self.assertNotIn(forbidden, result)
+
+    def test_analyze_sensors_accepts_single_large_finite_value(self):
+        result = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "device": {"device_data": [
+                {"key": "SHUM", "value": 1e308},
+            ]}},
+        ]})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["has_valid_shum"])
+        self.assertEqual(float(result["average_soil_moisture"]), 1e308)
+        self.assertEqual(result["plot_device_ids"], "16")
+        self.assertEqual(result["plot_device_id_values"], [16])
+
     def _panel_payload(self):
+        sensor_analysis = run_script("analyze-sensors", {"devices": [
+            {"id": 16, "name": "传感器A", "device": {"device_data": [
+                {"key": "SHUM", "value": 20},
+            ]}},
+            {"id": 21, "name": "传感器B", "device": {"device_data": [
+                {"key": "SHUM", "value": 30.5},
+            ]}},
+        ]})
         return {
             "cid": 2007,
             "plot_id": 130,
             "plot_name": "示例地块",
-            "average_soil_moisture": 25.25,
+            "sensor_analysis": sensor_analysis,
             "irrigation_needed": True,
             "reason": "土壤湿度偏低且近期无明显降雨",
             "recommended_duration_minutes": 20,
@@ -89,7 +158,55 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertIn("form irrigation-valve-duration", result["form_syntax"])
         self.assertIn("average_soil_moisture 25.25", result["form_syntax"])
         self.assertIn("valve_bank_id 31", result["form_syntax"])
-        self.assertEqual(len(result["pending_irrigation_draft"]["valve_banks"]), 2)
+        pending = result["pending_irrigation_draft"]
+        self.assertEqual(len(pending["valve_banks"]), 2)
+        self.assertEqual(pending["average_soil_moisture"], 25.25)
+        self.assertEqual(pending["sensor_analysis"], self._panel_payload()["sensor_analysis"])
+
+    def test_build_panel_rejects_missing_or_tampered_sensor_analysis(self):
+        base = self._panel_payload()
+        cases = {}
+
+        missing = copy.deepcopy(base)
+        missing.pop("sensor_analysis")
+        cases["missing"] = missing
+
+        bad_average = copy.deepcopy(base)
+        bad_average["sensor_analysis"]["average_soil_moisture"] = 99
+        cases["average"] = bad_average
+
+        duplicate_reading = copy.deepcopy(base)
+        duplicate_reading["sensor_analysis"]["sensor_readings"].append(
+            copy.deepcopy(duplicate_reading["sensor_analysis"]["sensor_readings"][0])
+        )
+        cases["duplicate"] = duplicate_reading
+
+        bad_ids = copy.deepcopy(base)
+        bad_ids["sensor_analysis"]["plot_device_ids"] = "16, 21"
+        cases["ids"] = bad_ids
+
+        bad_id_values = copy.deepcopy(base)
+        bad_id_values["sensor_analysis"]["plot_device_id_values"] = [16, 999]
+        cases["id_values"] = bad_id_values
+
+        invalid_gate = copy.deepcopy(base)
+        invalid_gate["sensor_analysis"]["has_valid_shum"] = False
+        cases["has_valid_shum"] = invalid_gate
+
+        for name, payload in cases.items():
+            with self.subTest(name=name):
+                # Legacy bare input is present to prove the panel must validate
+                # sensor_analysis instead of trusting this value.
+                payload["average_soil_moisture"] = 25.25
+                result = run_script("build-panel", payload)
+                self.assertFalse(result["ok"])
+                for forbidden in (
+                    "form_syntax",
+                    "pending_irrigation_draft",
+                    "pending_execution_draft",
+                    "start_valve_bank_args",
+                ):
+                    self.assertNotIn(forbidden, result)
 
     def test_build_panel_requires_explicit_irrigation_needed_gate(self):
         for gate_value in (None, False):
@@ -160,6 +277,11 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         })
         self.assertTrue(prepared["ok"])
         self.assertTrue(prepared["requires_execution_confirmation"])
+        self.assertEqual(len(prepared["draft_fingerprint"]), 64)
+        self.assertEqual(
+            prepared["pending_execution_draft"]["draft_fingerprint"],
+            prepared["draft_fingerprint"],
+        )
         self.assertNotIn("start_valve_bank_args", prepared)
 
         blocked = run_script("build-execution", {
@@ -174,12 +296,69 @@ class IrrigationControlPayloadTests(unittest.TestCase):
             "execution_confirmed": True,
             "draft_was_shown_to_user": True,
             "confirmation_source": "user_confirmed_irrigation_execution_draft",
+            "confirmed_draft_fingerprint": prepared["draft_fingerprint"],
         })
         self.assertTrue(execution["ok"])
         self.assertEqual(execution["start_valve_bank_args"], [
             {"cid": 2007, "id": 31, "auto_off_minutes": 15},
             {"cid": 2007, "id": 32, "auto_off_minutes": 25},
         ])
+
+    def _prepared_execution(self):
+        panel_payload = self._panel_payload()
+        # Keeps the regression focused on draft binding against the old panel
+        # implementation, which required this now-untrusted field.
+        panel_payload["average_soil_moisture"] = 25.25
+        panel = run_script("build-panel", panel_payload)
+        return run_script("prepare-execution", {
+            "pending_irrigation_draft": panel["pending_irrigation_draft"],
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "irrigation-valve-duration",
+                "tag": "irrigation_valve_duration_confirm",
+                "valveBanks": [
+                    {"valve_bank_id": 31, "duration_minutes": 15, "selected": True},
+                    {"valve_bank_id": 32, "duration_minutes": 25, "selected": True},
+                ],
+            },
+        })
+
+    def test_build_execution_requires_confirmed_draft_fingerprint(self):
+        prepared = self._prepared_execution()
+        result = run_script("build-execution", {
+            "pending_execution_draft": prepared["pending_execution_draft"],
+            "execution_confirmed": True,
+            "draft_was_shown_to_user": True,
+            "confirmation_source": "user_confirmed_irrigation_execution_draft",
+        })
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["requires_execution_confirmation"])
+        self.assertNotIn("start_valve_bank_args", result)
+
+    def test_build_execution_rejects_tampered_pending_draft(self):
+        prepared = self._prepared_execution()
+        fingerprint = prepared.get("draft_fingerprint")
+        mutations = {
+            "bank_id": lambda draft: draft["valve_banks"][0].__setitem__("id", 999),
+            "duration": lambda draft: draft["valve_banks"][0].__setitem__("duration_minutes", 99),
+        }
+
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                draft = copy.deepcopy(prepared["pending_execution_draft"])
+                mutate(draft)
+                result = run_script("build-execution", {
+                    "pending_execution_draft": draft,
+                    "execution_confirmed": True,
+                    "draft_was_shown_to_user": True,
+                    "confirmation_source": "user_confirmed_irrigation_execution_draft",
+                    "confirmed_draft_fingerprint": fingerprint,
+                })
+
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["requires_execution_confirmation"])
+                self.assertNotIn("start_valve_bank_args", result)
 
     def test_skill_documents_batch_valve_lookup_and_separate_execution_turn(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
