@@ -129,6 +129,66 @@ class IrrigationControlPayloadTests(unittest.TestCase):
         self.assertEqual(result["plot_device_ids"], "16")
         self.assertEqual(result["plot_device_id_values"], [16])
 
+    def test_ids_above_js_safe_integer_preserve_exact_precision_end_to_end(self):
+        sensor_id = 9007199254740993
+        cid = 9007199254740995
+        plot_id = 9007199254740997
+        valve_id = 9007199254740999
+
+        sensor_analysis = run_script("analyze-sensors", {"devices": [
+            {"id": sensor_id, "name": "高位设备ID", "device": {"device_data": [
+                {"key": "SHUM", "value": 20},
+            ]}},
+        ]})
+        self.assertEqual(sensor_analysis["plot_device_id_values"], [sensor_id])
+        self.assertEqual(sensor_analysis["plot_device_ids"], str(sensor_id))
+
+        panel = run_script("build-panel", {
+            "cid": str(cid),
+            "plot_id": plot_id,
+            "plot_name": "高位ID地块",
+            "sensor_analysis": sensor_analysis,
+            "irrigation_needed": True,
+            "reason": "验证整数精度",
+            "recommended_duration_minutes": 20,
+            "valve_banks": [
+                {"id": str(valve_id), "run_status": "0", "title": "高位ID阀门组"},
+            ],
+        })
+        self.assertTrue(panel["ok"])
+        pending = panel["pending_irrigation_draft"]
+        self.assertEqual(pending["cid"], cid)
+        self.assertEqual(pending["plot_id"], plot_id)
+        self.assertEqual(pending["valve_banks"][0]["id"], valve_id)
+
+        prepared = run_script("prepare-execution", {
+            "pending_irrigation_draft": pending,
+            "submitted_form": {
+                "type": "form_submit",
+                "formType": "irrigation-valve-duration",
+                "tag": "irrigation_valve_duration_confirm",
+                "valveBanks": [{
+                    "valve_bank_id": valve_id,
+                    "duration_minutes": 15,
+                    "selected": True,
+                }],
+            },
+        })
+        self.assertTrue(prepared["ok"])
+        execution = run_script("build-execution", {
+            "pending_execution_draft": prepared["pending_execution_draft"],
+            "execution_confirmed": True,
+            "draft_was_shown_to_user": True,
+            "confirmation_source": "user_confirmed_irrigation_execution_draft",
+            "confirmed_draft_fingerprint": prepared["draft_fingerprint"],
+        })
+        self.assertTrue(execution["ok"])
+        self.assertEqual(execution["start_valve_bank_args"], [{
+            "cid": cid,
+            "id": valve_id,
+            "auto_off_minutes": 15,
+        }])
+
     def _panel_payload(self):
         sensor_analysis = run_script("analyze-sensors", {"devices": [
             {"id": 16, "name": "传感器A", "device": {"device_data": [

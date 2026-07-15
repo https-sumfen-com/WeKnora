@@ -28,10 +28,22 @@ def _clean_number(value: int | float) -> int | float:
 
 
 def _positive_int(value: Any) -> int | None:
-    number = _finite_number(value)
-    if not isinstance(number, int) or number <= 0:
+    if isinstance(value, bool) or value is None:
         return None
-    return number
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        digits = text[1:] if text.startswith(("+", "-")) else text
+        if not digits or not digits.isascii() or not digits.isdecimal():
+            return None
+        number = int(text, 10)
+        return number if number > 0 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer() or value <= 0:
+            return None
+        return int(value)
+    return None
 
 
 def _finite_average(values: list[int | float]) -> int | float | None:
