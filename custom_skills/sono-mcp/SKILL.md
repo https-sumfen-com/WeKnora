@@ -29,7 +29,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | 基地汇总、基地看板、基地统计、基地报告；以及全局概览（见下） | `get_summary_base` | `cid` + `dept_id` 或 `base_id` |
 | 某个设备的详情、遥测数据、所属地块 | `get_plot_device_info` | `device_id` |
 | 某个地块的传感器设备列表、设备实时读数、地块设备关联 ID | `get_plot_device_list` | `cid` + `plot_id` |
-| 某个地块设备关联的阀门组、阀门组运行状态 | `get_valve_bank_by_device` | `cid` + `plot_device_id` |
+| 一个或多个地块设备关联的阀门组、阀门组运行状态 | `get_valve_bank_by_device` | `cid` + `plot_device_ids` |
 | 明确启动、开启、打开某个阀门组 | `start_valve_bank` | `cid` + 阀门组 `id`；定时关闭时追加 `auto_off_minutes` |
 | 明确停止、关闭某个阀门组 | `stop_valve_bank` | 阀门组 `id`；有 `cid` 时一并传入 |
 | WOFOST、作物模型/生长模拟报告、模型预测产量、模拟生物量、LAI、根深、氮吸收、水分平衡 | `get_wofost_report` | `cid` + `plot_id` |
@@ -57,9 +57,9 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 全局概览 → 只调 `get_summary_base`；其响应已内嵌实时天气和 7 天预报（`summary.weather` / `summary.weather_7days`），**禁止再追加 `get_weather` 或任何其他工具**。
 - 上下文存在 `device_id` 不构成调用理由：用户没有明确设备查询意图时，禁止调 `get_plot_device_info`。
 - 问单个设备详情 → `get_plot_device_info`；问某地块有哪些传感器 → `get_plot_device_list`；问地块设备关联哪个阀门组 → `get_valve_bank_by_device`。三个 ID 含义不同，不得混用。
-- `get_valve_bank_by_device.plot_device_id` 必须取地块设备关联 ID；若来自 `get_plot_device_list`，使用列表项最外层 `id`，**禁止**使用嵌套的 `device.id`。
+- `get_valve_bank_by_device.plot_device_ids` 必须是逗号分隔的地块设备关联 ID 字符串；若来自 `get_plot_device_list`，使用列表项最外层 `id`，**禁止**使用嵌套的 `device.id`。
 - 问阀门组名称/状态 → `get_valve_bank_by_device`；只有用户明确说“启动/打开”或“停止/关闭”时，才分别调用 `start_valve_bank` 或 `stop_valve_bank`。
-- `start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；可取 `get_valve_bank_by_device` 返回的 `id`，不得传 `plot_device_id` 或 `device.id`。
+- `start_valve_bank.id`、`stop_valve_bank.id` 必须是阀门组 ID；只取 `get_valve_bank_by_device` 返回列表项最外层 `id`，不得使用 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。
 - 没有明确地块分析意图时，禁止调 `get_plot_info` 和 `get_wofost_report`；"可能有帮助"或"补全信息"不是调用理由。
 
 ### 调用纪律
@@ -75,7 +75,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ## 第二步：参数纪律（不猜参数）
 
-参数只能来自：服务端/会话/网关上下文 → 当前页面路由 → 用户本轮输入 → 历史对话（按此优先级取值）。**禁止编造或猜测** `plot_id`、`device_id`、`plot_device_id`、`id`、`auto_off_minutes`、`dept_id`、`base_id`、`cid`、`matter_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
+参数只能来自：服务端/会话/网关上下文 → 当前页面路由 → 用户本轮输入 → 历史对话（按此优先级取值）。**禁止编造或猜测** `plot_id`、`device_id`、`plot_device_ids`、`id`、`auto_off_minutes`、`dept_id`、`base_id`、`cid`、`matter_id`、`report_date`、token；能从上下文取到的不要让用户重复填。
 
 所有数字字段用 `FlexibleInt64` 解码：JSON 数字 `123` 或整数字符串 `"123"` 均可；非整数字符串报错。
 
@@ -88,13 +88,13 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | `base_id`   | `get_summary_base`、`add_farming_record`、`get_agri_input_list`、`get_formula_list`；在 `get_summary_base` 中有值时优先于 `dept_id`                    |
 | `plot_id`   | `get_plot_info`、`get_weather`、`get_plot_device_list`、`get_wofost_report`、`get_plot_warning`、`add_farming_record`；`get_report_by_type` 的地块类报告用作 `id` |
 | `keyword`   | `get_plot_info`、`get_weather`：只传地块名/区域名，**不传天气词/时间词**（"今天""下雨""适合打药"不是 keyword）；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
-| `device_id` | 仅 `get_plot_device_info`；设备 ID，不得作为 `plot_device_id` 使用                                                                                      |
-| `plot_device_id` | 仅 `get_valve_bank_by_device`；地块与设备的关联 ID。来自 `get_plot_device_list` 时取列表项最外层 `id`，不是 `device.id`                              |
+| `device_id` | 仅 `get_plot_device_info`；设备 ID，不得作为 `plot_device_ids` 的值使用                                                                                   |
+| `plot_device_ids` | 仅 `get_valve_bank_by_device`；逗号分隔字符串，每项是地块与设备的关联 ID。来自 `get_plot_device_list` 时取列表项最外层 `id`，不是 `device.id`       |
 | `page` / `limit` / `name` | 仅 `get_plot_device_list`；均可选，分别用于分页和设备名称筛选；用户未指定时不要猜测                                                             |
 | `report_date` | 仅 `get_wofost_report`；格式 `YYYY-MM-DD`，只接受明确日期语义，不要把"今天/最新"原样传入；不传时服务端默认当天                                       |
 | `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
 | `type`      | 仅 `get_report_by_type`；只允许 `plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis` |
-| `id`        | `get_report_by_type`：地块类报告传 `plot_id`，设备分析传 `device_id`；`start_valve_bank` / `stop_valve_bank`：传阀门组 ID，不是 `plot_device_id`       |
+| `id`        | `get_report_by_type`：地块类报告传 `plot_id`，设备分析传 `device_id`；`start_valve_bank` / `stop_valve_bank`：只传阀门组列表项最外层 `id`           |
 | `auto_off_minutes` | 仅 `start_valve_bank`；可选的正整数分钟数，只在用户明确要求定时关闭时传，禁止猜测默认时长                                                     |
 | `period_type` | 仅 `get_report_by_type`；只允许 `7d`、`week`、`month`，不明确时不传，让服务端默认 `7d`                                                               |
 | `start_date` / `end_date` | `get_plot_warning`、`get_report_by_type`；只接受明确日期范围，不明确时不传                                                                  |
@@ -225,20 +225,20 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 ### get_valve_bank_by_device
 
-触发：用户**明确**查询某个地块设备关联的阀门组、阀门组名称或运行状态。
+触发：用户**明确**查询一个或多个地块设备关联的阀门组、阀门组名称或运行状态。
 
-- **必填参数**：`cid`、`plot_device_id`，两者都必须为正整数；缺任一项时先追问。
-- `plot_device_id` 表示地块设备关联 ID。若它来自 `get_plot_device_list`，必须使用列表项最外层 `id`，不能使用嵌套 `device.id`。
-- 返回结果必须完整保留 `id`、`run_status`、`title`，详见 `references/tool-valve-bank-by-device.md`。
+- **必填参数**：正整数 `cid`，以及非空字符串 `plot_device_ids`；缺任一项时先追问。
+- `plot_device_ids` 用英文逗号连接一个或多个正整数地块设备关联 ID。若 ID 来自 `get_plot_device_list`，必须使用列表项最外层 `id`，不能使用嵌套 `device.id`。
+- 返回结果是列表；每项必须完整保留 `id`、`run_status`、`title`、`devices[]`，其中设备明细保留 `id`、`tag`、`water_outlet` 和完整 `device`，详见 `references/tool-valve-bank-by-device.md`。
 
 ```json
 {
   "cid": 2007,
-  "plot_device_id": 16
+  "plot_device_ids": "16,17"
 }
 ```
 
-- `cid <= 0` 或 `plot_device_id <= 0` → 参数错误，不返回默认数据。
+- `cid <= 0`、`plot_device_ids` 为空，或任一分段不是正整数 → 参数错误，不返回默认数据。
 
 ### start_valve_bank
 
@@ -247,7 +247,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 这是设备控制写操作；仅在动作和阀门组都无歧义时调用，查询状态、查看名称或一般灌溉咨询均不得触发。
 - **必填参数**：`cid`、阀门组 `id`，两者都必须为正整数。
 - **可选参数**：`auto_off_minutes`，只接受用户明确指定的正整数分钟数；未指定时省略，不猜测默认时长。
-- 阀门组 `id` 可取 `get_valve_bank_by_device` 返回的 `id`（示例 `31`），不得传 `plot_device_id`（示例 `16`）或设备 `device.id`（示例 `424`）。
+- 阀门组 `id` 只取 `get_valve_bank_by_device` 返回列表项最外层 `id`（示例 `31`），不得传 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。
 - 返回结构由上游透传，成功确认和空响应处理详见 `references/tool-start-valve-bank.md`。
 
 ```json
@@ -268,7 +268,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - **必填参数**：阀门组 `id`，必须为正整数。
 - **可选参数**：`cid`、`token`、`entity_id`、`entity_info_id`；当前服务层不强制 `cid`，但上下文有值时一并传入。
 - 不传 `auto_off_minutes`；停止逻辑不会使用该字段。
-- 阀门组 `id` 可取 `get_valve_bank_by_device` 返回的 `id`，不得传 `plot_device_id` 或设备 `device.id`。
+- 阀门组 `id` 只取 `get_valve_bank_by_device` 返回列表项最外层 `id`，不得传 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。
 - 返回结构由上游透传，成功确认和空响应处理详见 `references/tool-stop-valve-bank.md`。
 
 ```json

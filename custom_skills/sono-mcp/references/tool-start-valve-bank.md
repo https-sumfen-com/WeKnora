@@ -7,13 +7,13 @@
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `cid` | 是 | 企业 ID，必须为正整数 |
-| `id` | 是 | 阀门组 ID，必须为正整数；可取 `get_valve_bank_by_device.id` |
+| `id` | 是 | 阀门组 ID，必须为正整数；取 `get_valve_bank_by_device` 返回列表项最外层 `id` |
 | `auto_off_minutes` | 否 | 自动关闭等待分钟数；只传用户明确指定的正整数 |
 | `token` | 否 | 会话中的上游访问令牌；没有时省略，禁止编造 |
 | `entity_id` | 否 | 实体 ID；没有时省略 |
 | `entity_info_id` | 否 | 实体信息 ID；没有时省略 |
 
-所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组 ID，不是 `plot_device_id` 或设备 `device.id`。`auto_off_minutes` 未指定或为 `0` 时不发送该字段；不得替用户设定默认时长。
+所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组列表项最外层 ID，不是 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。`auto_off_minutes` 未指定或为 `0` 时不发送该字段；不得替用户设定默认时长。
 
 立即启动示例：
 

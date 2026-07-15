@@ -6,14 +6,14 @@
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
-| `id` | 是 | 阀门组 ID，必须为正整数；可取 `get_valve_bank_by_device.id` |
+| `id` | 是 | 阀门组 ID，必须为正整数；取 `get_valve_bank_by_device` 返回列表项最外层 `id` |
 | `cid` | 否 | 企业 ID；当前服务层不强制，但上下文有值时一并传入 |
 | `token` | 否 | 会话中的上游访问令牌；没有时省略，禁止编造 |
 | `entity_id` | 否 | 实体 ID；没有时省略 |
 | `entity_info_id` | 否 | 实体信息 ID；没有时省略 |
 | `auto_off_minutes` | 否，不应传 | 启动专用参数；停止逻辑不会使用该字段 |
 
-所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组 ID，不是 `plot_device_id` 或设备 `device.id`。
+所有数字参数支持 JSON 整数或整数字符串。`id` 是阀门组列表项最外层 ID，不是 `devices[].id`、`devices[].device.id` 或 `devices[].device.device_id`。
 
 推荐调用：
 
