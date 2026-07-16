@@ -6,6 +6,16 @@ Prefer `scripts/irrigation_control_payload.py build-panel`. Send only its `form_
 
 ## Assistant Syntax
 
+The assistant-visible response for the irrigation form is **Syntax text only**. It is not JSON.
+
+Hard gate before sending:
+
+- The first visible characters must be exactly `form irrigation-valve-duration`.
+- If the visible response starts with `{`, `[`, ```json, `schemaVersion`, `"kind"`, `"form_syntax"`, or `"pending_irrigation_draft"`, it is wrong.
+- If `build-panel` returns a JSON object, extract only the string value at `form_syntax` and send that string as plain text. Do not paste the whole script output.
+- Do not put the Syntax inside a JSON field, code fence, Markdown blockquote, SSE event, `blocks[]`, or `schemaVersion` payload.
+- `pending_irrigation_draft` is trusted state only. It is never visible to the user or frontend Syntax renderer.
+
 The dedicated Syntax is:
 
 ```text
@@ -25,13 +35,38 @@ data
 Rules:
 
 - The first line must be `form irrigation-valve-duration`; use `title 灌溉时长确认`, `autoOpen false`, and a required `data` section exactly as shown.
-- Send the Syntax without a JSON wrapper, SSE event, Markdown explanation, or material-form fields.
+- Send the Syntax without a JSON wrapper, SSE event, Markdown explanation, code fence, `schemaVersion`, `blocks`, `kind`, `form_syntax`, `pending_irrigation_draft`, or material-form fields.
 - `plot_name`, `average_soil_moisture`, and `reason` are read-only evidence/context fields from the trusted panel draft. Keep `cid` and `plot_id` only in trusted state, not in visible Syntax.
 - Each valve starts with `  - valve_bank_id ...`; its following fields use four spaces.
 - `valve_bank_id` is a quoted decimal string and `valve_bank_title` comes from the server-returned valve list; neither is user-editable. Keep `run_status` only in trusted state.
 - Only `selected` and `duration_minutes` are editable. `selected` is a boolean; `duration_minutes` is a positive integer.
 - All int64 identifiers that cross JSON, form, or MCP boundaries must be canonical decimal strings. This includes `cid`, `plot_id`, plot-device IDs, and valve-bank IDs; never emit them as JSON numbers.
 - Do not include `pending_irrigation_draft`, `sensor_analysis`, `plot_device_ids`, `plot_device_id_values`, `run_status`, token, or other system parameters in the visible Syntax.
+
+Wrong visible output:
+
+```json
+{
+  "form_syntax": "form irrigation-valve-duration\n...",
+  "pending_irrigation_draft": {}
+}
+```
+
+Correct visible output:
+
+```text
+form irrigation-valve-duration
+title 灌溉时长确认
+autoOpen false
+plot_name "示例地块"
+average_soil_moisture 25.25
+reason "土壤湿度偏低且近期无明显降雨"
+data
+  - valve_bank_id "31"
+    valve_bank_title "阀门组A"
+    duration_minutes 20
+    selected true
+```
 
 ## User Submit Message
 
