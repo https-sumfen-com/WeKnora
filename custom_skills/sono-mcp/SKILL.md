@@ -1,6 +1,6 @@
 ---
 name: call-mcp-tools
-description: "Use when the server-side Agent must precisely choose and call supported SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, get_plot_device_list, get_valve_bank_by_device, start_valve_bank, stop_valve_bank, get_wofost_report, get_plot_warning, get_report_by_type, add_farming_record, get_agri_input_list, get_formula_list, or get_farming_operation_list."
+description: "Use when the server-side Agent must precisely choose and call supported SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, get_plot_device_list, get_valve_bank_by_device, start_valve_bank, stop_valve_bank, get_wofost_report, get_plot_warning, get_report_by_type, add_farming_record, get_agri_input_list, get_formula_list, get_farming_operation_list, or update_question_tag."
 ---
 
 # 服务端 Agent 精确调用 SONO-MCP 工具
@@ -18,9 +18,11 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 参数不足话术：`请补充地块名称、地块 ID、设备 ID、阀门组 ID、部门 ID、基地 ID、农事事项或作业时间。`
 
+以上“不调用”规则针对业务查询/写入工具；上层提示明确要求维护提问标签时，仍可单独调用 `update_question_tag`。
+
 ## 第一步：意图 → 工具（一一对应，只选一个）
 
-本 Skill 只允许调用以下 15 个已注册工具。禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
+本 Skill 只允许调用以下 16 个已注册工具。禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
 
 | 用户意图 | 唯一匹配工具 | 必要参数 |
 |---|---|---|
@@ -39,6 +41,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | 查询/选择农资库存、农资/肥料/药剂/物料列表 | `get_agri_input_list` | `cid` + `base_id` |
 | 查询/选择农资配方/套餐/施肥配方 | `get_formula_list` | `cid` + `base_id` |
 | 查询/选择农事操作、作业事项、事项列表 | `get_farming_operation_list` | `cid` |
+| 根据上层标签规则更新当前提问标签 | `update_question_tag` | 系统参数 `unique_id` + `tag` |
 
 **全局概览意图**（归 `get_summary_base`）：
 
@@ -65,6 +68,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 ### 调用纪律
 
 - **单工具优先**：能用一个工具回答就只调一个。
+- **提问标签例外**：`update_question_tag` 只更新本轮提问元数据，不算业务查询联动；仅在上层提示明确要求设置标签时调用，并且只能使用系统参数中的 `unique_id`，不得猜测或复用历史记录标识。
 - **普通请求仍然单工具优先**：不由上层工作流协调的普通用户请求，继续按一个意图匹配一个工具，不默认联动。
 - **设备灌溉协调例外**：仅当明确由 `agri-operation-workflow` 的 device-assisted irrigation workflow 协调时，允许按该工作流的证据需要和既定顺序调用 `get_plot_device_list`、`get_plot_info`、`get_weather`、`get_valve_bank_by_device`；仍禁止扫描或无目的调用。
 - **禁止全量扫描**：不得在单次用户问题中把多个工具都调一遍"以防遗漏"。
@@ -108,6 +112,8 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | `operate_time` | 仅 `add_farming_record`；作业时间，传明确日期时间字符串，不把模糊时间原样传入                                                                      |
 | `goodsList` | 仅 `add_farming_record`；提交条目使用 `goods_name`、`stock_goods_id`、`is_formula`、`num`、`price`、`unit`、`dosage` 等字段，值必须来自用户/表单/配方计算结果 |
 | `tgzn_user_id` / `tgzn_entity_id` / `tgzn_dept_id` | 仅 `add_farming_record`；来自网关/会话/表单，不要猜测                                                            |
+| `unique_id` | 仅 `update_question_tag`；必须原样使用当前提问系统参数中的值，禁止使用数据库自增 ID 或上游 `message_id`                                            |
+| `tag` | 仅 `update_question_tag`；多个标签用英文逗号分隔，空字符串表示清空标签                                                                                   |
 
 ## 各工具触发与参数
 
@@ -425,6 +431,21 @@ description: "Use when the server-side Agent must precisely choose and call supp
 ```
 
 - `cid <= 0` → 返回空列表成功（`payload=[]`）。
+
+### update_question_tag
+
+触发：上层提示明确要求为当前提问设置或更新标签。
+
+- `unique_id` 必须原样取自本轮 `## 系统参数`，不得使用历史记录的标识。
+- `tag` 按上层给定的标签规则生成；多个标签用英文逗号分隔并去重。
+- 该工具只更新提问元数据；成功后继续正常回答，不向用户展示 `unique_id`。
+
+```json
+{
+  "unique_id": "9d6267a5-777e-4428-bca4-54218f12c195",
+  "tag": "天气,农事建议"
+}
+```
 
 ## 返回结果处理
 
