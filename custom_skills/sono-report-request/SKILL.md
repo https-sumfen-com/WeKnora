@@ -22,9 +22,9 @@ description: Primary and authoritative workflow for all SONO report generation r
 
 例外：如果当前 prompt 已包含 `##用户问题`、`##系统参数`、`report_no` 和 `report_url`，说明已经进入后端第二次 LLM 报告渲染对话；不要再次调用本 Skill，改用 `sono-report` 真正生成报告文件。
 
-本 Skill 的 API 后端负责保存报告记录，并用本 Skill 传入的 `query` 再发起一次内部 LLM 对话；第二次对话应调用 `sono-report` 取数、渲染、保存报告并回写状态。整个两阶段报告流程都不使用 `agri-operation-workflow`。
+本 Skill 的 API 后端负责保存报告记录，并用本 Skill 传入的 `query` 再发起一次内部 LLM 对话；第二次对话应调用 `sono-report` 取数、渲染、保存报告并回写状态。脚本会在 `query` 中写入 `##Skill访问机制`、`force_skill: sono-report`、`forbidden_skills: sono-report-request, agri-operation-workflow` 和固定 `final_response`，用于强制第二次对话进入 `sono-report`，避免回调本 Skill。整个两阶段报告流程都不使用 `agri-operation-workflow`。
 
-使用 `execute_skill_script` 执行 Python 脚本；由脚本统一生成 `report_no`、从用户问题推断 `report_type`、组装 header/body、发起 POST，并输出 `<sono-report>...</sono-report>`：
+使用 `execute_skill_script` 执行 Python 脚本；由脚本统一生成 `report_no`、从用户问题推断 `report_type`、组装 header/body、发起 POST。脚本默认 stdout 只输出 `<sono-report>...</sono-report>`，LLM 必须原样返回这一行：
 
 ```json
 {
@@ -34,7 +34,7 @@ description: Primary and authoritative workflow for all SONO report generation r
 }
 ```
 
-脚本默认使用内部写死的 `DEFAULT_REPORT_ENDPOINT`，不要从环境变量读取 endpoint；如需临时联调，可用 `--endpoint` 显式覆盖。
+脚本默认使用内部写死的 `DEFAULT_REPORT_ENDPOINT`，不要从环境变量读取 endpoint；如需临时联调，可用 `--endpoint` 显式覆盖。`--json-output` 只允许手动排查时使用，正式 Skill 执行不要使用，避免 LLM 把 JSON 或说明文字返回给前端。
 
 ## Required input
 
@@ -84,7 +84,7 @@ entity-info-id: {entity-info-id}
   "report_no": "{uuid}",
   "report_url": "https://sonoagi.com/report/{report_no}.html",
   "agent_id": "builtin-wiki-fixer",
-  "query": "##用户问题\n{query}\n\n##系统参数\n- plot_id: {plot_id}\n- cid: {cid}\n- entity-id: {entity-id}\n- entity-info-id: {entity-info-id}\n- plot_name: {plot_name}\n- report_type: {report_type}\n- report_no: {report_no}\n- report_url: https://sonoagi.com/report/{report_no}.html",
+  "query": "##用户问题\n{query}\n\n##Skill访问机制\n- force_skill: sono-report\n- route_stage: backend_internal_report_render\n- forbidden_skills: sono-report-request, agri-operation-workflow\n- final_response: <sono-report>https://sonoagi.com/report/{report_no}.html</sono-report>\n- instruction: 本次内部对话必须调用 sono-report skill 生成并保存报告；禁止回调 sono-report-request；禁止调用 agri-operation-workflow。生成完成后只返回 final_response 指定格式。\n\n##系统参数\n- plot_id: {plot_id}\n- cid: {cid}\n- entity-id: {entity-id}\n- entity-info-id: {entity-info-id}\n- plot_name: {plot_name}\n- report_type: {report_type}\n- report_no: {report_no}\n- report_url: https://sonoagi.com/report/{report_no}.html",
   "tgzn_user_id": "{user_id}",
   "title": "{plot_name}【{report_type_cn_name}】",
   "report_type": "{report_type}"
@@ -95,6 +95,8 @@ entity-info-id: {entity-info-id}
 
 ## Output rules
 
-- 成功时只把脚本输出中的 `sono_report` 返回给前端，例如：`<sono-report>https://sonoagi.com/report/{report_no}.html</sono-report>`。
+- 成功时最终回复必须是**唯一一行**：`<sono-report>{report_url}</sono-report>`。
+- 直接原样返回脚本 stdout；不要添加“已生成”“正在生成”、Markdown、代码块、JSON、解释文字、标点或换行后的补充说明。
+- 如果脚本使用默认模式，stdout 已经是 `<sono-report>...</sono-report>`；如果手动调试使用了 `--json-output`，也只能取其中 `sono_report` 的值作为最终回复。
 - 不向前端展示 header、body、endpoint、响应 JSON、token、内部参数或调试日志。
 - 失败时不要伪造 URL，只提示报告生成失败并请稍后重试或联系管理员。

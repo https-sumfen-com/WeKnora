@@ -7,8 +7,8 @@ Preferred execute_skill_script usage:
 
 The script generates report_no, infers report_type from the user query,
 builds the required headers and JSON body, POSTs to the hard-coded default
-endpoint, and prints a JSON result containing `sono_report` for the agent to
-return to the frontend.
+endpoint, and prints exactly `<sono-report>{url}</sono-report>` by default so the
+agent can return the required frontend format verbatim.
 """
 
 from __future__ import annotations
@@ -141,6 +141,13 @@ def build_query(values: dict[str, str], report_no: str, report_url: str) -> str:
         "##用户问题",
         values["query"],
         "",
+        "##Skill访问机制",
+        "- force_skill: sono-report",
+        "- route_stage: backend_internal_report_render",
+        "- forbidden_skills: sono-report-request, agri-operation-workflow",
+        f"- final_response: <sono-report>{report_url}</sono-report>",
+        "- instruction: 本次内部对话必须调用 sono-report skill 生成并保存报告；禁止回调 sono-report-request；禁止调用 agri-operation-workflow。生成完成后只返回 final_response 指定格式。",
+        "",
         "##系统参数",
         f"- plot_id: {values['plot_id']}",
         f"- cid: {values['cid']}",
@@ -210,6 +217,7 @@ def main() -> None:
     parser.add_argument("--endpoint", default=DEFAULT_REPORT_ENDPOINT, help="Report-generation POST endpoint; defaults to the hard-coded DEFAULT_REPORT_ENDPOINT")
     parser.add_argument("--input-json", help="Input JSON string; prefer stdin for larger payloads")
     parser.add_argument("--input-file", help="Path to input JSON file")
+    parser.add_argument("--json-output", action="store_true", help="Manual debugging only: print full JSON instead of the required sono-report tag")
     args = parser.parse_args()
 
     endpoint = args.endpoint.strip()
@@ -243,14 +251,18 @@ def main() -> None:
     final_report_url = extract_report_url(response_json, report_url)
     sono_report = f"<sono-report>{final_report_url}</sono-report>"
 
-    print(json.dumps({
+    result = {
         "ok": True,
         "status": status,
         "report_no": report_no,
         "report_url": final_report_url,
         "sono_report": sono_report,
         "response": response_json,
-    }, ensure_ascii=False, indent=2))
+    }
+    if args.json_output:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(sono_report)
 
 
 if __name__ == "__main__":

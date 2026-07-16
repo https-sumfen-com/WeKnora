@@ -94,7 +94,7 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - MCP 空结果：不是错误；隐藏模块或写“暂无相关数据”。
 - 预置脚本失败：不要生成报告，先补齐数据。
 - 渲染脚本失败：修正 `REPORT_DATA` 或模板占位符后重试。
-- 保存脚本失败：报告保存失败；脚本应尽量回写 `status=2`，说明原因并保留 `$WORKDIR` 路径供排查。
+- 保存脚本失败：报告保存失败；一体化脚本应先完成内部重试，最终仍失败时才回写一次 `status=2`，说明原因并保留 `$WORKDIR` 路径供排查。
 
 ## 验证清单
 
@@ -114,5 +114,5 @@ python scripts/save_report_html.py "$WORKDIR/generated-report.html" "$WORKDIR/no
 - WOFOST 数据表述为“模型模拟/预测”。
 - 页脚不展示 `get_plot_info`、`get_report_by_type` 等具体接口名，只写真实地块数据记录来源。
 - 最终文件路径位于 `/app/report/`，且文件名来自 `report_url`。
-- 成功时已回写 `status=1`；失败时已尽量回写 `status=2`。
+- 全部生成/保存重试结束后只回写一次最终状态：成功 `status=1`，最终失败 `status=2`；不得先写失败、后续重试成功后再写成功。
 - 用户可见结果使用 `<sono-report>{report_url}</sono-report>` 包裹。
