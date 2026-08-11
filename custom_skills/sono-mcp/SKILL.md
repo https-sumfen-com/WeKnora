@@ -1,6 +1,6 @@
 ---
 name: call-mcp-tools
-description: "Use when the server-side Agent must precisely choose and call supported SONO-MCP tools: get_plot_info, get_weather, get_summary_base, get_plot_device_info, get_plot_device_list, get_valve_bank_by_device, start_valve_bank, stop_valve_bank, get_wofost_report, get_plot_warning, get_report_by_type, add_farming_record, get_agri_input_list, get_formula_list, get_farming_operation_list, or update_question_tag."
+description: "Use when the server-side Agent must precisely choose and call supported SONO-MCP tools, including plot, weather, device, report, farming record, farming plan, valve, and question-tag operations."
 ---
 
 # 服务端 Agent 精确调用 SONO-MCP 工具
@@ -16,13 +16,13 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 缺关键 ID 且上下文无法补齐 → 简短追问最关键的缺失字段。
 - 多个工具都可能匹配但意图不明 → 先追问，不试调。
 
-参数不足话术：`请补充地块名称、地块 ID、设备 ID、阀门组 ID、部门 ID、基地 ID、农事事项或作业时间。`
+参数不足话术：`请补充地块名称、地块 ID、设备 ID、阀门组 ID、部门 ID、基地 ID、农事计划 ID、计划名称、农事事项或作业时间。`
 
 以上“不调用”规则针对业务查询/写入工具；上层提示明确要求维护提问标签时，仍可单独调用 `update_question_tag`。
 
 ## 第一步：意图 → 工具（一一对应，只选一个）
 
-本 Skill 只允许调用以下 16 个已注册工具。禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
+本 Skill 只允许调用以下 19 个已注册工具。禁止调用 `get_data_list`、`get_data_detail`（代码存在但注册已注释，不可用）。
 
 | 用户意图 | 唯一匹配工具 | 必要参数 |
 |---|---|---|
@@ -41,6 +41,9 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | 查询/选择农资库存、农资/肥料/药剂/物料列表 | `get_agri_input_list` | `cid` + `base_id` |
 | 查询/选择农资配方/套餐/施肥配方 | `get_formula_list` | `cid` + `base_id` |
 | 查询/选择农事操作、作业事项、事项列表 | `get_farming_operation_list` | `cid` |
+| 查询某地块未来 7 天的农事计划 | `get_work_task_list` | `cid` + `plot_id`；`date` 可选 |
+| 新增农事计划 | `add_work_task` | `cid` + `name` + `start_time`；其余字段来自用户/上下文 |
+| 更新已有农事计划 | `update_work_task` | `cid` + 计划 `id` + `name`；只传明确修改项 |
 | 根据上层标签规则更新当前提问标签 | `update_question_tag` | 系统参数 `unique_id` + `tag` |
 
 **全局概览意图**（归 `get_summary_base`）：
@@ -56,6 +59,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - 问地块预警/风险/异常提醒 → 只调 `get_plot_warning`，**不要**用 `get_summary_base` 或天气工具替代。
 - 问“查询/查看已有”长势分析报告、3D 表型报告、苗情监测报告、按类型报告 → 只调 `get_report_by_type`，**不要**把 `get_plot_info` 的基础长势当作细分报告；问“生成/导出/创建报告” → 不调用 MCP，交给 `sono-report-request`。
 - 问新增/保存农事记录 → 只在用户明确要写入时调 `add_farming_record`；用户只是问"怎么记录/需要哪些字段"时不要写入。
+- “农事记录”是已经发生的作业记录，用 `add_farming_record`；“农事计划”是未来安排，查询用 `get_work_task_list`，新增/更新分别用 `add_work_task`、`update_work_task`，不得混用。
 - 问农资、配方、农事事项可选项 → 分别只调 `get_agri_input_list`、`get_formula_list`、`get_farming_operation_list`，**不要**用地块、基地汇总或报告工具替代。
 - 全局概览 → 只调 `get_summary_base`；其响应已内嵌实时天气和 7 天预报（`summary.weather` / `summary.weather_7days`），**禁止再追加 `get_weather` 或任何其他工具**。
 - 上下文存在 `device_id` 不构成调用理由：用户没有明确设备查询意图时，禁止调 `get_plot_device_info`。
@@ -74,7 +78,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - **禁止全量扫描**：不得在单次用户问题中把多个工具都调一遍"以防遗漏"。
 - **禁止默认联动**：查地块不自动查天气/设备；查天气不自动查地块；查设备不自动查地块/天气；查 WOFOST 报告不自动查地块/天气；查基地汇总不联动其他工具。
 - **农事辅助列表不默认联动**：新增农事记录不自动查农资/配方/事项列表；只有用户明确要选项，或缺少对应 ID 且上下文允许列选项时，才单独调用对应列表工具。
-- **写操作更谨慎**：`add_farming_record` 会新增/更新农事记录，`start_valve_bank`、`stop_valve_bank` 会改变设备状态；用户未明确要求对应操作时禁止调用。
+- **写操作更谨慎**：`add_farming_record`、`add_work_task`、`update_work_task` 会写入业务数据，`start_valve_bank`、`stop_valve_bank` 会改变设备状态；用户未明确要求对应操作时禁止调用。
 - **阀门控制不默认联动**：查询到阀门组不等于授权控制；启动/停止后也不默认追加状态查询。缺少唯一阀门组 `id` 时先追问，不试调控制接口。
 - **用户侧报告生成不走 MCP**：当普通用户要求生成/导出/创建报告时，必须交给 `sono-report-request`；本 Skill 不预先调用 `get_plot_info`、`get_plot_warning`、`get_report_by_type` 或其他 MCP 工具。
 - **内部渲染例外**：当上层明确处于 `sono-report` 后端内部渲染流程，且已带 `report_no` / `report_url` 时，允许按 `sono-report` 的章节规则调用地块级 MCP 工具取数。
@@ -92,7 +96,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | `cid`       | 企业标识；是否必填以各工具章节为准。`start_valve_bank` 必填；`stop_valve_bank` 当前可选，但上下文有值时一并传入                                      |
 | `dept_id`   | 仅 `get_summary_base`；`0`=全部门（企业管理员），`-1`=无可用部门                                                                                        |
 | `base_id`   | `get_summary_base`、`add_farming_record`、`get_agri_input_list`、`get_formula_list`；在 `get_summary_base` 中有值时优先于 `dept_id`                    |
-| `plot_id`   | `get_plot_info`、`get_weather`、`get_plot_device_list`、`get_wofost_report`、`get_plot_warning`、`add_farming_record`；`get_report_by_type` 的地块类报告用作 `id` |
+| `plot_id`   | 地块标识；计划查询只传单个 ID，计划新增/更新可传单个或逗号分隔 ID；`get_report_by_type` 的地块类报告用作 `id` |
 | `keyword`   | `get_plot_info`、`get_weather`：只传地块名/区域名，**不传天气词/时间词**（"今天""下雨""适合打药"不是 keyword）；`get_summary_base`：**仅**当用户明确提到基地名称且无 `base_id` 时才传，其余情况不传 |
 | `device_id` | 仅 `get_plot_device_info`；设备 ID，不得作为 `plot_device_ids` 的值使用                                                                                   |
 | `plot_device_ids` | 仅 `get_valve_bank_by_device`；逗号分隔字符串，每项是地块与设备的关联 ID。来自 `get_plot_device_list` 时取列表项最外层 `id`，不是 `device.id`       |
@@ -100,7 +104,10 @@ description: "Use when the server-side Agent must precisely choose and call supp
 | `report_date` | 仅 `get_wofost_report`；格式 `YYYY-MM-DD`，只接受明确日期语义，不要把"今天/最新"原样传入；不传时服务端默认当天                                       |
 | `days`      | 仅 `get_weather`；`7` = 7天预报（`payload.days[]`）；不传或传 `0` = 仅返回实时天气（`payload.now`）                                                     |
 | `type`      | 仅 `get_report_by_type`；只允许 `plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`、`plot_wofost`、`device_analysis` |
-| `id`        | `get_report_by_type`：地块类报告传 `plot_id`，设备分析传 `device_id`；`start_valve_bank` / `stop_valve_bank`：只传阀门组列表项最外层 `id`           |
+| `id`        | `update_work_task` 传农事计划 ID；报告/阀门工具按各自章节传对应业务 ID，不得混用 |
+| `date`      | 仅 `get_work_task_list`；未来 7 天窗口的起始日期，格式 `YYYY-MM-DD`，不传时上游以当天开始 |
+| `name` / `start_time` / `end_time` | 农事计划名称和日期；新增必须传 `name`、`start_time`，更新必须传 `name`，结束日期可选且不得早于开始日期 |
+| `work_user` / `matter_list` | 农事计划执行人和事项列表；只传真实 ID/明细，空数组表示明确清空事项，更新时省略表示保持原值 |
 | `auto_off_minutes` | 仅 `start_valve_bank`；可选的正整数分钟数，只在用户明确要求定时关闭时传，禁止猜测默认时长                                                     |
 | `period_type` | 仅 `get_report_by_type`；只允许 `7d`、`week`、`month`，不明确时不传，让服务端默认 `7d`                                                               |
 | `start_date` / `end_date` | `get_plot_warning`、`get_report_by_type`；只接受明确日期范围，不明确时不传                                                                  |
@@ -432,6 +439,14 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 - `cid <= 0` → 返回空列表成功（`payload=[]`）。
 
+### 农事计划工具
+
+- `get_work_task_list`：用户明确查询某地块接下来 7 天的计划时调用；必须有真实 `cid` 和单个 `plot_id`，`date` 为可选的 `YYYY-MM-DD` 起始日。
+- `add_work_task`：用户明确新增计划时调用；服务端硬性必填 `cid`、`name`、`start_time`，业务上还应确认基地、结束日期、地块、农事类型和执行人；该工具会强制移除 `id`。
+- `update_work_task`：用户明确修改已有计划时调用；必须有 `cid`、真实计划 `id` 和 `name`，只传明确修改项；省略表示保持，显式空字符串/空数组表示清空。
+- 查询工具的 JSON-RPC 映射、7 天窗口和列表返回规则见 `references/tool-work-task-list.md`。
+- 新增、更新工具的 JSON-RPC 映射、日期校验、农资/配方、成本字段和返回规则见 `references/tool-work-task-add-update.md`。
+
 ### update_question_tag
 
 触发：上层提示明确要求为当前提问设置或更新标签。
@@ -451,7 +466,7 @@ description: "Use when the server-side Agent must precisely choose and call supp
 
 1. `isError=true` → 说明服务异常，不暴露 token、内部 URL、内部配置。话术：`工具调用失败，可能是配置或上游服务异常，请稍后重试。`
 2. `isError=false` 且文本为空 → 查询工具按空结果处理，话术：`未查询到相关数据。`；`start_valve_bank` / `stop_valve_bank` 话术：`控制请求已发送，但上游未返回可确认的结果。`
-3. `isError=false` 且文本非空 → 解析 JSON，基于返回内容回答，不原样倾倒 JSON。阀门控制只有在响应明确确认成功时才说“启动/关闭成功”，否则只复述上游确认信息。
+3. `isError=false` 且文本非空 → 解析 JSON，基于返回内容回答，不原样倾倒 JSON。阀门控制只有在响应明确确认成功时才说“启动/关闭成功”；`add_work_task` / `update_work_task` 只有返回明确计划 `id` 或保存后对象时才确认成功，否则只复述上游确认信息。
 
 ## 懒加载字段提取规则
 
@@ -472,3 +487,5 @@ description: "Use when the server-side Agent must precisely choose and call supp
 - `get_agri_input_list` 返回处理 → `references/tool-agri-input-list.md`
 - `get_formula_list` 返回处理 → `references/tool-formula-list.md`
 - `get_farming_operation_list` 返回处理 → `references/tool-farming-operation-list.md`
+- `get_work_task_list` 返回处理 → `references/tool-work-task-list.md`
+- `add_work_task` / `update_work_task` 返回处理 → `references/tool-work-task-add-update.md`
