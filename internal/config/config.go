@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/utils"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -49,6 +50,48 @@ type AgentConfig struct {
 	// ToolApprovalTimeoutSeconds is how long the agent waits for human approval on a flagged MCP tool.
 	// 0 means default 600 (10 minutes).
 	ToolApprovalTimeoutSeconds int `yaml:"tool_approval_timeout_seconds" json:"tool_approval_timeout_seconds"`
+	// PromptSuspendEnabled lets a run that waits on a suspendable prompt (tool
+	// approval) end after PromptHotWaitSeconds and persist its state instead of
+	// blocking up to ToolApprovalTimeoutSeconds. Unset means enabled.
+	PromptSuspendEnabled *bool `yaml:"prompt_suspend_enabled" json:"prompt_suspend_enabled"`
+	// PromptHotWaitSeconds is how long a suspendable prompt waits in memory
+	// before the run is suspended. 0 means default 120.
+	PromptHotWaitSeconds int `yaml:"prompt_hot_wait_seconds" json:"prompt_hot_wait_seconds"`
+	// PromptExpireSeconds is how long a suspended prompt stays answerable.
+	// 0 means default 604800 (7 days); a negative value never expires.
+	PromptExpireSeconds int `yaml:"prompt_expire_seconds" json:"prompt_expire_seconds"`
+}
+
+// Defaults for suspendable agent prompts.
+const (
+	DefaultPromptHotWait = 120 * time.Second
+	DefaultPromptExpire  = 7 * 24 * time.Hour
+)
+
+// PromptSuspend reports whether suspendable prompts may suspend their run.
+func (c *AgentConfig) PromptSuspend() bool {
+	return c == nil || c.PromptSuspendEnabled == nil || *c.PromptSuspendEnabled
+}
+
+// PromptHotWait returns the in-memory wait before a run is suspended.
+func (c *AgentConfig) PromptHotWait() time.Duration {
+	if c == nil || c.PromptHotWaitSeconds <= 0 {
+		return DefaultPromptHotWait
+	}
+	return time.Duration(c.PromptHotWaitSeconds) * time.Second
+}
+
+// PromptExpiry returns how long a suspended prompt stays answerable; zero
+// means it never expires.
+func (c *AgentConfig) PromptExpiry() time.Duration {
+	switch {
+	case c == nil || c.PromptExpireSeconds == 0:
+		return DefaultPromptExpire
+	case c.PromptExpireSeconds < 0:
+		return 0
+	default:
+		return time.Duration(c.PromptExpireSeconds) * time.Second
+	}
 }
 
 // IMConfig configures the IM integration service.
@@ -114,6 +157,9 @@ type ConversationConfig struct {
 	ExtractRelationshipsPromptID string `yaml:"extract_relationships_prompt_id"   json:"extract_relationships_prompt_id"`
 	GenerateQuestionsPromptID    string `yaml:"generate_questions_prompt_id"      json:"generate_questions_prompt_id"`
 
+	// GenerateKBDescriptionPromptID selects the knowledge-base description template.
+	GenerateKBDescriptionPromptID string `yaml:"generate_kb_description_prompt_id" json:"generate_kb_description_prompt_id"` //nolint:lll // one-line struct tag
+
 	// Resolved prompt text fields (populated by backfill, not from YAML)
 	FallbackPrompt             string `yaml:"-" json:"fallback_prompt"`
 	RewritePromptSystem        string `yaml:"-" json:"rewrite_prompt_system"`
@@ -123,6 +169,9 @@ type ConversationConfig struct {
 	ExtractEntitiesPrompt      string `yaml:"-" json:"extract_entities_prompt"`
 	ExtractRelationshipsPrompt string `yaml:"-" json:"extract_relationships_prompt"`
 	GenerateQuestionsPrompt    string `yaml:"-" json:"generate_questions_prompt"`
+
+	// GenerateKBDescriptionPrompt is the resolved knowledge-base description template text.
+	GenerateKBDescriptionPrompt string `yaml:"-" json:"generate_kb_description_prompt"`
 
 	// IntentSystemPrompts maps intent values (e.g. "greeting", "chitchat") to
 	// system prompt text. Populated by backfill from IntentPrompts templates.
@@ -195,7 +244,7 @@ type ImageProcessingConfig struct {
 	EnableMultimodal bool `yaml:"enable_multimodal" json:"enable_multimodal"`
 }
 
-// TenantConfig 租户配置
+// TenantConfig 空间配置
 type TenantConfig struct {
 	DefaultSessionName        string `yaml:"default_session_name"        json:"default_session_name"`
 	DefaultSessionTitle       string `yaml:"default_session_title"       json:"default_session_title"`
@@ -226,6 +275,10 @@ type TenantConfig struct {
 	// loosen / tighten the quota without a redeploy. See
 	// applyAuthAndTenantDefaults for the semantics of <0 / 0 / >0.
 	MaxOwnedPerUser int `yaml:"max_owned_per_user" json:"max_owned_per_user" mapstructure:"max_owned_per_user"`
+	// SelfServiceCreationEnabled controls whether ordinary authenticated
+	// users may create a workspace for themselves. Nil preserves the
+	// historical default (enabled); cross-tenant superusers are exempt.
+	SelfServiceCreationEnabled *bool `yaml:"self_service_creation_enabled" json:"self_service_creation_enabled" mapstructure:"self_service_creation_enabled"`
 }
 
 // IsRBACEnforced reports whether tenant-level role enforcement is
@@ -239,6 +292,12 @@ func (t *TenantConfig) IsRBACEnforced() bool {
 		return true
 	}
 	return *t.EnableRBAC
+}
+
+// IsSelfServiceCreationEnabled reports whether ordinary users may create
+// tenants. Nil keeps the historical behaviour enabled.
+func (t *TenantConfig) IsSelfServiceCreationEnabled() bool {
+	return t == nil || t.SelfServiceCreationEnabled == nil || *t.SelfServiceCreationEnabled
 }
 
 // AuditConfig governs durable audit log behaviour. Writes happen on
@@ -257,26 +316,34 @@ type AuditConfig struct {
 
 // AuthConfig governs the user authentication entry points.
 type AuthConfig struct {
-	// RegistrationMode controls who may call POST /auth/register.
+	// RegistrationMode controls public and invitation password registration.
 	//   "self_serve" (default) — anyone may register; a new tenant is
 	//                            auto-created and the registrant becomes
 	//                            its Owner. Preserves existing behaviour.
-	//   "invite_only"          — public registration is rejected; new
-	//                            users only enter through the invitation
-	//                            flow added in PR 3.
+	//   "invite_register"      — new users need a valid invitation link.
+	//   "invite_only"          — no password registration; invitations can
+	//                            only be accepted by existing accounts.
+	//                            Kept as the legacy disabled mode.
 	RegistrationMode string `yaml:"registration_mode" json:"registration_mode"`
+	// DefaultTenantMode controls public password-registration provisioning.
+	// create_personal preserves the historical one-user-one-workspace default;
+	// tenantless creates only the identity and waits for an invitation or an
+	// explicit self-service tenant creation.
+	DefaultTenantMode      string `yaml:"default_tenant_mode" json:"default_tenant_mode"`
+	ComplexPasswordEnabled bool   `yaml:"complex_password_enabled" json:"complex_password_enabled"`
 }
 
 // AuthRegistrationMode constants used by handlers and middleware.
 const (
-	AuthRegistrationModeSelfServe  = "self_serve"
-	AuthRegistrationModeInviteOnly = "invite_only"
+	AuthRegistrationModeSelfServe       = "self_serve"
+	AuthRegistrationModeInviteOnly      = "invite_only"
+	AuthRegistrationModeInviteRegister  = "invite_register"
+	AuthDefaultTenantModeCreatePersonal = "create_personal"
+	AuthDefaultTenantModeTenantless     = "tenantless"
 )
 
-// IsInviteOnly returns true when registration is gated behind invitations.
-// Treats nil receiver and empty/unknown values as "not invite-only" so the
-// default keeps current behaviour even if the section is missing from the
-// config file.
+// IsInviteOnly identifies the legacy disabled-registration mode.
+// It does not identify the invite_register mode, which permits new accounts.
 func (c *AuthConfig) IsInviteOnly() bool {
 	if c == nil {
 		return false
@@ -291,6 +358,7 @@ type OIDCUserInfoMapping struct {
 
 type OIDCAuthConfig struct {
 	Enable                bool                 `yaml:"enable"                 json:"enable"`
+	PKCEEnabled           bool                 `yaml:"pkce_enabled"           json:"pkce_enabled"`
 	IssuerURL             string               `yaml:"issuer_url"             json:"issuer_url"`
 	DiscoveryURL          string               `yaml:"discovery_url"          json:"discovery_url"`
 	ProviderDisplayName   string               `yaml:"provider_display_name"  json:"provider_display_name"`
@@ -299,6 +367,7 @@ type OIDCAuthConfig struct {
 	AuthorizationEndpoint string               `yaml:"authorization_endpoint" json:"authorization_endpoint"`
 	TokenEndpoint         string               `yaml:"token_endpoint"         json:"token_endpoint"`
 	UserInfoEndpoint      string               `yaml:"user_info_endpoint"     json:"user_info_endpoint"`
+	JwksURI               string               `yaml:"jwks_uri"               json:"jwks_uri"`
 	Scopes                []string             `yaml:"scopes"                 json:"scopes"`
 	UserInfoMapping       *OIDCUserInfoMapping `yaml:"user_info_mapping"      json:"user_info_mapping"`
 }
@@ -342,10 +411,12 @@ type PromptTemplatesConfig struct {
 
 	GenerateSessionTitle []PromptTemplate `yaml:"generate_session_title" json:"generate_session_title,omitempty"`
 	GenerateSummary      []PromptTemplate `yaml:"generate_summary"       json:"generate_summary,omitempty"`
-	KeywordsExtraction   []PromptTemplate `yaml:"keywords_extraction"    json:"keywords_extraction,omitempty"`
-	AgentSystemPrompt    []PromptTemplate `yaml:"agent_system_prompt"    json:"agent_system_prompt,omitempty"`
-	GraphExtraction      []PromptTemplate `yaml:"graph_extraction"       json:"graph_extraction,omitempty"`
-	GenerateQuestions    []PromptTemplate `yaml:"generate_questions"     json:"generate_questions,omitempty"`
+	// GenerateKBDescription writes the knowledge-base gist from the document profile aggregate.
+	GenerateKBDescription []PromptTemplate `yaml:"generate_kb_description" json:"generate_kb_description,omitempty"` //nolint:lll // one-line struct tag
+	KeywordsExtraction    []PromptTemplate `yaml:"keywords_extraction"    json:"keywords_extraction,omitempty"`
+	AgentSystemPrompt     []PromptTemplate `yaml:"agent_system_prompt"    json:"agent_system_prompt,omitempty"`
+	GraphExtraction       []PromptTemplate `yaml:"graph_extraction"       json:"graph_extraction,omitempty"`
+	GenerateQuestions     []PromptTemplate `yaml:"generate_questions"     json:"generate_questions,omitempty"`
 	// IntentPrompts holds per-intent system prompt overrides (template ID = intent value).
 	IntentPrompts []PromptTemplate `yaml:"intent_prompts" json:"intent_prompts,omitempty"`
 }
@@ -508,7 +579,9 @@ func LoadConfig() (*Config, error) {
 	})
 
 	// 使用处理后的配置内容
-	viper.ReadConfig(strings.NewReader(result))
+	if err := viper.ReadConfig(strings.NewReader(result)); err != nil {
+		return nil, fmt.Errorf("error parsing expanded config: %w", err)
+	}
 
 	// 解析配置到结构体
 	var cfg Config
@@ -563,6 +636,7 @@ func LoadConfig() (*Config, error) {
 	applyOIDCEnvOverrides(&cfg)
 	applyAgentEnvOverrides(&cfg)
 	applyKnowledgeBaseEnvOverrides(&cfg)
+	applyNetworkEnvOverrides()
 	applyAuthAndTenantDefaults(&cfg)
 	applyAuditDefaults(&cfg)
 
@@ -611,9 +685,17 @@ func ValidateConfig(cfg *Config) error {
 
 	if cfg.Auth != nil {
 		mode := strings.TrimSpace(cfg.Auth.RegistrationMode)
-		if mode != "" && mode != AuthRegistrationModeSelfServe && mode != AuthRegistrationModeInviteOnly {
-			errs = append(errs, fmt.Sprintf("auth.registration_mode must be %q or %q, got %q",
-				AuthRegistrationModeSelfServe, AuthRegistrationModeInviteOnly, mode))
+		if mode != "" && mode != AuthRegistrationModeSelfServe &&
+			mode != AuthRegistrationModeInviteOnly && mode != AuthRegistrationModeInviteRegister {
+			errs = append(errs, fmt.Sprintf("auth.registration_mode must be %q, %q or %q, got %q",
+				AuthRegistrationModeSelfServe, AuthRegistrationModeInviteOnly,
+				AuthRegistrationModeInviteRegister, mode))
+		}
+
+		tenantMode := strings.TrimSpace(cfg.Auth.DefaultTenantMode)
+		if tenantMode != "" && tenantMode != AuthDefaultTenantModeCreatePersonal && tenantMode != AuthDefaultTenantModeTenantless {
+			errs = append(errs, fmt.Sprintf("auth.default_tenant_mode must be %q or %q, got %q",
+				AuthDefaultTenantModeCreatePersonal, AuthDefaultTenantModeTenantless, tenantMode))
 		}
 	}
 
@@ -672,6 +754,9 @@ func applyOIDCEnvOverrides(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_ENABLE")); value != "" {
 		cfg.OIDCAuth.Enable = strings.EqualFold(value, "true")
 	}
+	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_PKCE_ENABLED")); value != "" {
+		cfg.OIDCAuth.PKCEEnabled = strings.EqualFold(value, "true")
+	}
 	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_ISSUER_URL")); value != "" {
 		cfg.OIDCAuth.IssuerURL = value
 	}
@@ -695,6 +780,9 @@ func applyOIDCEnvOverrides(cfg *Config) {
 	}
 	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_USER_INFO_ENDPOINT")); value != "" {
 		cfg.OIDCAuth.UserInfoEndpoint = value
+	}
+	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_JWKS_URI")); value != "" {
+		cfg.OIDCAuth.JwksURI = value
 	}
 	if value := strings.TrimSpace(os.Getenv("OIDC_AUTH_SCOPES")); value != "" {
 		cfg.OIDCAuth.Scopes = strings.Fields(strings.ReplaceAll(value, ",", " "))
@@ -745,6 +833,21 @@ func applyKnowledgeBaseEnvOverrides(cfg *Config) {
 	}
 }
 
+// applyNetworkEnvOverrides configures global network timeouts that are not
+// scoped to a single config section. The outbound (SSRF-safe) dial timeout
+// governs how quickly an unreachable model/connector endpoint fails; it
+// defaults to 5s and can be raised via WEKNORA_OUTBOUND_DIAL_TIMEOUT for
+// slow-to-connect serverless endpoints.
+func applyNetworkEnvOverrides() {
+	dialTimeout := 5 * time.Second
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_OUTBOUND_DIAL_TIMEOUT")); value != "" {
+		if d, err := time.ParseDuration(value); err == nil && d > 0 {
+			dialTimeout = d
+		}
+	}
+	utils.SetOutboundDialTimeout(dialTimeout)
+}
+
 func applyAgentEnvOverrides(cfg *Config) {
 	if cfg.Agent == nil {
 		cfg.Agent = &AgentConfig{}
@@ -766,6 +869,10 @@ func applyAgentEnvOverrides(cfg *Config) {
 			cfg.Agent.ToolApprovalTimeoutSeconds = int(d.Seconds())
 		}
 	}
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_AGENT_PROMPT_SUSPEND")); value != "" {
+		enabled := strings.EqualFold(value, "true")
+		cfg.Agent.PromptSuspendEnabled = &enabled
+	}
 }
 
 // applyAuthAndTenantDefaults fills in defaults for the Auth and Tenant
@@ -774,12 +881,22 @@ func applyAgentEnvOverrides(cfg *Config) {
 //
 // Defaults:
 //   - auth.registration_mode  -> "self_serve" (preserves pre-RBAC behaviour)
+//   - auth.default_tenant_mode -> "create_personal" (preserves the
+//     historical registration behaviour)
 //   - tenant.enable_rbac      -> true (enforce role checks unless an
 //     operator explicitly opts into the logging-only rollout window via
 //     config.yaml `enable_rbac: false` or `WEKNORA_TENANT_ENABLE_RBAC=false`).
+//   - tenant.self_service_creation_enabled -> true (preserves ordinary
+//     authenticated users' ability to create workspaces).
 //
 // Env overrides (when set and non-empty):
+//   - WEKNORA_AUTH_DEFAULT_TENANT_MODE ("create_personal"/"tenantless")
+//   - WEKNORA_AUTH_COMPLEX_PASSWORD_ENABLED (boolean)
+//   - WEKNORA_TENANT_SELF_SERVICE_CREATION_ENABLED (boolean)
 //   - WEKNORA_TENANT_ENABLE_RBAC      ("true"/"false", case-insensitive)
+//   - WEKNORA_TENANT_ENABLE_CROSS_TENANT_ACCESS ("true"/"false", case-insensitive).
+//     Read explicitly because viper.AutomaticEnv has no SetEnvPrefix, so the
+//     WEKNORA_-prefixed var is not bound to the nested struct automatically.
 //   - WEKNORA_TENANT_MAX_OWNED_PER_USER (integer; <0 disables the cap,
 //     0 falls back to the handler default, >0 enforces that exact cap).
 //     Unparseable / empty values are ignored so a stale shell variable
@@ -814,6 +931,19 @@ func applyAuthAndTenantDefaults(cfg *Config) {
 		cfg.Auth.RegistrationMode = AuthRegistrationModeSelfServe
 	}
 
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_AUTH_COMPLEX_PASSWORD_ENABLED")); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cfg.Auth.ComplexPasswordEnabled = parsed
+		}
+	}
+
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_AUTH_DEFAULT_TENANT_MODE")); value != "" {
+		cfg.Auth.DefaultTenantMode = value
+	}
+	if strings.TrimSpace(cfg.Auth.DefaultTenantMode) == "" {
+		cfg.Auth.DefaultTenantMode = AuthDefaultTenantModeCreatePersonal
+	}
+
 	if value := strings.TrimSpace(os.Getenv("WEKNORA_TENANT_ENABLE_RBAC")); value != "" {
 		v := strings.EqualFold(value, "true")
 		cfg.Tenant.EnableRBAC = &v
@@ -823,6 +953,31 @@ func applyAuthAndTenantDefaults(cfg *Config) {
 		// via config.yaml `enable_rbac: false` or the env override.
 		on := true
 		cfg.Tenant.EnableRBAC = &on
+	}
+
+	// WEKNORA_TENANT_ENABLE_CROSS_TENANT_ACCESS mirrors the RBAC switch above.
+	// It must be read explicitly: viper.AutomaticEnv has no SetEnvPrefix, so the
+	// WEKNORA_-prefixed env var is never bound to the nested struct field —
+	// without this block, only config.yaml's enable_cross_tenant_access takes
+	// effect and the documented env override is silently ignored. The default
+	// stays whatever config.yaml provides (false unless set there).
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_TENANT_ENABLE_CROSS_TENANT_ACCESS")); value != "" {
+		cfg.Tenant.EnableCrossTenantAccess = strings.EqualFold(value, "true")
+	}
+
+	if value := strings.TrimSpace(os.Getenv("WEKNORA_TENANT_SELF_SERVICE_CREATION_ENABLED")); value != "" {
+		if enabled, err := strconv.ParseBool(value); err == nil {
+			cfg.Tenant.SelfServiceCreationEnabled = &enabled
+		} else {
+			fmt.Printf(
+				"[config] WEKNORA_TENANT_SELF_SERVICE_CREATION_ENABLED=%q is not a boolean, ignoring\n",
+				value,
+			)
+		}
+	}
+	if cfg.Tenant.SelfServiceCreationEnabled == nil {
+		on := true
+		cfg.Tenant.SelfServiceCreationEnabled = &on
 	}
 
 	if value := strings.TrimSpace(os.Getenv("WEKNORA_TENANT_MAX_OWNED_PER_USER")); value != "" {
@@ -904,6 +1059,13 @@ func backfillConversationDefaults(cfg *Config) {
 			fmt.Printf("Warning: generate_summary_prompt_id %q not found\n", conv.GenerateSummaryPromptID)
 		}
 	}
+	if conv.GenerateKBDescriptionPromptID != "" {
+		if t := FindTemplateByID(pt, conv.GenerateKBDescriptionPromptID); t != nil {
+			conv.GenerateKBDescriptionPrompt = t.Content
+		} else {
+			fmt.Printf("Warning: generate_kb_description_prompt_id %q not found\n", conv.GenerateKBDescriptionPromptID)
+		}
+	}
 	if conv.ExtractEntitiesPromptID != "" {
 		if t := FindTemplateByID(pt, conv.ExtractEntitiesPromptID); t != nil {
 			conv.ExtractEntitiesPrompt = t.Content
@@ -968,6 +1130,7 @@ func FindTemplateByID(pt *PromptTemplatesConfig, id string) *PromptTemplate {
 		pt.Fallback,
 		pt.GenerateSessionTitle,
 		pt.GenerateSummary,
+		pt.GenerateKBDescription,
 		pt.KeywordsExtraction,
 		pt.AgentSystemPrompt,
 		pt.GraphExtraction,
@@ -1013,17 +1176,18 @@ func loadPromptTemplates(configDir string) (*PromptTemplatesConfig, error) {
 
 	// 定义模板文件映射
 	templateFiles := map[string]*[]PromptTemplate{
-		"system_prompt.yaml":          &config.SystemPrompt,
-		"context_template.yaml":       &config.ContextTemplate,
-		"rewrite.yaml":                &config.Rewrite,
-		"fallback.yaml":               &config.Fallback,
-		"generate_session_title.yaml": &config.GenerateSessionTitle,
-		"generate_summary.yaml":       &config.GenerateSummary,
-		"keywords_extraction.yaml":    &config.KeywordsExtraction,
-		"agent_system_prompt.yaml":    &config.AgentSystemPrompt,
-		"graph_extraction.yaml":       &config.GraphExtraction,
-		"generate_questions.yaml":     &config.GenerateQuestions,
-		"intent_prompts.yaml":         &config.IntentPrompts,
+		"system_prompt.yaml":           &config.SystemPrompt,
+		"context_template.yaml":        &config.ContextTemplate,
+		"rewrite.yaml":                 &config.Rewrite,
+		"fallback.yaml":                &config.Fallback,
+		"generate_session_title.yaml":  &config.GenerateSessionTitle,
+		"generate_summary.yaml":        &config.GenerateSummary,
+		"generate_kb_description.yaml": &config.GenerateKBDescription,
+		"keywords_extraction.yaml":     &config.KeywordsExtraction,
+		"agent_system_prompt.yaml":     &config.AgentSystemPrompt,
+		"graph_extraction.yaml":        &config.GraphExtraction,
+		"generate_questions.yaml":      &config.GenerateQuestions,
+		"intent_prompts.yaml":          &config.IntentPrompts,
 	}
 
 	// 加载每个模板文件

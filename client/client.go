@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,20 +25,27 @@ import (
 // HTTP layer. The legacy WithToken is kept as an alias for WithAPIKey for two
 // minor versions of compatibility.
 type Client struct {
-	baseURL     string
-	httpClient  *http.Client
-	apiKey      string
-	bearerToken string
-	tenantID    *uint64
+	baseURL    string
+	httpClient *http.Client
+	// streamTimeout is zero by default so long-lived streams and downloads are not
+	// severed by the ordinary request timeout. An explicit WithTimeout option
+	// sets both timeouts, preserving the public option's all-request semantics.
+	streamTimeout time.Duration
+	apiKey        string
+	bearerToken   string
+	tenantID      *uint64
 }
 
 // ClientOption defines client configuration options
 type ClientOption func(*Client)
 
-// WithTimeout sets the HTTP client timeout
+// WithTimeout sets the timeout for ordinary and streaming HTTP requests.
+// Streaming requests have no timeout by default; callers that set this option
+// explicitly are asking for the same upper bound to apply to streams and downloads.
 func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
 		c.httpClient.Timeout = timeout
+		c.streamTimeout = timeout
 	}
 }
 
@@ -96,7 +104,7 @@ func WithTenantID(tenantID uint64) ClientOption {
 // NewClient creates a new client instance
 func NewClient(baseURL string, options ...ClientOption) *Client {
 	client := &Client{
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -109,10 +117,12 @@ func NewClient(baseURL string, options ...ClientOption) *Client {
 	return client
 }
 
-// doRequest executes an HTTP request
-func (c *Client) doRequest(ctx context.Context,
+// buildRequest constructs the authenticated *http.Request shared by doRequest
+// and doRequestStream: serializes the JSON body, composes URL + query, and
+// applies auth headers.
+func (c *Client) buildRequest(ctx context.Context,
 	method, path string, body interface{}, query url.Values,
-) (*http.Response, error) {
+) (*http.Request, error) {
 	var reqBody io.Reader
 	if body != nil {
 		jsonData, err := json.Marshal(body)
@@ -122,20 +132,50 @@ func (c *Client) doRequest(ctx context.Context,
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	url := fmt.Sprintf("%s%s", c.baseURL, path)
+	u := fmt.Sprintf("%s%s", c.baseURL, path)
 	if len(query) > 0 {
-		url = fmt.Sprintf("%s?%s", url, query.Encode())
+		u = fmt.Sprintf("%s?%s", u, query.Encode())
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	c.applyAuthHeaders(ctx, req)
+	return req, nil
+}
 
+// doRequest executes an HTTP request subject to the client's blanket Timeout
+// (default 30s). Use for ordinary request/response calls.
+func (c *Client) doRequest(ctx context.Context,
+	method, path string, body interface{}, query url.Values,
+) (*http.Response, error) {
+	req, err := c.buildRequest(ctx, method, path, body, query)
+	if err != nil {
+		return nil, err
+	}
 	return c.httpClient.Do(req)
+}
+
+// doRequestStream executes a streaming (SSE) request without the client's
+// default 30-second blanket Timeout. http.Client.Timeout covers reading the
+// response body, so applying that default would sever long-running chat /
+// session-ask / continue-stream responses. Stream lifetime is governed by ctx
+// unless the caller explicitly supplied WithTimeout, in which case that upper
+// bound is preserved. The Transport is shared with c.httpClient so connection
+// pooling is unaffected.
+func (c *Client) doRequestStream(ctx context.Context,
+	method, path string, body interface{}, query url.Values,
+) (*http.Response, error) {
+	req, err := c.buildRequest(ctx, method, path, body, query)
+	if err != nil {
+		return nil, err
+	}
+	sc := *c.httpClient // shallow copy: shares Transport, override Timeout
+	sc.Timeout = c.streamTimeout
+	return sc.Do(req)
 }
 
 // applyAuthHeaders sets X-API-Key, Authorization, X-Request-ID, and X-Tenant-ID
@@ -186,18 +226,143 @@ func (c *Client) Raw(ctx context.Context, method, path string, body interface{})
 	return c.doRequest(ctx, method, path, body, nil)
 }
 
+// APIError is a typed non-2xx HTTP response from the WeKnora API. Recover it
+// with errors.As to branch on the HTTP status or the server's structured error
+// code without parsing the Error() string:
+//
+//	var apiErr *client.APIError
+//	if errors.As(err, &apiErr) && apiErr.StatusCode == 404 { ... }
+//
+// Error() intentionally preserves the legacy "HTTP error <status>: <body>"
+// format so existing string-matching consumers keep working unchanged.
+type APIError struct {
+	StatusCode int    // HTTP status (401, 404, 409, 429, 500, …)
+	Body       string // raw response body
+	Code       int    // server's structured error code ({"code":N}); 0 when absent/non-JSON
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("HTTP error %d: %s", e.StatusCode, e.Body)
+}
+
+// Server error codes are the values of the {"code":N} field in an error
+// response body, surfaced as APIError.Code. These mirror the generic codes in
+// the server's internal/errors/errors.go so consumers branch on a named
+// constant instead of a magic number. Domain-specific codes (2xxx+) are
+// omitted until a consumer needs to branch on one.
+const (
+	ServerErrBadRequest         = 1000
+	ServerErrUnauthorized       = 1001
+	ServerErrForbidden          = 1002
+	ServerErrNotFound           = 1003
+	ServerErrMethodNotAllowed   = 1004
+	ServerErrConflict           = 1005
+	ServerErrTooManyRequests    = 1006
+	ServerErrInternalServer     = 1007
+	ServerErrServiceUnavailable = 1008
+	ServerErrTimeout            = 1009
+	ServerErrValidation         = 1010
+)
+
+// newAPIError builds an *APIError from a non-2xx response's status and raw body,
+// extracting the server's structured {"code":N} when the body is JSON.
+func newAPIError(status int, body []byte) *APIError {
+	return &APIError{StatusCode: status, Body: string(body), Code: extractServerCode(body)}
+}
+
+// maxErrorBodyBytes caps how much of a failed response body the SDK reads.
+//
+// A non-2xx body is copied verbatim into APIError.Body and interpolated into
+// APIError.Error(), which callers log or print. A misconfigured server, a
+// hostile origin, or a proxy serving an HTML error page can make that body
+// arbitrarily large, so the SDK would both hold it in memory and hand the caller
+// an unbounded error string. 1 MiB matches the cap internal/models/api applies
+// to its own error bodies and sits far above any structured error the server
+// emits.
+const maxErrorBodyBytes = 1 << 20
+
+// readErrorBody reads the diagnostic body of a failed response, bounded by
+// maxErrorBodyBytes.
+//
+// Truncating here costs nothing: callers branch on the status code and on
+// APIError.Code, and the body exists only to explain the failure. The read error
+// is dropped, as before, so a broken connection cannot mask the HTTP status.
+func readErrorBody(r io.Reader) []byte {
+	body, _ := io.ReadAll(io.LimitReader(r, maxErrorBodyBytes))
+	return body
+}
+
+// maxResponseBodyBytes caps how much of a successful response body the SDK
+// decodes.
+//
+// A non-error status still lets the server — or a proxy in front of it — decide
+// how many bytes the SDK buffers and unmarshals: every helper decodes through
+// parseResponse, so an oversized envelope would be held in memory before
+// json.Decoder saw the end of it. 16 MiB matches the cap the Feishu and
+// DingTalk connectors apply to their own JSON responses and sits far above any
+// listing page the server returns, while keeping one request bounded.
+const maxResponseBodyBytes int64 = 16 << 20
+
+// errResponseBodyTooLarge reports a successful response the SDK refused to
+// decode because its body exceeded maxResponseBodyBytes.
+var errResponseBodyTooLarge = fmt.Errorf("response body exceeds the %d MiB limit", maxResponseBodyBytes>>20)
+
+// countingReader counts the bytes a decoder pulls, so decodeResponseBody can
+// tell "body too large" apart from "body is malformed JSON".
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// decodeResponseBody decodes a successful response envelope, refusing to read
+// past maxResponseBodyBytes.
+//
+// The body is streamed through the counting reader rather than read into a
+// buffer: the cap exists to bound memory, so buffering up to the cap first
+// would defeat it for ordinary responses.
+func decodeResponseBody(r io.Reader, target interface{}) error {
+	limited := &countingReader{r: io.LimitReader(r, maxResponseBodyBytes+1)}
+	if err := json.NewDecoder(limited).Decode(target); err != nil {
+		if limited.n > maxResponseBodyBytes {
+			return errResponseBodyTooLarge
+		}
+		return err
+	}
+	if limited.n > maxResponseBodyBytes {
+		return errResponseBodyTooLarge
+	}
+	return nil
+}
+
+// extractServerCode pulls the server's structured error code from a JSON error
+// body ({"code":1003,...}). Returns 0 when the body isn't JSON or carries no code.
+func extractServerCode(body []byte) int {
+	var env struct {
+		Code int `json:"code"`
+	}
+	if json.Unmarshal(body, &env) == nil {
+		return env.Code
+	}
+	return 0
+}
+
 // parseResponse parses an HTTP response
 func parseResponse(resp *http.Response, target interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
+		return newAPIError(resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	if target == nil {
 		return nil
 	}
 
-	return json.NewDecoder(resp.Body).Decode(target)
+	return decodeResponseBody(resp.Body, target)
 }

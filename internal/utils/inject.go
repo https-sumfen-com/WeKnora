@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	pg_query "github.com/pganalyze/pg_query_go/v6"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // This file provides comprehensive SQL validation and security features
@@ -140,10 +141,25 @@ type sqlValidator struct {
 	// Hidden knowledge base filtering (is_temporary = false)
 	enableHiddenKBFilter bool
 
+	// Enabled chunk filtering (is_enabled = true)
+	enableChunkEnabledFilter bool
+
 	// Search scope filtering (restrict to specific KBs and knowledges)
 	enableSearchScopeFilter bool
 	searchScopeKBIDs        []string
 	searchScopeKnowledgeIDs []string
+	searchScopes            []SearchScope
+}
+
+// SearchScope describes one allowed knowledge scope for SQL query injection.
+// Empty KnowledgeIDs and TagIDs means the whole KB is in scope.
+type SearchScope struct {
+	// TenantID is the authorized owner of this KB. Zero uses the caller tenant
+	// when tenant isolation is enabled. Scopes must be authorized by the caller.
+	TenantID        uint64
+	KnowledgeBaseID string
+	KnowledgeIDs    []string
+	TagIDs          []string
 }
 
 // ParseSQL parses a SQL statement using pg_query_go and extracts table names, select fields, and where fields
@@ -615,6 +631,15 @@ func WithHiddenKBFilter() SQLValidationOption {
 	}
 }
 
+// WithChunkEnabledFilter excludes disabled chunks from model-visible SQL
+// queries. It is intentionally opt-in because administrative queries may need
+// to inspect disabled rows.
+func WithChunkEnabledFilter() SQLValidationOption {
+	return func(v *sqlValidator) {
+		v.enableChunkEnabledFilter = true
+	}
+}
+
 // WithSearchScopeFilter restricts queries to the specified knowledge bases and
 // (optionally) specific knowledge documents. For the knowledge_bases table it
 // filters by id; for knowledges it filters by knowledge_base_id (and id when
@@ -627,6 +652,20 @@ func WithSearchScopeFilter(kbIDs []string, knowledgeIDs []string) SQLValidationO
 			v.searchScopeKBIDs = kbIDs
 			v.searchScopeKnowledgeIDs = knowledgeIDs
 		}
+	}
+}
+
+// WithSearchScopes restricts queries using structured OR scopes. Each scope can
+// represent a full KB, specific documents, or a tag-constrained KB. Nonzero
+// TenantID values grant access to that owner within that scope, so scopes must
+// come from server-side authorization, never directly from untrusted input.
+func WithSearchScopes(scopes []SearchScope) SQLValidationOption {
+	return func(v *sqlValidator) {
+		if len(scopes) == 0 {
+			return
+		}
+		v.enableSearchScopeFilter = true
+		v.searchScopes = append([]SearchScope(nil), scopes...)
 	}
 }
 
@@ -753,6 +792,48 @@ func ValidateSQL(sql string, opts ...SQLValidationOption) (*SQLParseResult, *SQL
 		}, validationResult
 	}
 
+	allTables := make(map[string]bool)
+	// Inspect all AST fields, not just selected expression lists. This covers
+	// CTEs, set-operation branches, scalar subqueries and window/limit clauses.
+	if err := walkSQLMessages(parseResult.ProtoReflect(), func(message protoreflect.Message) error {
+		switch node := message.Interface().(type) {
+		case *pg_query.SelectStmt:
+			if node.WithClause != nil {
+				return fmt.Errorf("WITH clause (CTEs) is not supported")
+			}
+			if node.Op != pg_query.SetOperation_SETOP_NONE {
+				return fmt.Errorf("compound queries are not supported")
+			}
+			if node.IntoClause != nil || len(node.LockingClause) > 0 {
+				return fmt.Errorf("SELECT must be read-only")
+			}
+		case *pg_query.RangeVar:
+			allTables[node.Relname] = true
+			if validator.checkTableNames &&
+				(node.Catalogname != "" || (node.Schemaname != "" && node.Schemaname != "public")) {
+				return fmt.Errorf("qualified table access is not allowed")
+			}
+		case *pg_query.RangeFunction:
+			return fmt.Errorf("functions in FROM clause are not allowed")
+		case *pg_query.FuncCall:
+			return validator.validateFuncCall(node, validationResult)
+		case *pg_query.SubLink:
+			if validator.checkSubqueries {
+				return fmt.Errorf("subqueries are not allowed")
+			}
+		case *pg_query.RangeSubselect:
+			if validator.checkSubqueries {
+				return fmt.Errorf("subqueries are not allowed")
+			}
+		}
+		return nil
+	}); err != nil {
+		validationResult.Valid = false
+		validationResult.Errors = append(validationResult.Errors, SQLValidationError{
+			Type: "statement_validation_error", Message: "Statement validation failed", Details: err.Error(),
+		})
+	}
+
 	// Build parse result
 	result := &SQLParseResult{
 		OriginalSQL:  sql,
@@ -786,8 +867,8 @@ func ValidateSQL(sql string, opts ...SQLValidationOption) (*SQLParseResult, *SQL
 
 		// Phase 6: Validate table names
 		if validator.checkTableNames {
-			for _, table := range result.TableNames {
-				if !validator.allowedTables[strings.ToLower(table)] {
+			for table := range allTables {
+				if !validator.allowedTables[table] {
 					validationResult.Valid = false
 					validationResult.Errors = append(validationResult.Errors, SQLValidationError{
 						Type:    "table_not_allowed",
@@ -836,7 +917,8 @@ func ValidateAndSecureSQL(sql string, opts ...SQLValidationOption) (string, *SQL
 	}
 
 	// If no SQL rewriting is enabled, return original SQL
-	if !validator.enableTenantInjection && !validator.enableSoftDeleteInjection && !validator.enableHiddenKBFilter && !validator.enableSearchScopeFilter {
+	if !validator.enableTenantInjection && !validator.enableSoftDeleteInjection && !validator.enableHiddenKBFilter &&
+		!validator.enableChunkEnabledFilter && !validator.enableSearchScopeFilter {
 		return sql, validationResult, nil
 	}
 
@@ -846,105 +928,130 @@ func ValidateAndSecureSQL(sql string, opts ...SQLValidationOption) (string, *SQL
 		return "", validationResult, fmt.Errorf("failed to parse SQL: %v", err)
 	}
 
-	// Normalize SQL
-	normalizedSQL, err := pg_query.Deparse(result)
+	// Rewrite every original SELECT scope, including repeated references to the
+	// same table. Never search SQL text for keywords: identifiers and literals
+	// may contain WHERE/ORDER BY, and aliases are case sensitive when quoted.
+	err = walkSQLMessages(result.ProtoReflect(), func(message protoreflect.Message) error {
+		stmt, ok := message.Interface().(*pg_query.SelectStmt)
+		if !ok {
+			return nil
+		}
+		var injectFrom func(*pg_query.Node) error
+		injectFrom = func(node *pg_query.Node) error {
+			if rv := node.GetRangeVar(); rv != nil {
+				alias := rv.Relname
+				if rv.Alias != nil {
+					alias = rv.Alias.Aliasname
+				}
+				tables := map[string]string{strings.ToLower(rv.Relname): quoteSQLIdentifier(alias)}
+				fragment := "SELECT 1"
+				fragment = validator.injectTenantConditions(fragment, tables)
+				fragment = validator.injectSoftDeleteConditions(fragment, tables)
+				fragment = validator.injectHiddenKBFilter(fragment, tables)
+				fragment = validator.injectChunkEnabledFilter(fragment, tables)
+				fragment = validator.injectSearchScopeConditions(fragment, tables)
+				filters, err := pg_query.Parse(fragment)
+				if err != nil {
+					return fmt.Errorf("failed to build SQL security filter: %w", err)
+				}
+				addSQLPredicate(stmt, filters.Stmts[0].Stmt.GetSelectStmt().WhereClause)
+			}
+			if join := node.GetJoinExpr(); join != nil {
+				if err := injectFrom(join.Larg); err != nil {
+					return err
+				}
+				return injectFrom(join.Rarg)
+			}
+			return nil
+		}
+		for _, from := range stmt.FromClause {
+			if err := injectFrom(from); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return "", validationResult, fmt.Errorf("failed to normalize SQL: %v", err)
+		return "", validationResult, err
 	}
-
-	// Build table→alias map from parse tree (respects SQL aliases like "kb", "k")
-	tablesInQuery := extractTableAliasMap(result)
-
-	// Inject tenant conditions
-	securedSQL := validator.injectTenantConditions(normalizedSQL, tablesInQuery)
-	// Inject deleted_at IS NULL conditions
-	securedSQL = validator.injectSoftDeleteConditions(securedSQL, tablesInQuery)
-	// Inject hidden KB filter (exclude is_temporary = true knowledge bases)
-	securedSQL = validator.injectHiddenKBFilter(securedSQL, tablesInQuery)
-	// Inject search scope filter (restrict to allowed KBs and knowledges)
-	securedSQL = validator.injectSearchScopeConditions(securedSQL, tablesInQuery)
-
+	securedSQL, err := pg_query.Deparse(result)
+	if err != nil {
+		return "", validationResult, fmt.Errorf("failed to deparse secured SQL: %w", err)
+	}
 	return securedSQL, validationResult, nil
 }
 
-// extractTableAliasMap walks the parse tree to build a table_name→alias map.
-// When a table has an alias (e.g., "knowledge_bases kb"), the map entry is
-// {"knowledge_bases": "kb"}. Without an alias, both key and value are the table name.
-func extractTableAliasMap(parseResult *pg_query.ParseResult) map[string]string {
-	m := make(map[string]string)
-	if len(parseResult.Stmts) == 0 || parseResult.Stmts[0].Stmt == nil {
-		return m
-	}
-	selectStmt := parseResult.Stmts[0].Stmt.GetSelectStmt()
-	if selectStmt == nil {
-		return m
-	}
-	for _, fromItem := range selectStmt.FromClause {
-		collectTableAliases(fromItem, m)
-	}
-	return m
-}
-
-// collectTableAliases recursively collects table→alias mappings from FROM clause nodes.
-func collectTableAliases(node *pg_query.Node, m map[string]string) {
-	if node == nil {
-		return
-	}
-	if rv := node.GetRangeVar(); rv != nil {
-		tableName := strings.ToLower(rv.Relname)
-		alias := tableName
-		if rv.Alias != nil && rv.Alias.Aliasname != "" {
-			alias = strings.ToLower(rv.Alias.Aliasname)
+// walkSQLMessages visits children before their parent so rewriting a SELECT
+// does not revisit trusted predicates added by the server.
+func walkSQLMessages(message protoreflect.Message, visit func(protoreflect.Message) error) error {
+	var walkErr error
+	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.Message() == nil {
+			return true
 		}
-		m[tableName] = alias
-		return
+		if field.IsList() {
+			list := value.List()
+			for i := 0; i < list.Len(); i++ {
+				if walkErr = walkSQLMessages(list.Get(i).Message(), visit); walkErr != nil {
+					return false
+				}
+			}
+		} else {
+			walkErr = walkSQLMessages(value.Message(), visit)
+		}
+		return walkErr == nil
+	})
+	if walkErr != nil {
+		return walkErr
 	}
-	if je := node.GetJoinExpr(); je != nil {
-		collectTableAliases(je.Larg, m)
-		collectTableAliases(je.Rarg, m)
-		return
-	}
+	return visit(message)
 }
 
-// InjectAndConditions injects filter conditions into a SQL statement using AND semantics.
-// If WHERE exists, the original WHERE predicates will be wrapped in parentheses.
+func quoteSQLIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func addSQLPredicate(stmt *pg_query.SelectStmt, predicate *pg_query.Node) {
+	if predicate == nil {
+		return
+	}
+	if stmt.WhereClause == nil {
+		stmt.WhereClause = predicate
+		return
+	}
+	stmt.WhereClause = &pg_query.Node{Node: &pg_query.Node_BoolExpr{BoolExpr: &pg_query.BoolExpr{
+		Boolop: pg_query.BoolExprType_AND_EXPR, Args: []*pg_query.Node{predicate, stmt.WhereClause},
+	}}}
+}
+
+// InjectAndConditions combines parsed expressions, preserving literal and alias
+// boundaries. An invalid statement or filter returns no executable SQL.
 func InjectAndConditions(sql, filter string) string {
-	filter = strings.TrimSpace(filter)
-	if filter == "" {
+	if strings.TrimSpace(filter) == "" {
 		return sql
 	}
-
-	// Check if WHERE clause exists
-	wherePattern := regexp.MustCompile(`(?i)\bWHERE\b`)
-	if loc := wherePattern.FindStringIndex(sql); loc != nil {
-		// Add filter and wrap existing conditions in parentheses to prevent OR precedence issues.
-		// The wrapping must only apply to the original WHERE expression, not trailing clauses like
-		// ORDER BY / GROUP BY / LIMIT, otherwise it can generate invalid SQL.
-		whereExprStart := loc[1]
-		tailPattern := regexp.MustCompile(`(?i)\b(GROUP BY|ORDER BY|LIMIT|OFFSET|HAVING|FETCH)\b`)
-		tailLoc := tailPattern.FindStringIndex(sql[whereExprStart:])
-
-		if tailLoc == nil {
-			originalWhereExpr := strings.TrimSpace(sql[whereExprStart:])
-			return fmt.Sprintf("%sWHERE %s AND (%s)", sql[:loc[0]], filter, originalWhereExpr)
-		}
-
-		whereExprEnd := whereExprStart + tailLoc[0]
-		originalWhereExpr := strings.TrimSpace(sql[whereExprStart:whereExprEnd])
-		tailClause := strings.TrimLeft(sql[whereExprEnd:], " \t\r\n")
-		return fmt.Sprintf("%sWHERE %s AND (%s) %s", sql[:loc[0]], filter, originalWhereExpr, tailClause)
+	parsed, err := pg_query.Parse(sql)
+	if err != nil || len(parsed.Stmts) != 1 {
+		return ""
 	}
-
-	// Add new WHERE clause before ORDER BY, GROUP BY, LIMIT, etc.
-	clausePattern := regexp.MustCompile(`(?i)\b(GROUP BY|ORDER BY|LIMIT|OFFSET|HAVING|FETCH)\b`)
-	if loc := clausePattern.FindStringIndex(sql); loc != nil {
-		prefix := strings.TrimRight(sql[:loc[0]], " \t\r\n")
-		suffix := strings.TrimLeft(sql[loc[0]:], " \t\r\n")
-		return fmt.Sprintf("%s WHERE %s %s", prefix, filter, suffix)
+	stmt := parsed.Stmts[0].Stmt.GetSelectStmt()
+	if stmt == nil || stmt.Op != pg_query.SetOperation_SETOP_NONE {
+		return ""
 	}
-
-	// Add WHERE clause at the end
-	return fmt.Sprintf("%s WHERE %s", sql, filter)
+	filters, err := pg_query.Parse("SELECT 1 WHERE " + filter)
+	if err != nil || len(filters.Stmts) != 1 {
+		return ""
+	}
+	predicate := filters.Stmts[0].Stmt.GetSelectStmt()
+	if predicate == nil || predicate.WhereClause == nil {
+		return ""
+	}
+	addSQLPredicate(stmt, predicate.WhereClause)
+	out, err := pg_query.Deparse(parsed)
+	if err != nil {
+		return ""
+	}
+	return out
 }
 
 // injectTenantConditions adds tenant_id filtering to the query
@@ -957,6 +1064,12 @@ func (v *sqlValidator) injectTenantConditions(sql string, tablesInQuery map[stri
 	var conditions []string
 	for tableName, alias := range tablesInQuery {
 		if v.tablesWithTenantID[tableName] {
+			// Structured scopes bind each owner to its own KB and document/tag
+			// restrictions below. A global caller filter would reject shared KBs.
+			if v.enableSearchScopeFilter && len(v.searchScopes) > 0 &&
+				(tableName == "knowledge_bases" || tableName == "knowledges" || tableName == "chunks") {
+				continue
+			}
 			if tableName == "tenants" {
 				conditions = append(conditions, fmt.Sprintf("%s.id = %d", alias, v.tenantID))
 			} else {
@@ -1006,11 +1119,28 @@ func (v *sqlValidator) injectHiddenKBFilter(sql string, tablesInQuery map[string
 	return InjectAndConditions(sql, fmt.Sprintf("%s.is_temporary = false", alias))
 }
 
+func (v *sqlValidator) injectChunkEnabledFilter(sql string, tablesInQuery map[string]string) string {
+	if !v.enableChunkEnabledFilter {
+		return sql
+	}
+	alias, ok := tablesInQuery["chunks"]
+	if !ok {
+		return sql
+	}
+	return InjectAndConditions(sql, fmt.Sprintf("%s.is_enabled = true", alias))
+}
+
 // injectSearchScopeConditions restricts queries to the allowed knowledge bases
 // and (optionally) specific knowledge documents.
 func (v *sqlValidator) injectSearchScopeConditions(sql string, tablesInQuery map[string]string) string {
 	if !v.enableSearchScopeFilter || len(v.searchScopeKBIDs) == 0 {
-		return sql
+		if len(v.searchScopes) == 0 {
+			return sql
+		}
+	}
+
+	if len(v.searchScopes) > 0 {
+		return v.injectStructuredSearchScopeConditions(sql, tablesInQuery)
 	}
 
 	quotedKBIDs := quoteStringSlice(v.searchScopeKBIDs)
@@ -1045,6 +1175,134 @@ func (v *sqlValidator) injectSearchScopeConditions(sql string, tablesInQuery map
 	return InjectAndConditions(sql, strings.Join(conditions, " AND "))
 }
 
+func (v *sqlValidator) injectStructuredSearchScopeConditions(sql string, tablesInQuery map[string]string) string {
+	var conditions []string
+
+	if alias, ok := tablesInQuery["knowledge_bases"]; ok {
+		if cond := v.buildKnowledgeBaseScopeCondition(alias, v.searchScopes); cond != "" {
+			conditions = append(conditions, cond)
+		}
+	}
+	if alias, ok := tablesInQuery["knowledges"]; ok {
+		if cond := v.buildKnowledgeScopeCondition(alias, v.searchScopes); cond != "" {
+			conditions = append(conditions, cond)
+		}
+	}
+	if alias, ok := tablesInQuery["chunks"]; ok {
+		if cond := v.buildChunkScopeCondition(alias, v.searchScopes); cond != "" {
+			conditions = append(conditions, cond)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return sql
+	}
+	return InjectAndConditions(sql, strings.Join(conditions, " AND "))
+}
+
+func (v *sqlValidator) buildKnowledgeBaseScopeCondition(alias string, scopes []SearchScope) string {
+	clauses := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope.KnowledgeBaseID == "" {
+			continue
+		}
+		clause := fmt.Sprintf("%s.id = %s", alias, quoteString(scope.KnowledgeBaseID))
+		if tenant := v.scopeTenantCondition(alias, scope); tenant != "" {
+			clause = "(" + clause + " AND " + tenant + ")"
+		}
+		clauses = append(clauses, clause)
+	}
+	if len(clauses) == 0 {
+		return "false"
+	}
+	return joinOrClauses(clauses)
+}
+
+// buildScopeClause renders one scope. A scope's document whitelist and tag
+// filter are ANDed: each is an independent narrowing of the same KB, so
+// applying only one of them would admit rows the other excludes. Scopes are
+// ORed against each other by joinOrClauses because they are alternatives.
+func (v *sqlValidator) buildScopeClause(alias, knowledgeIDColumn string, scope SearchScope) string {
+	if scope.KnowledgeBaseID == "" {
+		return ""
+	}
+	conditions := []string{
+		fmt.Sprintf("%s.knowledge_base_id = %s", alias, quoteString(scope.KnowledgeBaseID)),
+	}
+	if len(scope.KnowledgeIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf(
+			"%s.%s IN (%s)",
+			alias, knowledgeIDColumn, strings.Join(quoteStringSlice(scope.KnowledgeIDs), ", "),
+		))
+	}
+	if len(scope.TagIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM knowledge_tag_relations ktr WHERE ktr.knowledge_id = %s.%s AND ktr.tag_id IN (%s))",
+			alias, knowledgeIDColumn, strings.Join(quoteStringSlice(scope.TagIDs), ", "),
+		))
+	}
+	if tenant := v.scopeTenantCondition(alias, scope); tenant != "" {
+		conditions = append(conditions, tenant)
+	}
+	if len(conditions) == 1 {
+		return conditions[0]
+	}
+	return "(" + strings.Join(conditions, " AND ") + ")"
+}
+
+func (v *sqlValidator) buildKnowledgeScopeCondition(alias string, scopes []SearchScope) string {
+	clauses := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if clause := v.buildScopeClause(alias, "id", scope); clause != "" {
+			clauses = append(clauses, clause)
+		}
+	}
+	if len(clauses) == 0 {
+		return "false"
+	}
+	return joinOrClauses(clauses)
+}
+
+func (v *sqlValidator) buildChunkScopeCondition(alias string, scopes []SearchScope) string {
+	clauses := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if clause := v.buildScopeClause(alias, "knowledge_id", scope); clause != "" {
+			clauses = append(clauses, clause)
+		}
+	}
+	if len(clauses) == 0 {
+		return "false"
+	}
+	return joinOrClauses(clauses)
+}
+
+// scopeTenantCondition keeps ownership in the same OR branch as the KB and
+// document/tag restrictions. Missing ownership retains caller-only isolation.
+func (v *sqlValidator) scopeTenantCondition(alias string, scope SearchScope) string {
+	tenantID := scope.TenantID
+	if tenantID == 0 {
+		if !v.enableTenantInjection {
+			return ""
+		}
+		tenantID = v.tenantID
+	}
+	return fmt.Sprintf("%s.tenant_id = %d", alias, tenantID)
+}
+
+func joinOrClauses(clauses []string) string {
+	if len(clauses) == 0 {
+		return ""
+	}
+	if len(clauses) == 1 {
+		return clauses[0]
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func quoteString(s string) string {
+	return quoteStringSlice([]string{s})[0]
+}
+
 func quoteStringSlice(ss []string) []string {
 	quoted := make([]string, len(ss))
 	for i, s := range ss {
@@ -1054,20 +1312,13 @@ func quoteStringSlice(ss []string) []string {
 	return quoted
 }
 
-// checkSQLInjectionRisks checks for common SQL injection patterns in WHERE clause
-func checkSQLInjectionRisks(whereClause string) []SQLValidationError {
-	errors := make([]SQLValidationError, 0)
+// Compiled once. checkSQLInjectionRisks runs on every validated WHERE clause,
+// so these patterns are hoisted to package scope instead of being recompiled
+// per call.
+var (
+	reSQLWhitespace = regexp.MustCompile(`\s+`)
 
-	if whereClause == "" {
-		return errors
-	}
-
-	// Normalize the WHERE clause for checking
-	normalizedWhere := strings.ToLower(strings.TrimSpace(whereClause))
-	normalizedWhere = regexp.MustCompile(`\s+`).ReplaceAllString(normalizedWhere, " ")
-
-	// Pattern 1: Always true conditions like "1=1", "'1'='1'", "true", etc.
-	alwaysTruePatterns := []struct {
+	sqlAlwaysTruePatterns = []struct {
 		pattern     *regexp.Regexp
 		description string
 	}{
@@ -1089,18 +1340,7 @@ func checkSQLInjectionRisks(whereClause string) []SQLValidationError {
 		},
 	}
 
-	for _, pt := range alwaysTruePatterns {
-		if pt.pattern.MatchString(normalizedWhere) {
-			errors = append(errors, SQLValidationError{
-				Type:    "sql_injection_risk",
-				Message: "Potential SQL injection risk detected",
-				Details: fmt.Sprintf("%s found in WHERE clause: %s", pt.description, whereClause),
-			})
-		}
-	}
-
-	// Pattern 2: Always false conditions that might be used for testing
-	alwaysFalsePatterns := []struct {
+	sqlAlwaysFalsePatterns = []struct {
 		pattern     *regexp.Regexp
 		description string
 	}{
@@ -1114,7 +1354,34 @@ func checkSQLInjectionRisks(whereClause string) []SQLValidationError {
 		},
 	}
 
-	for _, pt := range alwaysFalsePatterns {
+	reSQLOrAlwaysTrue = regexp.MustCompile(`or\s+(1\s*=\s*1|'1'\s*=\s*'1'|true)`)
+)
+
+// checkSQLInjectionRisks checks for common SQL injection patterns in WHERE clause
+func checkSQLInjectionRisks(whereClause string) []SQLValidationError {
+	errors := make([]SQLValidationError, 0)
+
+	if whereClause == "" {
+		return errors
+	}
+
+	// Normalize the WHERE clause for checking
+	normalizedWhere := strings.ToLower(strings.TrimSpace(whereClause))
+	normalizedWhere = reSQLWhitespace.ReplaceAllString(normalizedWhere, " ")
+
+	// Pattern 1: Always true conditions like "1=1", "'1'='1'", "true", etc.
+	for _, pt := range sqlAlwaysTruePatterns {
+		if pt.pattern.MatchString(normalizedWhere) {
+			errors = append(errors, SQLValidationError{
+				Type:    "sql_injection_risk",
+				Message: "Potential SQL injection risk detected",
+				Details: fmt.Sprintf("%s found in WHERE clause: %s", pt.description, whereClause),
+			})
+		}
+	}
+
+	// Pattern 2: Always false conditions that might be used for testing
+	for _, pt := range sqlAlwaysFalsePatterns {
 		if pt.pattern.MatchString(normalizedWhere) {
 			errors = append(errors, SQLValidationError{
 				Type:    "sql_injection_risk",
@@ -1125,7 +1392,7 @@ func checkSQLInjectionRisks(whereClause string) []SQLValidationError {
 	}
 
 	// Pattern 3: OR with always-true condition (common injection pattern)
-	if regexp.MustCompile(`or\s+(1\s*=\s*1|'1'\s*=\s*'1'|true)`).MatchString(normalizedWhere) {
+	if reSQLOrAlwaysTrue.MatchString(normalizedWhere) {
 		errors = append(errors, SQLValidationError{
 			Type:    "sql_injection_risk",
 			Message: "High-risk SQL injection pattern detected",
@@ -1281,8 +1548,16 @@ func (v *sqlValidator) validateFromItem(node *pg_query.Node, tables map[string]s
 	}
 
 	// Handle RangeSubselect (subquery in FROM)
-	if v.checkSubqueries && node.GetRangeSubselect() != nil {
-		return fmt.Errorf("subqueries in FROM clause are not allowed")
+	if rss := node.GetRangeSubselect(); rss != nil {
+		if v.checkSubqueries {
+			return fmt.Errorf("subqueries in FROM clause are not allowed")
+		}
+		// SECURITY: Even when subqueries are permitted, recurse into the
+		// subquery so dangerous constructs hidden inside it are still
+		// validated. Without this, a FROM subquery like
+		//   (SELECT * FROM read_text('/etc/passwd'))
+		// smuggles a RangeFunction past the check below.
+		return v.validateSubquery(rss.Subquery, tables, result)
 	}
 
 	// Handle RangeFunction (function in FROM)
@@ -1290,6 +1565,45 @@ func (v *sqlValidator) validateFromItem(node *pg_query.Node, tables map[string]s
 		return fmt.Errorf("functions in FROM clause are not allowed")
 	}
 
+	return nil
+}
+
+// validateSubquery validates a SELECT statement nested in a FROM subquery.
+// It reuses the FROM-item and expression validators so RangeFunction and
+// dangerous function checks apply recursively to arbitrarily nested subqueries.
+func (v *sqlValidator) validateSubquery(node *pg_query.Node, tables map[string]string, result *SQLValidationResult) error {
+	if node == nil {
+		return nil
+	}
+	sub := node.GetSelectStmt()
+	if sub == nil {
+		return nil
+	}
+	for _, fromItem := range sub.FromClause {
+		if err := v.validateFromItem(fromItem, tables, result); err != nil {
+			return err
+		}
+	}
+	for _, target := range sub.TargetList {
+		if err := v.validateNode(target, result); err != nil {
+			return err
+		}
+	}
+	if sub.WhereClause != nil {
+		if err := v.validateNode(sub.WhereClause, result); err != nil {
+			return err
+		}
+	}
+	for _, groupBy := range sub.GroupClause {
+		if err := v.validateNode(groupBy, result); err != nil {
+			return err
+		}
+	}
+	if sub.HavingClause != nil {
+		if err := v.validateNode(sub.HavingClause, result); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1331,7 +1645,24 @@ func (v *sqlValidator) validateNode(node *pg_query.Node, result *SQLValidationRe
 		if tc.TypeName != nil {
 			typeName := v.getTypeName(tc.TypeName)
 			if strings.HasPrefix(strings.ToLower(typeName), "pg_") {
-				return fmt.Errorf("casting to system type '%s' is not allowed", typeName)
+				// The parser qualifies standard scalar types (e.g. INTEGER) with pg_catalog.
+				switch typeName {
+				case "pg_catalog.int2", "pg_catalog.int4", "pg_catalog.int8",
+					"pg_catalog.float4", "pg_catalog.float8", "pg_catalog.numeric",
+					"pg_catalog.bool", "pg_catalog.bpchar", "pg_catalog.varchar", "pg_catalog.text",
+					"pg_catalog.date", "pg_catalog.time", "pg_catalog.timetz",
+					"pg_catalog.timestamp", "pg_catalog.timestamptz", "pg_catalog.interval":
+					if len(tc.TypeName.Names) != 2 {
+						return fmt.Errorf("casting to system type '%s' is not allowed", typeName)
+					}
+				default:
+					return fmt.Errorf("casting to system type '%s' is not allowed", typeName)
+				}
+			}
+			for _, modifier := range tc.TypeName.Typmods {
+				if err := v.validateNode(modifier, result); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1744,6 +2075,70 @@ func (v *sqlValidator) validateNode(node *pg_query.Node, result *SQLValidationRe
 		}
 	}
 
+	// JsonScalarExpr (JSON_SCALAR(...)) - PG17 SQL/JSON node.
+	// Attack: SELECT JSON_SCALAR(pg_read_file('/etc/passwd')) FROM table
+	if jse := node.GetJsonScalarExpr(); jse != nil {
+		if err := v.validateNode(jse.Expr, result); err != nil {
+			return err
+		}
+	}
+
+	// JsonFuncExpr (JSON_VALUE / JSON_QUERY / JSON_EXISTS(...)) - PG17 SQL/JSON node.
+	// Attack: SELECT JSON_VALUE(pg_read_file('/etc/passwd'), '$') FROM table
+	if jfe := node.GetJsonFuncExpr(); jfe != nil {
+		if err := v.validateJsonValueExpr(jfe.ContextItem, result); err != nil {
+			return err
+		}
+		if err := v.validateNode(jfe.Pathspec, result); err != nil {
+			return err
+		}
+		for _, arg := range jfe.Passing {
+			if err := v.validateNode(arg, result); err != nil {
+				return err
+			}
+		}
+		if err := v.validateJsonBehavior(jfe.OnEmpty, result); err != nil {
+			return err
+		}
+		if err := v.validateJsonBehavior(jfe.OnError, result); err != nil {
+			return err
+		}
+	}
+
+	// JsonParseExpr (JSON(...)) - PG17 SQL/JSON node.
+	if jpe := node.GetJsonParseExpr(); jpe != nil {
+		if err := v.validateJsonValueExpr(jpe.Expr, result); err != nil {
+			return err
+		}
+	}
+
+	// JsonSerializeExpr (JSON_SERIALIZE(...)) - PG17 SQL/JSON node.
+	if jse := node.GetJsonSerializeExpr(); jse != nil {
+		if err := v.validateJsonValueExpr(jse.Expr, result); err != nil {
+			return err
+		}
+	}
+
+	// JsonTable (JSON_TABLE(...)) - PG17 SQL/JSON node.
+	if jt := node.GetJsonTable(); jt != nil {
+		if err := v.validateJsonValueExpr(jt.ContextItem, result); err != nil {
+			return err
+		}
+		for _, arg := range jt.Passing {
+			if err := v.validateNode(arg, result); err != nil {
+				return err
+			}
+		}
+		for _, col := range jt.Columns {
+			if err := v.validateNode(col, result); err != nil {
+				return err
+			}
+		}
+		if err := v.validateJsonBehavior(jt.OnError, result); err != nil {
+			return err
+		}
+	}
+
 	// XmlSerialize
 	if xs := node.GetXmlSerialize(); xs != nil {
 		if err := v.validateNode(xs.Expr, result); err != nil {
@@ -1781,7 +2176,108 @@ func (v *sqlValidator) validateNode(node *pg_query.Node, result *SQLValidationRe
 		return fmt.Errorf("AlternativeSubPlan nodes are not allowed")
 	}
 
-	return nil
+	// ============================================================
+	// SECURITY: DEFAULT-DENY.
+	// The recursive branches above validate every expression type we know how
+	// to inspect. Any node type NOT in the recognized set below is REJECTED,
+	// because an unhandled type can smuggle a dangerous FuncCall past the
+	// blacklist (e.g. PG17's JSON_SCALAR wrapping pg_read_file). Whenever a new
+	// recursive handler is added above, add its Node_* wrapper here as well.
+	// ============================================================
+	switch node.Node.(type) {
+	case
+		// Recognized expression types (validated recursively above).
+		*pg_query.Node_FuncCall,
+		*pg_query.Node_FuncExpr,
+		*pg_query.Node_ColumnRef,
+		*pg_query.Node_TypeCast,
+		*pg_query.Node_AExpr,
+		*pg_query.Node_OpExpr,
+		*pg_query.Node_BoolExpr,
+		*pg_query.Node_NullTest,
+		*pg_query.Node_BooleanTest,
+		*pg_query.Node_CoalesceExpr,
+		*pg_query.Node_CaseExpr,
+		*pg_query.Node_CaseWhen,
+		*pg_query.Node_ResTarget,
+		*pg_query.Node_SortBy,
+		*pg_query.Node_List,
+		*pg_query.Node_AArrayExpr,
+		*pg_query.Node_RowExpr,
+		*pg_query.Node_MinMaxExpr,
+		*pg_query.Node_NullIfExpr,
+		*pg_query.Node_ScalarArrayOpExpr,
+		*pg_query.Node_ArrayCoerceExpr,
+		*pg_query.Node_CoerceViaIo,
+		*pg_query.Node_CollateExpr,
+		*pg_query.Node_CollateClause,
+		*pg_query.Node_SubLink,
+		*pg_query.Node_DistinctExpr,
+		*pg_query.Node_XmlExpr,
+		*pg_query.Node_XmlSerialize,
+		*pg_query.Node_JsonConstructorExpr,
+		*pg_query.Node_JsonValueExpr,
+		*pg_query.Node_JsonExpr,
+		*pg_query.Node_JsonIsPredicate,
+		*pg_query.Node_JsonScalarExpr,
+		*pg_query.Node_JsonFuncExpr,
+		*pg_query.Node_JsonParseExpr,
+		*pg_query.Node_JsonSerializeExpr,
+		*pg_query.Node_JsonTable,
+		*pg_query.Node_Aggref,
+		*pg_query.Node_WindowFunc,
+		*pg_query.Node_WindowDef,
+		*pg_query.Node_GroupingFunc,
+		*pg_query.Node_SubscriptingRef,
+		*pg_query.Node_NamedArgExpr,
+		*pg_query.Node_FieldSelect,
+		*pg_query.Node_FieldStore,
+		*pg_query.Node_RelabelType,
+		*pg_query.Node_ConvertRowtypeExpr,
+		*pg_query.Node_RowCompareExpr,
+		*pg_query.Node_CoerceToDomain,
+		*pg_query.Node_AIndices,
+		*pg_query.Node_AIndirection,
+		// Recognized safe leaf nodes (no child expressions to smuggle through).
+		*pg_query.Node_AConst,
+		*pg_query.Node_ParamRef,
+		*pg_query.Node_SetToDefault,
+		*pg_query.Node_CurrentOfExpr,
+		*pg_query.Node_CaseTestExpr,
+		*pg_query.Node_SqlvalueFunction,
+		*pg_query.Node_AStar,
+		*pg_query.Node_Integer,
+		*pg_query.Node_Float,
+		*pg_query.Node_Boolean,
+		*pg_query.Node_String_,
+		*pg_query.Node_BitString:
+		return nil
+	default:
+		return fmt.Errorf("unsupported SQL expression type %T is not allowed", node.Node)
+	}
+}
+
+// validateJsonValueExpr validates a JsonValueExpr, which appears as a concrete
+// (non-Node) field on several PG17 SQL/JSON expression nodes. Its RawExpr /
+// FormattedExpr children can hold arbitrary expressions (including FuncCalls),
+// so they must be recursed into.
+func (v *sqlValidator) validateJsonValueExpr(jve *pg_query.JsonValueExpr, result *SQLValidationResult) error {
+	if jve == nil {
+		return nil
+	}
+	if err := v.validateNode(jve.RawExpr, result); err != nil {
+		return err
+	}
+	return v.validateNode(jve.FormattedExpr, result)
+}
+
+// validateJsonBehavior validates the ON EMPTY / ON ERROR behavior of a PG17
+// SQL/JSON function. The DEFAULT branch can carry an arbitrary expression.
+func (v *sqlValidator) validateJsonBehavior(jb *pg_query.JsonBehavior, result *SQLValidationResult) error {
+	if jb == nil {
+		return nil
+	}
+	return v.validateNode(jb.Expr, result)
 }
 
 // validateFuncCall validates a function call
@@ -1900,6 +2396,26 @@ func (v *sqlValidator) validateFuncCall(fc *pg_query.FuncCall, result *SQLValida
 			// System catalog modification
 			"pg_catalog":         true,
 			"information_schema": true,
+
+			// DuckDB file-access functions (data_analysis tool runs on DuckDB).
+			// The user's data is already loaded into a session table, so these
+			// arbitrary-path readers are never legitimately needed and would
+			// allow reading any file on the app container.
+			"read_text":         true,
+			"read_blob":         true,
+			"read_csv":          true,
+			"read_csv_auto":     true,
+			"read_parquet":      true,
+			"read_json":         true,
+			"read_json_auto":    true,
+			"read_ndjson":       true,
+			"read_ndjson_auto":  true,
+			"read_json_objects": true,
+			"read_xlsx":         true,
+			"sniff_csv":         true,
+			"glob":              true,
+			"st_read":           true,
+			"st_read_meta":      true,
 		}
 		if dangerousFunctions[funcName] {
 			return fmt.Errorf("function '%s' is not allowed", funcName)

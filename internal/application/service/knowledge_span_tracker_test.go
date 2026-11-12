@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -31,7 +33,7 @@ CREATE TABLE IF NOT EXISTS knowledge_processing_spans (
     attempt         INTEGER     NOT NULL DEFAULT 1,
     span_id         VARCHAR(64) NOT NULL,
     parent_span_id  VARCHAR(64),
-    name            VARCHAR(64) NOT NULL,
+    name            VARCHAR(255) NOT NULL,
     kind            VARCHAR(16) NOT NULL,
     status          VARCHAR(16) NOT NULL,
     input           TEXT,
@@ -164,6 +166,98 @@ func TestSpanTracker_LookupStage_FindsAcrossProcesses(t *testing.T) {
 	// A different stage must not be confused with multimodal.
 	other := tracker.LookupStage(ctx, "kid", attempt, types.StageEmbedding)
 	assert.Nil(t, other, "LookupStage(missing) must return nil")
+}
+
+func TestFitSpanName(t *testing.T) {
+	short := "postprocess.wiki.extract"
+	if got := fitSpanName(short); got != short {
+		t.Fatalf("short name should pass through, got %q", got)
+	}
+
+	// Regression: names in the 65–223 char window failed under VARCHAR(64)
+	// but must pass through unchanged at VARCHAR(255).
+	mid := "postprocess.wiki.page[concept/" + strings.Repeat("a", 100) + "]"
+	if got := fitSpanName(mid); got != mid {
+		t.Fatalf("mid-length wiki page name should pass through, got %q", got)
+	}
+
+	// Use a synthetic overlong wiki span name (> varchar(255)).
+	long := "postprocess.wiki.page[concept/" + strings.Repeat("a", 280) + "]"
+	got := fitSpanName(long)
+	if utf8.RuneCountInString(got) > maxSpanNameLen {
+		t.Fatalf("fitted name runes=%d, want <= %d: %q", utf8.RuneCountInString(got), maxSpanNameLen, got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("fitted name must be valid UTF-8: %q", got)
+	}
+	if got == long {
+		t.Fatalf("expected truncation, got unchanged %q", got)
+	}
+	if fitSpanName(long) != got {
+		t.Fatal("fitSpanName must be deterministic")
+	}
+
+	other := "postprocess.wiki.page[concept/" + strings.Repeat("b", 280) + "]"
+	if fitSpanName(other) == got {
+		t.Fatalf("different long names must not collapse to the same fitted name")
+	}
+
+	// CJK slugs must truncate on rune boundaries, not byte boundaries.
+	cjkLong := "postprocess.wiki.page[" + strings.Repeat("中", 260) + "]"
+	cjkGot := fitSpanName(cjkLong)
+	if utf8.RuneCountInString(cjkGot) > maxSpanNameLen {
+		t.Fatalf("CJK fitted name runes=%d, want <= %d", utf8.RuneCountInString(cjkGot), maxSpanNameLen)
+	}
+	if !utf8.ValidString(cjkGot) {
+		t.Fatalf("CJK fitted name must be valid UTF-8: %q", cjkGot)
+	}
+}
+
+// TestSpanTracker_BeginSubSpan_LongWikiPageName verifies wiki ingest's
+// postprocess.wiki.page[<slug>] subspans persist even when the slug pushes
+// the name past varchar(255).
+func TestSpanTracker_BeginSubSpan_LongWikiPageName(t *testing.T) {
+	tracker, db := setupSpanTrackerTest(t)
+	ctx := context.Background()
+
+	_, attempt, err := tracker.OpenAttempt(ctx, "kid", "")
+	require.NoError(t, err)
+	parent := tracker.BeginStage(ctx, "kid", attempt, types.StagePostProcess, nil)
+	require.NotNil(t, parent)
+
+	rawName := "postprocess.wiki.page[concept/" + strings.Repeat("x", 280) + "]"
+	sub := tracker.BeginSubSpan(ctx, parent, rawName, types.SpanKindSubSpan, types.JSONMap{
+		"slug": "concept/" + strings.Repeat("x", 280),
+	})
+	require.NotNil(t, sub)
+	require.LessOrEqual(t, utf8.RuneCountInString(sub.Name), maxSpanNameLen)
+
+	var count int64
+	require.NoError(t, db.Table("knowledge_processing_spans").
+		Where("knowledge_id = ? AND name = ?", "kid", sub.Name).
+		Count(&count).Error)
+	require.Equal(t, int64(1), count)
+}
+
+// TestSpanTracker_LookupSpanByName_FitsLongName verifies cross-process
+// callers can look up a wiki page subspan using the raw overlong name.
+func TestSpanTracker_LookupSpanByName_FitsLongName(t *testing.T) {
+	tracker, _ := setupSpanTrackerTest(t)
+	ctx := context.Background()
+
+	_, attempt, err := tracker.OpenAttempt(ctx, "kid", "")
+	require.NoError(t, err)
+	parent := tracker.BeginStage(ctx, "kid", attempt, types.StagePostProcess, nil)
+	require.NotNil(t, parent)
+
+	rawName := "postprocess.wiki.page[concept/" + strings.Repeat("y", 280) + "]"
+	created := tracker.BeginSubSpan(ctx, parent, rawName, types.SpanKindSubSpan, nil)
+	require.NotNil(t, created)
+
+	found := tracker.LookupSpanByName(ctx, "kid", attempt, rawName)
+	require.NotNil(t, found, "LookupSpanByName must normalize the raw name")
+	assert.Equal(t, created.SpanID, found.SpanID)
+	assert.Equal(t, created.Name, found.Name)
 }
 
 // TestSpanTracker_BeginSubSpan_HangsUnderParent confirms multimodal /
@@ -388,12 +482,14 @@ func TestSummaryQuestionPayload_AttemptRoundTrip(t *testing.T) {
 		KnowledgeID:     "kid-7",
 		Language:        "zh-CN",
 		Attempt:         5,
+		Refresh:         true,
 	}
 	sumBytes, err := json.Marshal(sumIn)
 	require.NoError(t, err)
 	var sumOut types.SummaryGenerationPayload
 	require.NoError(t, json.Unmarshal(sumBytes, &sumOut))
 	assert.Equal(t, 5, sumOut.Attempt)
+	assert.True(t, sumOut.Refresh)
 
 	qIn := types.QuestionGenerationPayload{
 		TenantID:        42,
@@ -408,4 +504,133 @@ func TestSummaryQuestionPayload_AttemptRoundTrip(t *testing.T) {
 	var qOut types.QuestionGenerationPayload
 	require.NoError(t, json.Unmarshal(qBytes, &qOut))
 	assert.Equal(t, 5, qOut.Attempt)
+}
+
+// A reparse must not inherit the previous attempt's open spans. A failure path
+// that marks a row terminal without finalizing its attempt leaves a "running"
+// root behind, and a terminal row is outside housekeeping's stall sweep, so the
+// new attempt has to close it.
+func TestSpanTracker_OpenAttemptCancelsSupersededOpenSpans(t *testing.T) {
+	tracker, db := setupSpanTrackerTest(t)
+	ctx := context.Background()
+
+	_, attempt1, err := tracker.OpenAttempt(ctx, "kid-reparse", "")
+	require.NoError(t, err)
+	require.Equal(t, 1, attempt1)
+
+	_, attempt2, err := tracker.OpenAttempt(ctx, "kid-reparse", "")
+	require.NoError(t, err)
+	require.Equal(t, 2, attempt2)
+
+	var status, code string
+	require.NoError(t, db.Raw(
+		`SELECT status, error_code FROM knowledge_processing_spans
+		  WHERE knowledge_id = ? AND attempt = 1 AND kind = 'root'`,
+		"kid-reparse").Row().Scan(&status, &code))
+	assert.Equal(t, types.SpanStatusCancelled, status)
+	assert.Equal(t, "ATTEMPT_SUPERSEDED", code)
+
+	var newStatus string
+	require.NoError(t, db.Raw(
+		`SELECT status FROM knowledge_processing_spans
+		  WHERE knowledge_id = ? AND attempt = 2 AND kind = 'root'`,
+		"kid-reparse").Row().Scan(&newStatus))
+	assert.Equal(t, types.SpanStatusRunning, newStatus)
+}
+
+// rootSpan reads the attempt's root span: the status the UI's error banner and
+// its progress bar are both driven by.
+func rootSpan(t *testing.T, db *gorm.DB, knowledgeID string, attempt int) (status, code, message string) {
+	t.Helper()
+	require.NoError(t, db.Raw(
+		`SELECT status, COALESCE(error_code, ''), COALESCE(error_message, '')
+		   FROM knowledge_processing_spans
+		  WHERE knowledge_id = ? AND attempt = ? AND kind = 'root'`,
+		knowledgeID, attempt).Row().Scan(&status, &code, &message))
+	return status, code, message
+}
+
+func TestSpanTracker_FailSpanRetryable_KeepsRootOpenWhileRetriesRemain(t *testing.T) {
+	ctx := context.Background()
+	// Every main pipeline stage goes through the same deferral, not just the
+	// docreader one a report happens to show.
+	for _, stage := range types.AllStages {
+		t.Run(stage, func(t *testing.T) {
+			tracker, db := setupSpanTrackerTest(t)
+			kid := "kid-retry-" + stage
+			_, attempt, err := tracker.OpenAttempt(ctx, kid, "")
+			require.NoError(t, err)
+
+			// The first run fails in a main stage. asynq retries reuse the
+			// payload, so the next run records onto this same attempt and may
+			// still complete it.
+			first := types.WithTaskRetryMetadata(ctx, 0, 3)
+			span := tracker.BeginStage(first, kid, attempt, stage, nil)
+			tracker.FailSpanRetryable(first, span, "STAGE_FAILED", "transient upstream", errors.New("boom"))
+
+			status, code, _ := rootSpan(t, db, kid, attempt)
+			assert.Equal(t, types.SpanStatusRunning, status, "root stays open while a retry is left")
+			assert.Empty(t, code, "an attempt that can still succeed must not be attributed a failure")
+
+			// The retry succeeds. Before this fix the root was already terminal
+			// here, so FinalizeAttempt returned on its guard and the UI showed
+			// a red error banner above an all-done trace.
+			tracker.FinalizeAttempt(types.WithTaskRetryMetadata(ctx, 1, 3),
+				kid, attempt, types.SpanStatusDone, nil, "", "")
+			status, code, message := rootSpan(t, db, kid, attempt)
+			assert.Equal(t, types.SpanStatusDone, status)
+			assert.Empty(t, code, "no stale error code survives a successful retry")
+			assert.Empty(t, message)
+
+			// A failure arriving after the attempt closed must not reopen it.
+			late := tracker.BeginStage(first, kid, attempt, stage, nil)
+			tracker.FailSpanRetryable(types.WithTaskRetryMetadata(ctx, 3, 3),
+				late, "STAGE_FAILED", "later failure", errors.New("boom"))
+			status, _, _ = rootSpan(t, db, kid, attempt)
+			assert.Equal(t, types.SpanStatusDone, status, "a terminal attempt stays terminal")
+		})
+	}
+}
+
+func TestSpanTracker_FailSpanRetryable_ClosesRootOnTheLastRetry(t *testing.T) {
+	tracker, db := setupSpanTrackerTest(t)
+	ctx := context.Background()
+
+	_, attempt, err := tracker.OpenAttempt(ctx, "kid-final", "")
+	require.NoError(t, err)
+	last := types.WithTaskRetryMetadata(ctx, 3, 3)
+	docreader := tracker.BeginStage(last, "kid-final", attempt, types.StageDocReader, nil)
+	tracker.FailSpanRetryable(last, docreader,
+		"DOCREADER_PARSE_FAILED", "engine core initialization failed", errors.New("boom"))
+	status, code, message := rootSpan(t, db, "kid-final", attempt)
+	assert.Equal(t, types.SpanStatusFailed, status, "exhausted retries must not hang at 进行中")
+	assert.Equal(t, "DOCREADER_PARSE_FAILED", code)
+	assert.Equal(t, "engine core initialization failed", message)
+
+	// With no task runner in the context at all — a synchronous reparse, or a
+	// caller outside asynq — the failure is final, as it was before.
+	_, syncAttempt, err := tracker.OpenAttempt(ctx, "kid-sync", "")
+	require.NoError(t, err)
+	post := tracker.BeginStage(ctx, "kid-sync", syncAttempt, types.StagePostProcess, nil)
+	tracker.FailSpanRetryable(ctx, post, "POSTPROCESS_FAILED", "no retry metadata", errors.New("boom"))
+	status, _, _ = rootSpan(t, db, "kid-sync", syncAttempt)
+	assert.Equal(t, types.SpanStatusFailed, status)
+}
+
+// Unused queue budget does not make an acknowledged failure retryable.
+func TestSpanTracker_FailSpan_ClosesRootWithUnusedRetries(t *testing.T) {
+	for _, stage := range types.AllStages {
+		t.Run(stage, func(t *testing.T) {
+			tracker, db := setupSpanTrackerTest(t)
+			ctx := types.WithTaskRetryMetadata(context.Background(), 0, 3)
+			_, attempt, err := tracker.OpenAttempt(ctx, "terminal", "")
+			require.NoError(t, err)
+			span := tracker.BeginStage(ctx, "terminal", attempt, stage, nil)
+			tracker.FailSpan(ctx, span, "PERMANENT_FAILURE", "cannot continue", nil)
+			status, code, message := rootSpan(t, db, "terminal", attempt)
+			require.Equal(t, types.SpanStatusFailed, status)
+			require.Equal(t, "PERMANENT_FAILURE", code)
+			require.Equal(t, "cannot continue", message)
+		})
+	}
 }

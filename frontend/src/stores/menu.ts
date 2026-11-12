@@ -2,6 +2,9 @@ import { reactive, ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import i18n from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
+import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
+import type { DeploymentCapabilityKey } from '@/config/deploymentCapabilities'
+import type { QuestionOrigin } from '@/utils/questionOrigin'
 
 type MenuChild = Record<string, any>
 
@@ -12,23 +15,28 @@ interface MenuItem {
   path: string
   childrenPath?: string
   children?: MenuChild[]
+  requiredCapability?: DeploymentCapabilityKey
 }
 
 const createMenuChildren = () => reactive<MenuChild[]>([])
 
 export const useMenuStore = defineStore('menuStore', () => {
   const menuArr = reactive<MenuItem[]>([
-    { title: '', titleKey: 'menu.knowledgeBase', icon: 'zhishiku', path: 'knowledge-bases' },
-    { title: '', titleKey: 'menu.agents', icon: 'agent', path: 'agents' },
-    { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations' },
     {
       title: '',
-      titleKey: 'menu.chat',
+      titleKey: 'menu.newChat',
       icon: 'prefixIcon',
       path: 'creatChat',
       childrenPath: 'chat',
       children: createMenuChildren()
     },
+    { title: '', titleKey: 'menu.knowledgeBase', icon: 'zhishiku', path: 'knowledge-bases' },
+    // Artifacts only exist where skills run in a sandbox.
+    { title: '', titleKey: 'menu.artifacts', icon: 'artifact', path: 'artifacts', requiredCapability: 'settings.sandbox' },
+    { title: '', titleKey: 'menu.agents', icon: 'agent', path: 'agents', requiredCapability: 'agents' },
+    { title: '', titleKey: 'menu.automations', icon: 'automation', path: 'automations' },
+    { title: '', titleKey: 'toolbox.title', icon: 'toolbox', path: 'toolbox' },
+    { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations', requiredCapability: 'organizations' },
     { title: '', titleKey: 'menu.settings', icon: 'setting', path: 'settings' },
     { title: '', titleKey: 'menu.logout', icon: 'logout', path: 'logout' }
   ])
@@ -39,6 +47,7 @@ export const useMenuStore = defineStore('menuStore', () => {
   const firstModelId = ref('')
   const firstImageFiles = ref<any[]>([])
   const firstAttachmentFiles = ref<any[]>([])
+  const firstQuestionOrigin = ref<QuestionOrigin | null>(null)
   const prefillQuery = ref('')
 
   const applyMenuTranslations = () => {
@@ -60,16 +69,20 @@ export const useMenuStore = defineStore('menuStore', () => {
 
   const liteHiddenPaths = new Set(['logout', 'organizations'])
 
-  // 共享空间 (organizations) 仅对当前租户的 admin / owner 暴露入口。
+  // 共享空间 (organizations) 仅对当前空间的 admin / owner 暴露入口。
   // viewer / contributor 即便在共享空间里拥有资源，也无需自行管理共享关系，
   // 入口在侧栏只会徒增噪音；后端 RBAC 才是权限的最终来源（见 middleware/rbac.go）。
   const visibleMenuArr = computed(() => {
     const authStore = useAuthStore()
+    const deploymentCapabilities = useDeploymentCapabilitiesStore()
     return menuArr.filter(item => {
       if (authStore.isLiteMode && liteHiddenPaths.has(item.path)) {
         return false
       }
       if (item.path === 'organizations' && !authStore.hasRole('admin')) {
+        return false
+      }
+      if (!deploymentCapabilities.isSupported(item.requiredCapability)) {
         return false
       }
       return true
@@ -118,12 +131,13 @@ export const useMenuStore = defineStore('menuStore', () => {
     isFirstSession.value = payload
   }
 
-  const changeFirstQuery = (payload: string, mentionedItems: any[] = [], modelId: string = '', imageFiles: any[] = [], attachmentFiles: any[] = []) => {
+  const changeFirstQuery = (payload: string, mentionedItems: any[] = [], modelId: string = '', imageFiles: any[] = [], attachmentFiles: any[] = [], questionOrigin: QuestionOrigin | null = null) => {
     firstQuery.value = payload
     firstMentionedItems.value = mentionedItems
     firstModelId.value = modelId
     firstImageFiles.value = imageFiles
     firstAttachmentFiles.value = attachmentFiles
+    firstQuestionOrigin.value = questionOrigin
   }
 
   const setPrefillQuery = (q: string) => {
@@ -145,6 +159,7 @@ export const useMenuStore = defineStore('menuStore', () => {
     firstModelId,
     firstImageFiles,
     firstAttachmentFiles,
+    firstQuestionOrigin,
     prefillQuery,
     clearMenuArr,
     updatemenuArr,

@@ -9,29 +9,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // KnowledgeBase represents a knowledge base
 type KnowledgeBase struct {
-	ID                    string                `json:"id"`
-	Name                  string                `json:"name"` // Name must be unique within the same tenant
-	Type                  string                `json:"type"`
-	IsTemporary           bool                  `json:"is_temporary"`
-	IsPinned              bool                  `json:"is_pinned"`
-	Description           string                `json:"description"`
-	TenantID              uint64                `json:"tenant_id"`
-	ChunkingConfig        ChunkingConfig        `json:"chunking_config"`
-	ImageProcessingConfig ImageProcessingConfig `json:"image_processing_config"`
-	FAQConfig             *FAQConfig            `json:"faq_config"`
-	EmbeddingModelID      string                `json:"embedding_model_id"`
-	SummaryModelID        string                `json:"summary_model_id"`
+	ID                    string                 `json:"id"`
+	Name                  string                 `json:"name"` // Name must be unique within the same tenant
+	Type                  string                 `json:"type"`
+	IsTemporary           bool                   `json:"is_temporary"`
+	IsPinned              bool                   `json:"is_pinned"`
+	Description           string                 `json:"description"`
+	TenantID              uint64                 `json:"tenant_id"`
+	ChunkingConfig        ChunkingConfig         `json:"chunking_config"`
+	ImageProcessingConfig ImageProcessingConfig  `json:"image_processing_config"`
+	FAQConfig             *FAQConfig             `json:"faq_config"`
+	EmbeddingModelID      string                 `json:"embedding_model_id"`
+	SummaryModelID        string                 `json:"summary_model_id"`
 	VLMConfig             VLMConfig              `json:"vlm_config"`
 	StorageProviderConfig *StorageProviderConfig `json:"storage_provider_config"`
 	StorageConfig         StorageConfig          `json:"storage_config"`
 	ExtractConfig         *ExtractConfig         `json:"extract_config"`
-	CreatedAt             time.Time             `json:"created_at"`
-	UpdatedAt             time.Time             `json:"updated_at"`
+	AutoTagConfig         *AutoTagConfig         `json:"auto_tag_config"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
 	// Computed fields (not stored in database)
 	KnowledgeCount  int64 `json:"knowledge_count"`
 	ChunkCount      int64 `json:"chunk_count"`
@@ -44,6 +46,7 @@ type KnowledgeBaseConfig struct {
 	ChunkingConfig        ChunkingConfig        `json:"chunking_config"`
 	ImageProcessingConfig ImageProcessingConfig `json:"image_processing_config"`
 	FAQConfig             *FAQConfig            `json:"faq_config"`
+	AutoTagConfig         *AutoTagConfig        `json:"auto_tag_config,omitempty"`
 }
 
 // ChunkingConfig represents document chunking configuration
@@ -51,6 +54,16 @@ type ChunkingConfig struct {
 	ChunkSize    int      `json:"chunk_size"`    // Chunk size
 	ChunkOverlap int      `json:"chunk_overlap"` // Overlap size
 	Separators   []string `json:"separators"`    // Separators
+	// ParserEngineRules selects the parser engine for each group of file types.
+	ParserEngineRules []ParserEngineRule `json:"parser_engine_rules,omitempty"`
+}
+
+// IndexingStrategy selects which indexing pipelines are active.
+type IndexingStrategy struct {
+	VectorEnabled  bool `json:"vector_enabled"`
+	KeywordEnabled bool `json:"keyword_enabled"`
+	WikiEnabled    bool `json:"wiki_enabled"`
+	GraphEnabled   bool `json:"graph_enabled"`
 }
 
 // FAQConfig represents faq-specific configuration
@@ -106,6 +119,41 @@ type GraphRelation struct {
 	Node1 string `json:"node1"`
 	Node2 string `json:"node2"`
 	Type  string `json:"type"`
+}
+
+// ParserEngineRule maps a set of file types to a specific parser engine.
+type ParserEngineRule struct {
+	FileTypes []string `json:"file_types"`
+	Engine    string   `json:"engine"`
+}
+
+// QuestionGenerationConfig controls LLM-generated questions per chunk during parsing.
+type QuestionGenerationConfig struct {
+	Enabled       bool `json:"enabled"`
+	QuestionCount int  `json:"question_count"`
+}
+
+// AutoTagConfig controls optional automatic association of existing knowledge
+// base tags after a document finishes parsing. Only applies to document-type
+// knowledge bases; disabled by default.
+type AutoTagConfig struct {
+	Enabled bool `json:"enabled"`
+	// ModelID selects the chat model used for classification. Empty falls
+	// back to the knowledge base's summary model.
+	ModelID string `json:"model_id,omitempty"`
+	// MaxTags caps how many existing tags one document may auto-acquire
+	// (1-10, defaults to 3).
+	MaxTags int `json:"max_tags,omitempty"`
+	// SkipIfTagged leaves documents that already carry tags untouched.
+	// Defaults to true when omitted.
+	SkipIfTagged *bool `json:"skip_if_tagged,omitempty"`
+}
+
+// ASRConfig represents automatic speech recognition settings for audio files.
+type ASRConfig struct {
+	Enabled  bool   `json:"enabled"`
+	ModelID  string `json:"model_id"`
+	Language string `json:"language,omitempty"`
 }
 
 // UnmarshalJSON keeps backward compatibility for legacy responses that still
@@ -190,12 +238,24 @@ type SearchResult struct {
 	// MatchedContent is the actual content that was matched in vector search
 	// For FAQ: this is the matched question text (standard or similar question)
 	MatchedContent string `json:"matched_content,omitempty"`
+	// KnowledgeBaseID identifies the KB that produced this hit. It is required
+	// for agent runs that search more than one knowledge base.
+	KnowledgeBaseID string `json:"knowledge_base_id,omitempty"`
+	// ParentChunkID / SubChunkID describe the chunk hierarchy: a retrieval
+	// "hit" id may be a sub-chunk, while the parent holds the self-contained
+	// passage an agent fetches via `chunk view <parent_chunk_id>`. The server
+	// ships these in the references event; without fields here Go silently
+	// drops them during unmarshal.
+	ParentChunkID string   `json:"parent_chunk_id,omitempty"`
+	SubChunkID    []string `json:"sub_chunk_id,omitempty"`
 }
 
 // HybridSearchResponse hybrid search response
 type HybridSearchResponse struct {
 	Success bool            `json:"success"`
 	Data    []*SearchResult `json:"data"`
+	// Meta is present when the request carried a rerank object.
+	Meta *RetrievalMeta `json:"meta,omitempty"`
 }
 
 type CopyKnowledgeBaseRequest struct {
@@ -210,6 +270,13 @@ type CopyKnowledgeBaseResponse struct {
 	SourceID string `json:"source_id"`
 	TargetID string `json:"target_id"`
 	Message  string `json:"message"`
+}
+
+type DuplicateKnowledgeBaseResponse struct {
+	SourceID      string        `json:"source_id"`
+	TargetID      string        `json:"target_id"`
+	Message       string        `json:"message"`
+	KnowledgeBase KnowledgeBase `json:"knowledge_base"`
 }
 
 // KBCloneProgress represents the progress of a knowledge base clone task
@@ -299,6 +366,90 @@ func (c *Client) UpdateKnowledgeBase(ctx context.Context,
 	return &response.Data, nil
 }
 
+// PatchKnowledgeBaseRequest changes only the fields it carries.
+// A nil field is left unchanged. Nested objects use pointers so a false or
+// zero value can be sent without the other fields being cleared.
+type PatchKnowledgeBaseRequest struct {
+	Name             *string                     `json:"name,omitempty"`
+	Description      *string                     `json:"description,omitempty"`
+	EmbeddingModelID *string                     `json:"embedding_model_id,omitempty"`
+	SummaryModelID   *string                     `json:"summary_model_id,omitempty"`
+	StorageBackendID *string                     `json:"storage_backend_id,omitempty"`
+	ChunkingConfig   *PatchChunkingConfig        `json:"chunking_config,omitempty"`
+	IndexingStrategy *PatchIndexingStrategy      `json:"indexing_strategy,omitempty"`
+	VLMConfig        *PatchVLMConfig             `json:"vlm_config,omitempty"`
+	ASRConfig        *PatchASRConfig             `json:"asr_config,omitempty"`
+	FAQConfig        *PatchFAQConfig             `json:"faq_config,omitempty"`
+	AutoTagConfig    *PatchAutoTagConfig         `json:"auto_tag_config,omitempty"`
+	ImageProcessing  *PatchImageProcessingConfig `json:"image_processing_config,omitempty"`
+}
+
+// PatchChunkingConfig is the partial chunking update. Nil fields stay as they are.
+type PatchChunkingConfig struct {
+	ChunkSize    *int      `json:"chunk_size,omitempty"`
+	ChunkOverlap *int      `json:"chunk_overlap,omitempty"`
+	Separators   *[]string `json:"separators,omitempty"`
+}
+
+// PatchIndexingStrategy is the partial indexing update. Nil flags stay as they are.
+type PatchIndexingStrategy struct {
+	VectorEnabled  *bool `json:"vector_enabled,omitempty"`
+	KeywordEnabled *bool `json:"keyword_enabled,omitempty"`
+	WikiEnabled    *bool `json:"wiki_enabled,omitempty"`
+	GraphEnabled   *bool `json:"graph_enabled,omitempty"`
+}
+
+// PatchVLMConfig is the partial caption-model update.
+type PatchVLMConfig struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	ModelID *string `json:"model_id,omitempty"`
+}
+
+// PatchASRConfig changes only the speech-recognition fields provided.
+type PatchASRConfig struct {
+	Enabled  *bool   `json:"enabled,omitempty"`
+	ModelID  *string `json:"model_id,omitempty"`
+	Language *string `json:"language,omitempty"`
+}
+
+// PatchFAQConfig changes only the FAQ indexing fields provided.
+type PatchFAQConfig struct {
+	IndexMode         *string `json:"index_mode,omitempty"`
+	QuestionIndexMode *string `json:"question_index_mode,omitempty"`
+}
+
+// PatchAutoTagConfig changes only the automatic tagging fields provided.
+type PatchAutoTagConfig struct {
+	Enabled      *bool   `json:"enabled,omitempty"`
+	ModelID      *string `json:"model_id,omitempty"`
+	MaxTags      *int    `json:"max_tags,omitempty"`
+	SkipIfTagged *bool   `json:"skip_if_tagged,omitempty"`
+}
+
+// PatchImageProcessingConfig changes only the image settings provided.
+type PatchImageProcessingConfig struct {
+	ModelID *string `json:"model_id,omitempty"`
+}
+
+// PatchKnowledgeBase changes the supplied settings and preserves omitted fields.
+func (c *Client) PatchKnowledgeBase(ctx context.Context,
+	knowledgeBaseID string,
+	request *PatchKnowledgeBaseRequest,
+) (*KnowledgeBase, error) {
+	path := fmt.Sprintf("/api/v1/knowledge-bases/%s", knowledgeBaseID)
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, request, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response KnowledgeBaseResponse
+	if err := parseResponse(resp, &response); err != nil {
+		return nil, err
+	}
+
+	return &response.Data, nil
+}
+
 // DeleteKnowledgeBase deletes a knowledge base
 func (c *Client) DeleteKnowledgeBase(ctx context.Context, knowledgeBaseID string) error {
 	path := fmt.Sprintf("/api/v1/knowledge-bases/%s", knowledgeBaseID)
@@ -330,9 +481,9 @@ func (c *Client) ClearKnowledgeBaseContents(ctx context.Context, knowledgeBaseID
 	}
 
 	var response struct {
-		Success bool                                `json:"success"`
-		Message string                              `json:"message"`
-		Data    ClearKnowledgeBaseContentsResponse   `json:"data"`
+		Success bool                               `json:"success"`
+		Message string                             `json:"message"`
+		Data    ClearKnowledgeBaseContentsResponse `json:"data"`
 	}
 
 	if err := parseResponse(resp, &response); err != nil {
@@ -350,15 +501,49 @@ type SearchParams struct {
 	MatchCount           int     `json:"match_count"`
 	DisableKeywordsMatch bool    `json:"disable_keywords_match"`
 	DisableVectorMatch   bool    `json:"disable_vector_match"`
+	// KnowledgeBaseIDs searches several knowledge bases that share one
+	// embedding model; the path ID must be one of them.
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
+	// KnowledgeIDs limits the search to these documents.
+	KnowledgeIDs []string `json:"knowledge_ids,omitempty"`
+	// TagIDs limits the search to these tags.
+	TagIDs []string `json:"tag_ids,omitempty"`
+	// Rerank, when set and enabled, reranks the candidates before cutting to
+	// MatchCount. Nil keeps the raw retrieval order.
+	Rerank *RerankOptions `json:"rerank,omitempty"`
 }
 
-// HybridSearch performs hybrid search
-// Note: The backend route is GET but expects JSON body, which is non-standard.
-// This client uses POST with JSON body for better compatibility.
-func (c *Client) HybridSearch(ctx context.Context, knowledgeBaseID string, params *SearchParams) ([]*SearchResult, error) {
+// HybridSearch performs hybrid search.
+// Pass ResourceURLOptions to receive public HTTP(S) file URLs in results.
+func (c *Client) HybridSearch(
+	ctx context.Context,
+	knowledgeBaseID string,
+	params *SearchParams,
+	opts ...ResourceURLOptions,
+) ([]*SearchResult, error) {
+	response, err := c.HybridSearchDetailed(ctx, knowledgeBaseID, params, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return response.Data, nil
+}
+
+// HybridSearchDetailed performs hybrid search and returns the whole
+// response, including the rerank diagnostics in Meta.
+func (c *Client) HybridSearchDetailed(
+	ctx context.Context,
+	knowledgeBaseID string,
+	params *SearchParams,
+	opts ...ResourceURLOptions,
+) (*HybridSearchResponse, error) {
 	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/hybrid-search", knowledgeBaseID)
 
-	resp, err := c.doRequest(ctx, http.MethodGet, path, params, nil)
+	queryParams := url.Values{}
+	if len(opts) > 0 {
+		applyResourceURLQuery(queryParams, &opts[0])
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodPost, path, params, queryParams)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +553,7 @@ func (c *Client) HybridSearch(ctx context.Context, knowledgeBaseID string, param
 		return nil, err
 	}
 
-	return response.Data, nil
+	return &response, nil
 }
 
 // TogglePinKnowledgeBase toggles the pin status of a knowledge base.
@@ -426,6 +611,30 @@ func (c *Client) CopyKnowledgeBase(ctx context.Context, request *CopyKnowledgeBa
 	var response struct {
 		Success bool                      `json:"success"`
 		Data    CopyKnowledgeBaseResponse `json:"data"`
+	}
+
+	if err := parseResponse(resp, &response); err != nil {
+		return nil, err
+	}
+
+	return &response.Data, nil
+}
+
+// DuplicateKnowledgeBase creates a settings-only duplicate and returns the new knowledge base info.
+func (c *Client) DuplicateKnowledgeBase(
+	ctx context.Context,
+	knowledgeBaseID string,
+) (*DuplicateKnowledgeBaseResponse, error) {
+	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/duplicate", knowledgeBaseID)
+
+	resp, err := c.doRequest(ctx, http.MethodPost, path, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Success bool                           `json:"success"`
+		Data    DuplicateKnowledgeBaseResponse `json:"data"`
 	}
 
 	if err := parseResponse(resp, &response); err != nil {

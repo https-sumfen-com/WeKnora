@@ -12,18 +12,15 @@
 
     <template v-else>
       <div class="settings-group">
-        <div class="section-subheader">
-          <h3>{{ t('vectorStoreSettings.storesTitle') }}</h3>
-          <t-button v-if="authStore.hasRole('admin')" theme="primary" variant="outline" size="small" @click="openAddDialog">
-            <template #icon><add-icon /></template>
-            {{ t('vectorStoreSettings.addStore') }}
-          </t-button>
-        </div>
+        <h3 class="list-section-title">{{ t('vectorStoreSettings.storesTitle') }}</h3>
 
         <!-- 与其它 settings 列表同形：左侧 engine 徽章 + 标题 + env pill + 副标题 + 测试动作。
              env 来源是只读的 (engine_type / connection_config 由 .env 写入），所以没有更多菜单；
              user 来源沿用三点菜单的编辑 / 删除入口；测试结果作为卡片底部的彩色条出现。 -->
-        <div v-if="stores.length > 0" class="store-grid">
+        <div v-if="stores.length === 0 && !authStore.hasRole('admin')" class="empty-stores">
+          <t-empty :description="t('vectorStoreSettings.emptyDesc')" />
+        </div>
+        <div v-else class="store-grid">
           <div
             v-for="store in [...envStores, ...userStores]"
             :key="store.id"
@@ -93,11 +90,17 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Empty State -->
-        <div v-else class="empty-stores">
-          <p>{{ t('vectorStoreSettings.emptyDesc') }}</p>
+          <button
+            v-if="authStore.hasRole('admin')"
+            type="button"
+            class="store-card store-card--add"
+            @click="openAddDialog"
+          >
+            <span class="store-card--add__icon" aria-hidden="true">
+              <add-icon />
+            </span>
+            <span class="store-card--add__label">{{ t('vectorStoreSettings.addStore') }}</span>
+          </button>
         </div>
       </div>
     </template>
@@ -699,9 +702,9 @@ const handleAction = (action: { value: string }, store: VectorStoreEntity) => {
 const confirmDelete = (store: VectorStoreEntity) => {
   const dialog = DialogPlugin.confirm({
     header: t('vectorStoreSettings.deleteConfirm'),
-    confirmBtn: t('common.delete'),
+    confirmBtn: { content: t('common.delete'), theme: 'danger' },
     cancelBtn: t('common.cancel'),
-    theme: 'warning',
+    theme: 'danger',
     onConfirm: async () => {
       try {
         await deleteVectorStoreAPI(store.id!)
@@ -752,26 +755,16 @@ onMounted(async () => {
 </script>
 
 <style lang="less" scoped>
+@import (reference) '@/components/css/provider-card.less';
+
+@import (reference) '@/components/css/settings-section.less';
+
 .vectorstore-settings {
   width: 100%;
 }
 
 .section-header {
-  margin-bottom: 32px;
-
-  h2 {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--td-text-color-primary);
-    margin: 0 0 8px 0;
-  }
-
-  .section-description {
-    font-size: 14px;
-    color: var(--td-text-color-secondary);
-    margin: 0;
-    line-height: 1.5;
-  }
+  .settings-section-header();
 }
 
 .loading-container {
@@ -785,59 +778,72 @@ onMounted(async () => {
   flex-direction: column;
 }
 
-.section-subheader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-
-  h3 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--td-text-color-primary);
-    margin: 0;
-  }
+.list-section-title {
+  font-size: var(--app-text-xl);
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  margin: 0 0 16px 0;
 }
 
 .store-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 12px;
+
+  .store-card--add {
+    width: 100%;
+    height: 100%;
+  }
 }
 
 // 与 Parser / Storage / Model 等同形：徽章 + 三段式。env 来源走 secondaryContainer
 // 底色暗示只读；test 按钮做成 text 模式，避免在标题行抢眼。
 .store-card {
-  display: flex;
+  .provider-card();
   flex-direction: column;
-  padding: 14px 14px 14px 12px;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 10px;
-  background: var(--td-bg-color-container);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
-  min-width: 0;
 
   &--env {
     background: var(--td-bg-color-secondarycontainer);
   }
 
   &--clickable {
-    cursor: pointer;
+    .provider-card-interactive();
 
-    &:hover {
-      border-color: var(--td-brand-color-3, var(--td-brand-color));
-      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-    }
 
-    &:focus-visible {
-      outline: 2px solid var(--td-brand-color);
-      outline-offset: 2px;
-    }
   }
 
   &--env:not(.store-card--clickable):hover {
     border-color: var(--td-component-stroke);
     box-shadow: none;
+  }
+
+  &--add {
+    .provider-card-add();
+
+    &:hover,
+    &:focus-visible {
+      box-shadow: none;
+    }
+
+
+
+    &__icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--app-radius-md);
+      background: color-mix(in srgb, var(--td-brand-color) 10%, transparent);
+      color: var(--td-brand-color);
+      font-size: var(--app-text-2xl);
+    }
+
+    &__label {
+      font-size: var(--app-text-md);
+      font-weight: 500;
+      line-height: 1.4;
+    }
   }
 }
 
@@ -853,146 +859,76 @@ onMounted(async () => {
 }
 
 .store-card__badge {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background: rgba(0, 82, 217, 0.1);
-  color: #0052D9;
+  .provider-card-badge();
+  .provider-card-badge-color(#0052d9);
 }
 
 // 真实品牌 logo 的渲染：保留每个 engine 类的 color 作为品牌色，
 // 把背景换成中性白 + 细边框；用 ::before mask-image 把单色 SVG 染成 currentColor。
 // 选择器叠了一层 .store-card 是为了胜过 `.store-card--<engine> .store-card__badge`
 // 那条更具体的品牌底色规则。
-.store-card .store-card__badge--logo {
-  background: var(--td-bg-color-container, #fff);
-  box-shadow: inset 0 0 0 1px var(--td-component-stroke);
-}
-
-.store-card .store-card__badge--mono::before {
-  content: '';
-  width: 22px;
-  height: 22px;
-  background-color: currentColor;
-  -webkit-mask-image: var(--logo-url);
-  -webkit-mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  mask-image: var(--logo-url);
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
-}
-
 .store-card__badge-img {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-  display: block;
+  .provider-card-badge-img();
 }
 
 // 各 vector engine 配色（覆盖 11 类常见后端，未列出的回落到默认蓝）
 .store-card--qdrant .store-card__badge {
-  background: rgba(225, 38, 38, 0.12);
-  color: #E12626;
+  .provider-card-badge-color(#e12626);
 }
 .store-card--milvus .store-card__badge {
-  background: rgba(0, 137, 255, 0.12);
-  color: #0089FF;
+  .provider-card-badge-color(#0089ff);
 }
 .store-card--weaviate .store-card__badge {
-  background: rgba(7, 192, 95, 0.12);
-  color: #07A050;
+  .provider-card-badge-color(#07a050);
 }
 .store-card--elasticsearch .store-card__badge,
 .store-card--elasticfaiss .store-card__badge {
-  background: rgba(255, 153, 0, 0.12);
-  color: #D97706;
+  .provider-card-badge-color(#d97706);
 }
 .store-card--postgres .store-card__badge {
-  background: rgba(0, 82, 217, 0.1);
-  color: #0052D9;
+  .provider-card-badge-color(#0052d9);
 }
 .store-card--opensearch .store-card__badge {
-  background: rgba(98, 53, 187, 0.12);
-  color: #6235BB;
+  .provider-card-badge-color(#6235bb);
 }
 .store-card--infinity .store-card__badge {
-  background: rgba(98, 53, 187, 0.12);
-  color: #6235BB;
+  .provider-card-badge-color(#6235bb);
 }
 .store-card--tencent_vectordb .store-card__badge {
-  background: rgba(0, 82, 217, 0.1);
-  color: #0052D9;
+  .provider-card-badge-color(#0052d9);
 }
 .store-card--doris .store-card__badge {
-  background: rgba(255, 90, 0, 0.12);
-  color: #E55A00;
+  .provider-card-badge-color(#e55a00);
 }
 .store-card--sqlite .store-card__badge {
-  background: rgba(70, 70, 70, 0.1);
-  color: #464646;
+  .provider-card-badge-color(#464646);
 }
 
 .store-card__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  .provider-card-body();
 }
 
 .store-card__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+  .provider-card-header();
 }
 
 .store-card__title {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--td-text-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .provider-card-title();
 }
 
 .store-card__pill {
   flex-shrink: 0;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   font-weight: 500;
   line-height: 16px;
   border-radius: 3px;
-  color: var(--td-warning-color-7, #B85C00);
-  background: var(--td-warning-color-1, #FEF3E6);
+  color: var(--td-warning-color-7);
+  background: var(--td-warning-color-1);
 }
 
 .store-card__more {
-  flex-shrink: 0;
-  color: var(--td-text-color-placeholder);
-  padding: 2px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-
-  &:hover,
-  &:focus-visible {
-    background: var(--td-bg-color-secondarycontainer);
-    color: var(--td-text-color-primary);
-  }
+  .provider-card-more();
 }
 
 .store-card:hover .store-card__more,
@@ -1002,14 +938,7 @@ onMounted(async () => {
 }
 
 .store-card__subtitle {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--td-text-color-secondary);
-  min-width: 0;
+  .provider-card-subtitle();
 }
 
 .store-card__type {
@@ -1022,7 +951,7 @@ onMounted(async () => {
 
 .store-card__endpoint {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-placeholder);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1032,12 +961,14 @@ onMounted(async () => {
 
 
 .empty-stores {
-  padding: 48px 32px;
+  padding: 64px 0;
   text-align: center;
-  color: var(--td-text-color-placeholder);
-  border: 1px dashed var(--td-component-stroke);
-  border-radius: 8px;
-  font-size: 14px;
+
+  :deep(.t-empty__description) {
+    font-size: var(--app-text-base);
+    color: var(--td-text-color-placeholder);
+    margin-bottom: 16px;
+  }
 }
 
 // ---- 抽屉内容 — 与 ModelEditorDialog 同款约定 ----
@@ -1048,7 +979,7 @@ onMounted(async () => {
 .form-label {
   display: block;
   margin-bottom: 6px;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   font-weight: 500;
   color: var(--td-text-color-primary);
   line-height: 1.4;
@@ -1064,7 +995,7 @@ onMounted(async () => {
 
 .form-desc {
   margin: 4px 0 0 0;
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   line-height: 1.5;
   color: var(--td-text-color-placeholder);
 
@@ -1078,7 +1009,7 @@ onMounted(async () => {
 :deep(.t-select),
 :deep(.t-textarea) {
   width: 100%;
-  font-size: 13px;
+  font-size: var(--app-text-md);
 }
 
 // 隐藏 t-form 默认 form-item 容器 — 走自定义 .form-item / .form-label
@@ -1097,7 +1028,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   line-height: 1.5;
   color: var(--td-text-color-secondary);
   flex-wrap: wrap;
@@ -1105,7 +1036,7 @@ onMounted(async () => {
   white-space: pre-line;
 
   &__icon {
-    font-size: 15px;
+    font-size: var(--app-text-lg);
     flex-shrink: 0;
     color: var(--td-text-color-placeholder);
   }
@@ -1126,7 +1057,7 @@ onMounted(async () => {
 .readonly-fields {
   padding: 10px 12px;
   background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
 }
 
 .readonly-row {
@@ -1134,7 +1065,7 @@ onMounted(async () => {
   align-items: baseline;
   gap: 8px;
   padding: 4px 0;
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   line-height: 1.4;
   border-bottom: 1px solid var(--td-component-stroke);
 
@@ -1143,14 +1074,14 @@ onMounted(async () => {
 
 .readonly-label {
   color: var(--td-text-color-placeholder);
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   white-space: nowrap;
   min-width: 80px;
 }
 
 .readonly-value {
   color: var(--td-text-color-primary);
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   word-break: break-all;
 }
@@ -1161,7 +1092,7 @@ onMounted(async () => {
   align-items: center;
   gap: 4px;
   padding: 4px 0;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-secondary);
   background: transparent;
   border: none;
@@ -1172,7 +1103,7 @@ onMounted(async () => {
 
   &:hover { color: var(--td-brand-color); }
 
-  .t-icon { font-size: 14px; }
+  .t-icon { font-size: var(--app-text-base); }
 }
 
 // ---- Number input：去原生 spinner（与 MCP 高级配置同款）----
@@ -1214,14 +1145,14 @@ onMounted(async () => {
 }
 
 .header-icon__text {
-  font-size: 15px;
+  font-size: var(--app-text-lg);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 // ---- footer-left 测试按钮的状态 icon ----
 .status-icon {
-  font-size: 16px;
+  font-size: var(--app-text-xl);
   flex-shrink: 0;
 
   &.available { color: var(--td-brand-color); }
@@ -1240,7 +1171,7 @@ onMounted(async () => {
 <style lang="less">
 // 彩色 logo 时给 header-icon 容器一个白底 + 1px 边
 .vectorstore-drawer .setting-drawer__header-icon:has(.header-icon__img) {
-  background: var(--td-bg-color-container, #fff);
+  background: var(--td-bg-color-container);
   box-shadow: inset 0 0 0 1px var(--td-component-stroke);
 }
 
@@ -1253,7 +1184,7 @@ onMounted(async () => {
   color: #0089FF;
 }
 .vectorstore-drawer--weaviate .setting-drawer__header-icon {
-  background: rgba(7, 192, 95, 0.12);
+  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
   color: #07A050;
 }
 .vectorstore-drawer--elasticsearch .setting-drawer__header-icon,

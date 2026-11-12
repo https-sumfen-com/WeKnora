@@ -43,6 +43,7 @@ func (s *stubTenantService) CreateTenant(context.Context, *types.Tenant) (*types
 func (s *stubTenantService) GetTenantsByIDs(context.Context, []uint64) (map[uint64]*types.Tenant, error) {
 	panic("unexpected")
 }
+
 func (s *stubTenantService) ListTenants(context.Context) ([]*types.Tenant, error) {
 	panic("unexpected")
 }
@@ -50,14 +51,14 @@ func (s *stubTenantService) ListTenants(context.Context) ([]*types.Tenant, error
 func (s *stubTenantService) UpdateTenant(context.Context, *types.Tenant) (*types.Tenant, error) {
 	panic("unexpected")
 }
-func (s *stubTenantService) DeleteTenant(context.Context, uint64) error { panic("unexpected") }
-func (s *stubTenantService) UpdateAPIKey(context.Context, uint64) (string, error) {
+func (s *stubTenantService) SetChatHistoryConfig(context.Context, uint64, *types.ChatHistoryConfig) error {
 	panic("unexpected")
 }
-func (s *stubTenantService) ExtractTenantIDFromAPIKey(string) (uint64, error) { panic("unexpected") }
+func (s *stubTenantService) DeleteTenant(context.Context, uint64) error { panic("unexpected") }
 func (s *stubTenantService) ListAllTenants(context.Context) ([]*types.Tenant, error) {
 	panic("unexpected")
 }
+
 func (s *stubTenantService) BulkSetStorageQuota(context.Context, int64) (int64, error) {
 	panic("unexpected")
 }
@@ -80,6 +81,7 @@ func (s *stubTenantService) GetWeKnoraCloudCredentials(context.Context) *types.W
 func setupPresignedTestServer(t *testing.T) (engine *gin.Engine, baseDir string, signURL func(filePath string, tenantID uint64, ttl time.Duration) string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
+	t.Setenv("SYSTEM_SIGNING_KEY", "")
 	t.Setenv("SYSTEM_AES_KEY", "weknora-test-aes-key-32bytes!!!")
 
 	baseDir = t.TempDir()
@@ -170,6 +172,28 @@ func TestPresignedFile_GET_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestPresignedFile_ForcesActiveContentDownload(t *testing.T) {
+	engine, baseDir, signURL := setupPresignedTestServer(t)
+	storagePath := writeTestFile(t, baseDir, "1/payload.svg", `<svg onload="alert(1)"></svg>`)
+
+	req := httptest.NewRequest(http.MethodGet, signURL(storagePath, 1, time.Hour), nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if got, want := w.Code, http.StatusOK; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("Content-Type = %q, want application/octet-stream", got)
+	}
+	if got := w.Header().Get("Content-Disposition"); got != "attachment" {
+		t.Fatalf("Content-Disposition = %q, want attachment", got)
+	}
+	if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+}
+
 func TestPresignedFile_InvalidSig_403(t *testing.T) {
 	engine, _, _ := setupPresignedTestServer(t)
 
@@ -216,4 +240,8 @@ func TestPresignedFile_MissingFile_404(t *testing.T) {
 	if got, want := w.Code, http.StatusNotFound; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
+}
+
+func (s *stubTenantService) UpdateTenantProfile(context.Context, uint64, *string, *string) (*types.Tenant, error) {
+	panic("unexpected UpdateTenantProfile call")
 }

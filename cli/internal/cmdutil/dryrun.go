@@ -13,6 +13,7 @@
 package cmdutil
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,8 +44,8 @@ func AddDryRunFlag(cmd *cobra.Command, dest *bool) {
 }
 
 // EmitDryRun writes the dry-run envelope to w via FormatOptions.Emit, so the
-// envelope inherits the standard _notice injection, TTY indent, --jq filter,
-// and profile fields like every other success envelope. fopts may be nil for
+// envelope inherits the standard TTY indent, --jq filter, and profile fields
+// like every other success envelope. fopts may be nil for
 // callers that have no resolved FormatOptions (tests, error paths); a JSON-mode
 // default is used in that case.
 //
@@ -115,13 +116,17 @@ func HandleDryRun(cmd *cobra.Command, dryRun bool, plan DryRunPlan) (handled boo
 // planToMap converts a DryRunPlan to map[string]any so it can populate
 // output.Meta.Plan (which is open-typed). Goes through json to honor the
 // omitempty tags so api-only fields don't leak into mutation envelopes.
+// UseNumber on the way back keeps plan-body numbers above 2^53 exact: the
+// preview must show the payload the command would actually send.
 func planToMap(plan DryRunPlan) (map[string]any, error) {
 	b, err := json.Marshal(plan)
 	if err != nil {
 		return nil, err
 	}
 	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.UseNumber()
+	if err := decoder.Decode(&m); err != nil {
 		return nil, err
 	}
 	return m, nil

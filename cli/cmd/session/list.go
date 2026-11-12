@@ -41,7 +41,9 @@ type ListOptions struct {
 
 // ListService is the narrow SDK surface this command depends on.
 type ListService interface {
-	GetSessionsByTenant(ctx context.Context, page, pageSize int) ([]sdk.Session, int, error)
+	GetSessionsByTenant(
+		ctx context.Context, page, pageSize int, opts ...sdk.SessionListOptions,
+	) ([]sdk.Session, int, error)
 }
 
 // NewCmdList builds `weknora session list`.
@@ -57,6 +59,12 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 			fopts.ResolveDefault(iostreams.IO.IsStdoutTTY())
+			// Validate static input before building the client so a bad
+			// --page-size/--limit returns input.invalid_argument (exit 5), not
+			// an auth error (exit 3).
+			if err := validateListOpts(opts); err != nil {
+				return err
+			}
 			cli, err := f.Client()
 			if err != nil {
 				return err
@@ -65,19 +73,22 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&opts.PageSize, "page-size", defaultPageSize, "Items per server batch (1..1000)")
-	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum results to return (1..10000)")
+	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum results to return — client-side cap; meta.has_more/total_count report the full size (1..10000)")
 	cmd.Flags().BoolVar(&opts.AllPages, "all-pages", false, "Walk all server pages until exhausted (or --limit hit)")
 	cmd.Flags().StringVar(&opts.Since, "since", "", "Only show sessions updated within `duration` (e.g. 7d, 24h, 30m)")
 	cmdutil.AddFormatFlag(cmd, sessionListFields...)
 	cmdutil.SetAgentHelp(cmd, cmdutil.AgentHelp{
 		UsedFor:  "List chat sessions for the active profile. Results come with meta.count; use --limit to cap, --all-pages to walk every server page, --since to filter by recency (e.g. 7d).",
 		Examples: []string{"weknora session list --format json", "weknora session list --all-pages --since 7d --format json"},
-		Output:   "envelope.data is an array of Session objects with id, title, updated_at; meta.count is the total returned",
+		Output:   "envelope.data is an array of Session objects with id, title, updated_at; meta.count is the returned count; meta.total_count is the server-side total before --since filtering; meta.has_more=true when --limit truncated",
 	})
 	return cmd
 }
 
-func runList(ctx context.Context, opts *ListOptions, fopts *cmdutil.FormatOptions, svc ListService) error {
+// validateListOpts checks --page-size / --limit. Called from RunE before the
+// client is built (so a bad value surfaces as exit 5, not an auth error) and at
+// runList's top for direct callers; idempotent.
+func validateListOpts(opts *ListOptions) error {
 	if opts.PageSize < 1 || opts.PageSize > maxPageSize {
 		return &cmdutil.Error{
 			Code:    cmdutil.CodeInputInvalidArgument,
@@ -90,6 +101,13 @@ func runList(ctx context.Context, opts *ListOptions, fopts *cmdutil.FormatOption
 			Message: fmt.Sprintf("--limit must be in 1..10000, got %d", opts.Limit),
 		}
 	}
+	return nil
+}
+
+func runList(ctx context.Context, opts *ListOptions, fopts *cmdutil.FormatOptions, svc ListService) error {
+	if err := validateListOpts(opts); err != nil {
+		return err
+	}
 	var since time.Duration
 	if opts.Since != "" {
 		d, err := parseSinceDuration(opts.Since)
@@ -99,47 +117,52 @@ func runList(ctx context.Context, opts *ListOptions, fopts *cmdutil.FormatOption
 		since = d
 	}
 
+	threshold := time.Now().Add(-since)
+	filterSince := func(items []sdk.Session) []sdk.Session {
+		if since <= 0 {
+			return items
+		}
+		filtered := items[:0]
+		for _, session := range items {
+			updated, err := time.Parse(time.RFC3339, session.UpdatedAt)
+			if err == nil && updated.After(threshold) {
+				filtered = append(filtered, session)
+			}
+		}
+		return filtered
+	}
+
 	var items []sdk.Session
+	var serverTotal int
 	if opts.AllPages {
 		accum := make([]sdk.Session, 0)
+		scanned := 0
 		for page := 1; ; page++ {
 			chunk, total, err := svc.GetSessionsByTenant(ctx, page, opts.PageSize)
 			if err != nil {
 				return cmdutil.WrapHTTP(err, "list sessions")
 			}
-			accum = append(accum, chunk...)
-			if opts.Limit > 0 && len(accum) >= opts.Limit {
-				accum = accum[:opts.Limit]
+			serverTotal = total
+			scanned += len(chunk)
+			accum = append(accum, filterSince(chunk)...)
+			if opts.Limit > 0 && len(accum) > opts.Limit {
 				break
 			}
-			if len(accum) >= total || len(chunk) == 0 {
+			if scanned >= total || len(chunk) == 0 {
 				break
 			}
 		}
 		items = accum
 	} else {
-		chunk, _, err := svc.GetSessionsByTenant(ctx, 1, opts.PageSize)
+		chunk, total, err := svc.GetSessionsByTenant(ctx, 1, opts.PageSize)
 		if err != nil {
 			return cmdutil.WrapHTTP(err, "list sessions")
 		}
-		items = chunk
+		serverTotal = total
+		items = filterSince(chunk)
 	}
 	if items == nil {
 		items = []sdk.Session{} // JSON [] not null
-	}
-	if since > 0 {
-		threshold := time.Now().Add(-since)
-		filtered := items[:0]
-		for _, s := range items {
-			t, err := time.Parse(time.RFC3339, s.UpdatedAt)
-			if err != nil {
-				continue // skip unparseable timestamps rather than guess
-			}
-			if t.After(threshold) {
-				filtered = append(filtered, s)
-			}
-		}
-		items = filtered
 	}
 	// --limit applies after --since so the cap reflects what the user sees.
 	truncated := false
@@ -149,7 +172,7 @@ func runList(ctx context.Context, opts *ListOptions, fopts *cmdutil.FormatOption
 	}
 
 	if fopts.WantsJSON() {
-		meta := &output.Meta{Count: len(items), HasMore: truncated}
+		meta := &output.Meta{Count: output.IntPtr(len(items)), HasMore: truncated, TotalCount: output.IntPtr(serverTotal)}
 		return fopts.Emit(iostreams.IO.Out, items, meta)
 	}
 

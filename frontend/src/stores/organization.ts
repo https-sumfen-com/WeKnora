@@ -1,19 +1,30 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type {
   Organization,
   OrganizationMember,
   SharedKnowledgeBase,
   SharedAgentInfo,
   OrganizationPreview,
-  ResourceCountsByOrg
+  ResourceCountsByOrg,
+  SearchableOrganizationItem,
+  UpdateOrganizationRequest,
+  ShareKnowledgeBaseRequest,
+  UpdateSharePermissionRequest,
+  InviteMemberRequest,
+  ReviewJoinRequestRequest,
+  RequestRoleUpgradeRequest,
+  ApiResponse,
+  KnowledgeBaseShare,
+  AgentShareResponse
 } from '@/api/organization'
 import {
   listMyOrganizations,
   createOrganization,
-  updateOrganization,
+  updateOrganization as updateOrganizationApi,
   deleteOrganization,
-  joinOrganization,
+  joinOrganization as joinOrganizationApi,
+  joinOrganizationById as joinOrganizationByIdApi,
   previewOrganization,
   leaveOrganization,
   generateInviteCode,
@@ -21,8 +32,26 @@ import {
   updateMemberRole,
   removeMember,
   listSharedKnowledgeBases,
-  listSharedAgents
+  listSharedAgents,
+  searchSearchableOrganizations,
+  shareKnowledgeBase as shareKnowledgeBaseApi,
+  removeShare as removeShareApi,
+  updateSharePermission as updateSharePermissionApi,
+  shareAgent as shareAgentApi,
+  removeAgentShare as removeAgentShareApi,
+  inviteMember as inviteMemberApi,
+  reviewJoinRequest as reviewJoinRequestApi,
+  requestRoleUpgrade as requestRoleUpgradeApi
 } from '@/api/organization'
+import { getCurrentLanguage } from '@/utils/request'
+import { createVersionedRequestCoordinator } from './versionedRequest'
+import { shouldForceLocalizedRefetch } from './localizedResourceCache'
+import {
+  applyOrganizationResourceDelta,
+  upsertById,
+  mergeById,
+  reviewMemberCountDelta
+} from './organizationState'
 
 export const useOrganizationStore = defineStore('organization', () => {
   // State
@@ -31,13 +60,24 @@ export const useOrganizationStore = defineStore('organization', () => {
   const currentMembers = ref<OrganizationMember[]>([])
   const sharedKnowledgeBases = ref<SharedKnowledgeBase[]>([])
   const sharedAgents = ref<SharedAgentInfo[]>([])
+  const searchableOrganizations = ref<SearchableOrganizationItem[]>([])
   const previewData = ref<OrganizationPreview | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   /** 各空间内知识库/智能体数量（由 GET /organizations 的 resource_counts 填充，供列表侧栏使用） */
   const resourceCounts = ref<ResourceCountsByOrg | null>(null)
-  /** 用于去重：同一时刻只允许一次 GET /organizations 请求 */
-  let fetchOrganizationsPromise: Promise<void> | null = null
+  // 组织 / 共享资源列表不设 TTL：每次 fetch 都发请求（并发共用同一个），
+  // 写操作后 `fetch({ force: true })` 排在飞行中的请求之后再拉一次。
+  // 输入联想的搜索结果例外，按查询串短期记忆，写操作时整体清空。
+  const SEARCHABLE_ORGANIZATION_TTL_MS = 5 * 60_000
+  /** 共享智能体含按请求语言本地化的内置名称；切换 UI 语言后快照随之失效 */
+  let sharedAgentsLoadedLocale = ''
+  let sharedAgentsInflightLocale = ''
+  let searchableOrganizationsQuery = ''
+  const searchableOrganizationCache = new Map<
+    string,
+    { data: SearchableOrganizationItem[]; loadedAt: number }
+  >()
 
   // Computed
   const myOrganizations = computed(() => organizations.value)
@@ -59,43 +99,96 @@ export const useOrganizationStore = defineStore('organization', () => {
 
   /**
    * Fetch all organizations the user belongs to.
-   * 去重：并发调用只发一次请求，共用同一 Promise。
+   * 并发去重，列表页与侧栏等多处共用。
    */
-  async function fetchOrganizations() {
-    if (fetchOrganizationsPromise) return fetchOrganizationsPromise
-    loading.value = true
-    error.value = null
-    fetchOrganizationsPromise = (async () => {
+  const organizationsRequest = createVersionedRequestCoordinator(
+    async () => {
+      loading.value = true
+      error.value = null
       try {
-        const response = await listMyOrganizations()
-        if (response.success && response.data) {
-          organizations.value = response.data.organizations
-          resourceCounts.value = response.data.resource_counts ?? null
-        } else {
-          resourceCounts.value = null
-          error.value = response.message || 'Failed to fetch organizations'
-        }
-      } catch (e: any) {
-        error.value = e.message || 'Failed to fetch organizations'
-        resourceCounts.value = null
+        return await listMyOrganizations()
       } finally {
         loading.value = false
-        fetchOrganizationsPromise = null
       }
-    })()
-    return fetchOrganizationsPromise
+    },
+    (response) => {
+      if (response.success && response.data) {
+        organizations.value = response.data.organizations
+        resourceCounts.value = response.data.resource_counts ?? null
+      } else {
+        resourceCounts.value = null
+        error.value = response.message || 'Failed to fetch organizations'
+      }
+    }
+  )
+
+  async function fetchOrganizations(options?: { force?: boolean }) {
+    return organizationsRequest.fetch(options?.force ?? false)
+  }
+
+  function patchOrganization(id: string, patch: Partial<Organization>) {
+    organizationsRequest.invalidate()
+    organizations.value = organizations.value.map(org =>
+      org.id === id ? { ...org, ...patch } : org
+    )
+    if (currentOrganization.value?.id === id) {
+      currentOrganization.value = { ...currentOrganization.value, ...patch }
+    }
+  }
+
+  function upsertOrganization(organization: Organization) {
+    organizationsRequest.invalidate()
+    organizations.value = upsertById(organizations.value, organization)
+    if (currentOrganization.value?.id === organization.id) {
+      currentOrganization.value = organization
+    }
+  }
+
+  /**
+   * Merge a detail payload (which may omit list-only aggregate fields) onto the
+   * existing card instead of replacing it, so badges like share_count survive.
+   */
+  function mergeOrganizationDetail(organization: Organization) {
+    organizationsRequest.invalidate()
+    const next = mergeById(organizations.value, organization)
+    organizations.value = next
+    currentOrganization.value =
+      next.find(org => org.id === organization.id) ?? organization
+  }
+
+  function adjustOrganizationResourceCount(
+    organizationId: string,
+    resource: 'knowledge_bases' | 'agents',
+    delta: number
+  ) {
+    organizationsRequest.invalidate()
+    const result = applyOrganizationResourceDelta(
+      organizations.value,
+      resourceCounts.value,
+      organizationId,
+      resource,
+      delta
+    )
+    organizations.value = result.organizations
+    resourceCounts.value = result.resourceCounts
+    if (currentOrganization.value?.id === organizationId) {
+      currentOrganization.value =
+        result.organizations.find(org => org.id === organizationId) ?? currentOrganization.value
+    }
   }
 
   /**
    * Create a new organization
    */
-  async function create(name: string, description?: string) {
+  async function create(name: string, description?: string, avatar?: string) {
     loading.value = true
     error.value = null
     try {
-      const response = await createOrganization({ name, description })
+      const response = await createOrganization({ name, description, avatar })
       if (response.success && response.data) {
-        organizations.value.unshift(response.data)
+        upsertOrganization(response.data)
+        // 创建接口不返回 resource_counts 等聚合字段，强刷一次列表补齐。
+        void fetchOrganizations({ force: true })
         return response.data
       } else {
         error.value = response.message || 'Failed to create organization'
@@ -112,19 +205,14 @@ export const useOrganizationStore = defineStore('organization', () => {
   /**
    * Update an organization
    */
-  async function update(id: string, name?: string, description?: string) {
+  async function updateOrganization(id: string, updates: UpdateOrganizationRequest) {
     loading.value = true
     error.value = null
     try {
-      const response = await updateOrganization(id, { name, description })
+      const response = await updateOrganizationApi(id, updates)
       if (response.success && response.data) {
-        const index = organizations.value.findIndex(o => o.id === id)
-        if (index !== -1) {
-          organizations.value[index] = response.data
-        }
-        if (currentOrganization.value?.id === id) {
-          currentOrganization.value = response.data
-        }
+        upsertOrganization(response.data)
+        void fetchOrganizations({ force: true })
         return response.data
       } else {
         error.value = response.message || 'Failed to update organization'
@@ -138,6 +226,10 @@ export const useOrganizationStore = defineStore('organization', () => {
     }
   }
 
+  async function update(id: string, name?: string, description?: string) {
+    return updateOrganization(id, { name, description })
+  }
+
   /**
    * Delete an organization
    */
@@ -147,6 +239,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     try {
       const response = await deleteOrganization(id)
       if (response.success) {
+        organizationsRequest.invalidate()
         organizations.value = organizations.value.filter(o => o.id !== id)
         if (currentOrganization.value?.id === id) {
           currentOrganization.value = null
@@ -195,13 +288,11 @@ export const useOrganizationStore = defineStore('organization', () => {
     loading.value = true
     error.value = null
     try {
-      const response = await joinOrganization({ invite_code: inviteCode })
+      const response = await joinOrganizationApi({ invite_code: inviteCode })
       if (response.success && response.data) {
-        // Check if already in list
-        const exists = organizations.value.some(o => o.id === response.data!.id)
-        if (!exists) {
-          organizations.value.unshift(response.data)
-        }
+        upsertOrganization(response.data)
+        invalidateSearchableOrganizations(response.data.id)
+        void fetchOrganizations({ force: true })
         return response.data
       } else {
         error.value = response.message || 'Failed to join organization'
@@ -224,6 +315,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     try {
       const response = await leaveOrganization(id)
       if (response.success) {
+        organizationsRequest.invalidate()
         organizations.value = organizations.value.filter(o => o.id !== id)
         if (currentOrganization.value?.id === id) {
           currentOrganization.value = null
@@ -250,13 +342,8 @@ export const useOrganizationStore = defineStore('organization', () => {
     try {
       const response = await generateInviteCode(id)
       if (response.success && response.data) {
-        const org = organizations.value.find(o => o.id === id)
-        if (org) {
-          org.invite_code = response.data.invite_code
-        }
-        if (currentOrganization.value?.id === id) {
-          currentOrganization.value.invite_code = response.data.invite_code
-        }
+        patchOrganization(id, { invite_code: response.data.invite_code })
+        void fetchOrganizations({ force: true })
         return response.data.invite_code
       } else {
         error.value = response.message || 'Failed to generate invite code'
@@ -329,6 +416,11 @@ export const useOrganizationStore = defineStore('organization', () => {
       const response = await removeMember(orgId, tenantId)
       if (response.success) {
         currentMembers.value = currentMembers.value.filter(m => m.tenant_id !== tenantId)
+        const organization = organizations.value.find(org => org.id === orgId)
+        patchOrganization(orgId, {
+          member_count: Math.max(0, (organization?.member_count ?? 0) - 1)
+        })
+        void fetchOrganizations({ force: true })
         return true
       } else {
         error.value = response.message || 'Failed to remove member'
@@ -343,50 +435,314 @@ export const useOrganizationStore = defineStore('organization', () => {
   }
 
   /**
-   * Fetch shared knowledge bases
+   * Fetch shared knowledge bases.
+   * 并发去重，避免对话页等多处同时重复请求。
    */
-  async function fetchSharedKnowledgeBases() {
-    loading.value = true
-    error.value = null
-    try {
-      const response = await listSharedKnowledgeBases()
+  const sharedKnowledgeBasesRequest = createVersionedRequestCoordinator(
+    async () => {
+      loading.value = true
+      error.value = null
+      try {
+        return await listSharedKnowledgeBases()
+      } finally {
+        loading.value = false
+      }
+    },
+    (response) => {
       if (response.success && response.data) {
-        // Filter out shares whose knowledge_base was deleted (null)
         sharedKnowledgeBases.value = response.data.filter(s => s.knowledge_base != null)
-        return sharedKnowledgeBases.value
       } else {
         error.value = response.message || 'Failed to fetch shared knowledge bases'
-        return []
       }
-    } catch (e: any) {
-      error.value = e.message || 'Failed to fetch shared knowledge bases'
-      return []
-    } finally {
-      loading.value = false
     }
+  )
+
+  async function fetchSharedKnowledgeBases(options?: { force?: boolean }) {
+    await sharedKnowledgeBasesRequest.fetch(options?.force ?? false)
+    return sharedKnowledgeBases.value
   }
 
   /**
-   * Fetch shared agents (shared to me through organizations)
+   * Fetch shared agents (shared to me through organizations).
+   * 并发去重；快照只对拉取时的 UI 语言有效。
    */
-  async function fetchSharedAgents() {
-    try {
+  const sharedAgentsRequest = createVersionedRequestCoordinator(
+    async () => {
+      const locale = getCurrentLanguage()
+      sharedAgentsInflightLocale = locale
       const response = await listSharedAgents()
+      return { response, locale }
+    },
+    ({ response, locale }) => {
       if (response.success && response.data) {
         sharedAgents.value = response.data.filter(s => s.agent != null)
-        return sharedAgents.value
+        sharedAgentsLoadedLocale = locale
       }
-      return []
-    } catch (e: any) {
-      return []
     }
+  )
+
+  watch(
+    () => getCurrentLanguage(),
+    (locale) => {
+      if (sharedAgentsLoadedLocale && sharedAgentsLoadedLocale !== locale) {
+        sharedAgentsRequest.invalidate()
+        sharedAgentsLoadedLocale = ''
+        sharedAgentsInflightLocale = ''
+      }
+    },
+  )
+
+  async function fetchSharedAgents(options?: { force?: boolean }) {
+    const locale = getCurrentLanguage()
+    const force = options?.force ?? false
+    // 飞行中的请求是用另一种语言发起的：不能复用它，排在它后面再发一次。
+    const mustForce =
+      force ||
+      shouldForceLocalizedRefetch(
+        sharedAgentsRequest.hasInFlightRequest(),
+        sharedAgentsInflightLocale,
+        locale,
+      )
+    await sharedAgentsRequest.fetch(mustForce)
+    return sharedAgents.value
+  }
+
+  interface InvalidateOrganizationDataOptions {
+    organizations?: boolean
+    sharedKnowledgeBases?: boolean
+    sharedAgents?: boolean
+    searchableOrganizations?: boolean
+    excludeSearchableOrganizationId?: string
+  }
+
+  function invalidateSearchableOrganizations(organizationId?: string) {
+    searchableOrganizationCache.clear()
+    if (organizationId) {
+      searchableOrganizations.value = searchableOrganizations.value.filter(
+        organization => organization.id !== organizationId
+      )
+    }
+  }
+
+  function invalidateOrganizationData(options: InvalidateOrganizationDataOptions) {
+    if (options.organizations) {
+      organizationsRequest.invalidate()
+    }
+    if (options.sharedKnowledgeBases) {
+      sharedKnowledgeBasesRequest.invalidate()
+    }
+    if (options.sharedAgents) {
+      sharedAgentsRequest.invalidate()
+      sharedAgentsLoadedLocale = ''
+      sharedAgentsInflightLocale = ''
+    }
+    if (options.searchableOrganizations) {
+      invalidateSearchableOrganizations(options.excludeSearchableOrganizationId)
+    }
+  }
+
+  async function fetchSearchableOrganizations(
+    query: string,
+    options?: { force?: boolean; limit?: number }
+  ) {
+    const normalizedQuery = query.trim()
+    searchableOrganizationsQuery = normalizedQuery
+    const cached = searchableOrganizationCache.get(normalizedQuery)
+    if (
+      !options?.force &&
+      cached &&
+      Date.now() - cached.loadedAt < SEARCHABLE_ORGANIZATION_TTL_MS
+    ) {
+      searchableOrganizations.value = cached.data
+      return cached.data
+    }
+
+    const response = await searchSearchableOrganizations(normalizedQuery, options?.limit ?? 20)
+    if (response.success && response.data) {
+      const data = response.data.data.filter(organization => !organization.is_already_member)
+      searchableOrganizationCache.set(normalizedQuery, { data, loadedAt: Date.now() })
+      if (searchableOrganizationsQuery === normalizedQuery) {
+        searchableOrganizations.value = data
+      }
+      return data
+    }
+    if (searchableOrganizationsQuery === normalizedQuery) {
+      searchableOrganizations.value = []
+    }
+    return []
+  }
+
+  function clearSearchableOrganizations() {
+    searchableOrganizationsQuery = ''
+    searchableOrganizations.value = []
+  }
+
+  async function joinById(
+    organizationId: string,
+    message?: string,
+    role?: 'admin' | 'editor' | 'viewer',
+    options?: { requiresApproval?: boolean }
+  ) {
+    const response = await joinOrganizationByIdApi(organizationId, message, role)
+    if (response.success) {
+      invalidateOrganizationData({
+        searchableOrganizations: true,
+        excludeSearchableOrganizationId: organizationId
+      })
+      if (!options?.requiresApproval && response.data) {
+        upsertOrganization(response.data)
+        void fetchOrganizations({ force: true })
+      }
+    }
+    return response
+  }
+
+  async function shareKnowledgeBase(
+    knowledgeBaseId: string,
+    request: ShareKnowledgeBaseRequest
+  ): Promise<ApiResponse<KnowledgeBaseShare>> {
+    const response = await shareKnowledgeBaseApi(knowledgeBaseId, request)
+    if (response.success) {
+      adjustOrganizationResourceCount(request.organization_id, 'knowledge_bases', 1)
+      invalidateOrganizationData({ sharedKnowledgeBases: true })
+      void Promise.all([
+        fetchOrganizations({ force: true }),
+        fetchSharedKnowledgeBases({ force: true })
+      ])
+    }
+    return response
+  }
+
+  async function unshareKnowledgeBase(
+    knowledgeBaseId: string,
+    shareId: string,
+    organizationId: string
+  ): Promise<ApiResponse<void>> {
+    const response = await removeShareApi(knowledgeBaseId, shareId)
+    if (response.success) {
+      adjustOrganizationResourceCount(organizationId, 'knowledge_bases', -1)
+      invalidateOrganizationData({ sharedKnowledgeBases: true })
+      void Promise.all([
+        fetchOrganizations({ force: true }),
+        fetchSharedKnowledgeBases({ force: true })
+      ])
+    }
+    return response
+  }
+
+  async function changeKnowledgeBaseSharePermission(
+    knowledgeBaseId: string,
+    shareId: string,
+    request: UpdateSharePermissionRequest
+  ): Promise<ApiResponse<void>> {
+    const response = await updateSharePermissionApi(knowledgeBaseId, shareId, request)
+    if (response.success) {
+      invalidateOrganizationData({ sharedKnowledgeBases: true })
+      void fetchSharedKnowledgeBases({ force: true })
+    }
+    return response
+  }
+
+  async function shareAgent(
+    agentId: string,
+    request: ShareKnowledgeBaseRequest
+  ): Promise<ApiResponse<AgentShareResponse>> {
+    const response = await shareAgentApi(agentId, request)
+    if (response.success) {
+      adjustOrganizationResourceCount(request.organization_id, 'agents', 1)
+      invalidateOrganizationData({ sharedAgents: true, sharedKnowledgeBases: true })
+      void Promise.all([
+        fetchOrganizations({ force: true }),
+        fetchSharedAgents({ force: true }),
+        fetchSharedKnowledgeBases({ force: true })
+      ])
+    }
+    return response
+  }
+
+  async function unshareAgent(
+    agentId: string,
+    shareId: string,
+    organizationId: string
+  ): Promise<ApiResponse<void>> {
+    const response = await removeAgentShareApi(agentId, shareId)
+    if (response.success) {
+      adjustOrganizationResourceCount(organizationId, 'agents', -1)
+      invalidateOrganizationData({ sharedAgents: true, sharedKnowledgeBases: true })
+      void Promise.all([
+        fetchOrganizations({ force: true }),
+        fetchSharedAgents({ force: true }),
+        fetchSharedKnowledgeBases({ force: true })
+      ])
+    }
+    return response
+  }
+
+  async function inviteOrganizationMember(
+    organizationId: string,
+    request: InviteMemberRequest
+  ): Promise<ApiResponse<void>> {
+    const response = await inviteMemberApi(organizationId, request)
+    if (response.success) {
+      const organization = organizations.value.find(org => org.id === organizationId)
+      patchOrganization(organizationId, {
+        member_count: (organization?.member_count ?? 0) + 1
+      })
+      void fetchOrganizations({ force: true })
+    }
+    return response
+  }
+
+  async function reviewOrganizationJoinRequest(
+    organizationId: string,
+    requestId: string,
+    request: ReviewJoinRequestRequest,
+    options?: { requestType?: 'join' | 'upgrade' }
+  ): Promise<ApiResponse<void>> {
+    const response = await reviewJoinRequestApi(organizationId, requestId, request)
+    if (response.success) {
+      const organization = organizations.value.find(org => org.id === organizationId)
+      patchOrganization(organizationId, {
+        member_count:
+          (organization?.member_count ?? 0) +
+          reviewMemberCountDelta(request.approved, options?.requestType),
+        pending_join_request_count: Math.max(
+          0,
+          (organization?.pending_join_request_count ?? 0) - 1
+        )
+      })
+      void fetchOrganizations({ force: true })
+    }
+    return response
+  }
+
+  async function requestOrganizationRoleUpgrade(
+    organizationId: string,
+    request: RequestRoleUpgradeRequest
+  ) {
+    const response = await requestRoleUpgradeApi(organizationId, request)
+    if (response.success) {
+      patchOrganization(organizationId, { has_pending_upgrade: true })
+      void fetchOrganizations({ force: true })
+    }
+    return response
   }
 
   /**
    * Set current organization for detail view
    */
   function setCurrentOrganization(org: Organization | null) {
-    currentOrganization.value = org
+    if (org) {
+      mergeOrganizationDetail(org)
+      void fetchOrganizations({ force: true })
+    } else {
+      currentOrganization.value = null
+    }
+  }
+
+  function clearCurrentOrganizationContext() {
+    currentOrganization.value = null
+    currentMembers.value = []
   }
 
   /**
@@ -427,9 +783,17 @@ export const useOrganizationStore = defineStore('organization', () => {
     currentMembers.value = []
     sharedKnowledgeBases.value = []
     sharedAgents.value = []
+    searchableOrganizations.value = []
     resourceCounts.value = null
     previewData.value = null
     error.value = null
+    sharedAgentsLoadedLocale = ''
+    sharedAgentsInflightLocale = ''
+    searchableOrganizationsQuery = ''
+    searchableOrganizationCache.clear()
+    organizationsRequest.invalidate()
+    sharedKnowledgeBasesRequest.invalidate()
+    sharedAgentsRequest.invalidate()
   }
 
   return {
@@ -439,6 +803,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     currentMembers,
     sharedKnowledgeBases,
     sharedAgents,
+    searchableOrganizations,
     resourceCounts,
     previewData,
     loading,
@@ -453,6 +818,7 @@ export const useOrganizationStore = defineStore('organization', () => {
     // Actions
     fetchOrganizations,
     create,
+    updateOrganization,
     update,
     remove,
     preview,
@@ -464,7 +830,20 @@ export const useOrganizationStore = defineStore('organization', () => {
     kickMember,
     fetchSharedKnowledgeBases,
     fetchSharedAgents,
+    fetchSearchableOrganizations,
+    clearSearchableOrganizations,
+    invalidateOrganizationData,
+    joinById,
+    shareKnowledgeBase,
+    unshareKnowledgeBase,
+    changeKnowledgeBaseSharePermission,
+    shareAgent,
+    unshareAgent,
+    inviteOrganizationMember,
+    reviewOrganizationJoinRequest,
+    requestOrganizationRoleUpgrade,
     setCurrentOrganization,
+    clearCurrentOrganizationContext,
     getKBPermission,
     canEditKB,
     canManageKB,

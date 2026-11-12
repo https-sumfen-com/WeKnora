@@ -38,10 +38,14 @@ func Split(text string, cfg SplitterConfig) []Chunk {
 	cfg = ensureDefaults(cfg)
 	chain, profile := resolveChainWithProfile(text, cfg)
 	totalChars := len([]rune(text))
+	budget := tokenRuneBudget(cfg)
 
 	var lastOut []Chunk
 	for i, tier := range chain {
 		out := runTier(tier, text, cfg, profile)
+		if budget > 0 {
+			out = enforceChunkBudget(out, budget)
+		}
 		if v := ValidateChunks(out, totalChars, cfg.ChunkSize); v.OK {
 			return out
 		} else {
@@ -94,6 +98,7 @@ func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostic
 	}
 	cfg = ensureDefaults(cfg)
 	chain, profile := resolveChainWithProfile(text, cfg)
+	budget := tokenRuneBudget(cfg)
 	diag.TierChain = chain
 	diag.Profile = profile
 	totalChars := len([]rune(text))
@@ -102,6 +107,9 @@ func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostic
 	var lastTier StrategyTier
 	for i, tier := range chain {
 		out := runTier(tier, text, cfg, profile)
+		if budget > 0 {
+			out = enforceChunkBudget(out, budget)
+		}
 		v := ValidateChunks(out, totalChars, cfg.ChunkSize)
 		if v.OK {
 			diag.SelectedTier = tier
@@ -133,22 +141,47 @@ func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostic
 // is bounded by O(sum(parent_size)) ≈ O(N) total, which is the same
 // order as the original parent profiling pass.
 func SplitParentChild(text string, parentCfg, childCfg SplitterConfig) ParentChildResult {
-	if text == "" {
-		return ParentChildResult{}
-	}
+	result, _ := splitParentChild(text, parentCfg, childCfg, false)
+	return result
+}
+
+// SplitParentChildWithDiagnostics is the diagnostics-aware form of
+// SplitParentChild. The result is identical to SplitParentChild; diagnostics
+// describe the strategy selected for the parent split over the full document.
+// It is intended for debug surfaces rather than the ingestion hot path.
+func SplitParentChildWithDiagnostics(text string, parentCfg, childCfg SplitterConfig) (ParentChildResult, *Diagnostics) {
+	return splitParentChild(text, parentCfg, childCfg, true)
+}
+
+func splitParentChild(text string, parentCfg, childCfg SplitterConfig, withDiagnostics bool) (ParentChildResult, *Diagnostics) {
 	parentCfg = ensureDefaults(parentCfg)
 	childCfg = ensureDefaults(childCfg)
 
-	parents := Split(text, parentCfg)
+	var (
+		parents []Chunk
+		diag    *Diagnostics
+	)
+	if withDiagnostics {
+		parents, diag = SplitWithDiagnostics(text, parentCfg)
+	} else {
+		parents = Split(text, parentCfg)
+	}
 	if len(parents) == 0 {
-		return ParentChildResult{}
+		return ParentChildResult{}, diag
 	}
 
 	var newParents []Chunk
 	var children []ChildChunk
 	childSeq := 0
+	budget := tokenRuneBudget(childCfg)
 	for _, parent := range parents {
-		subs := Split(parent.Content, childCfg)
+		subs := mapChildrenToSource(parent, Split(parent.Content, childCfg))
+		for i := range subs {
+			subs[i].ContextHeader = mergeBreadcrumbs(parent.ContextHeader, subs[i].ContextHeader)
+		}
+		if budget > 0 {
+			subs = enforceChunkBudget(subs, budget)
+		}
 
 		parentIndex := -1
 		if len(subs) > 1 || (len(subs) == 1 && subs[0].Content != parent.Content) {
@@ -157,14 +190,80 @@ func SplitParentChild(text string, parentCfg, childCfg SplitterConfig) ParentChi
 		}
 		for _, sub := range subs {
 			sub.Seq = childSeq
-			sub.Start += parent.Start
-			sub.End += parent.Start
-			sub.ContextHeader = mergeBreadcrumbs(parent.ContextHeader, sub.ContextHeader)
 			children = append(children, ChildChunk{Chunk: sub, ParentIndex: parentIndex})
 			childSeq++
 		}
 	}
-	return ParentChildResult{Parents: newParents, Children: children}
+	return ParentChildResult{Parents: newParents, Children: children}, diag
+}
+
+// defaultChunkSizeAndOverlap fills unset size/overlap fields.
+//
+// An empty config (both fields still at Go zero values) still receives the
+// package defaults. When ChunkSize is already set, ChunkOverlap == 0 is kept
+// as an explicit "no overlap" request — matching the wiki-only KB preset and
+// the DefaultChunkOverlap docs ("Use 0 for strictly atomic data").
+func defaultChunkSizeAndOverlap(cfg SplitterConfig) SplitterConfig {
+	sizeUnset := cfg.ChunkSize <= 0
+	if sizeUnset {
+		cfg.ChunkSize = DefaultChunkSize
+	}
+	if cfg.ChunkOverlap < 0 || (cfg.ChunkOverlap == 0 && sizeUnset) {
+		cfg.ChunkOverlap = DefaultChunkOverlap
+	}
+	return cfg
+}
+
+// NormalizeSplitterConfig applies the same base splitter defaults used by
+// knowledge ingestion before parent-child derivation or single-pass splitting.
+func NormalizeSplitterConfig(cfg SplitterConfig) SplitterConfig {
+	cfg = defaultChunkSizeAndOverlap(cfg)
+	if len(cfg.Separators) == 0 {
+		cfg.Separators = []string{"\n\n", "\n", "。"}
+	}
+	return cfg
+}
+
+// NormalizeLineEndings canonicalizes text before chunking. Browser textareas
+// normalize pasted CRLF text to LF, while uploaded files preserve their
+// original line endings; without this, the same document produces different
+// character counts and chunk boundaries.
+func NormalizeLineEndings(text string) string {
+	if !strings.Contains(text, "\r") {
+		return text
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
+}
+
+// DeriveParentChildConfigs produces the exact parent and child splitter
+// configurations used by knowledge ingestion. Keeping this here lets preview
+// and ingestion remain in lockstep as the parent-child defaults evolve.
+// Languages are copied to both levels so parent and child splitters use the same boundary rules.
+// TokenLimit is copied only to children because parents keep the configured context window.
+func DeriveParentChildConfigs(base SplitterConfig, parentSize, childSize int) (parent, child SplitterConfig) {
+	if parentSize <= 0 {
+		parentSize = 4096
+	}
+	if childSize <= 0 {
+		childSize = 384
+	}
+	parent = SplitterConfig{
+		ChunkSize:    parentSize,
+		ChunkOverlap: base.ChunkOverlap,
+		Separators:   base.Separators,
+		Strategy:     base.Strategy,
+		Languages:    base.Languages,
+	}
+	child = SplitterConfig{
+		ChunkSize:    childSize,
+		ChunkOverlap: childSize / 5,
+		Separators:   base.Separators,
+		Strategy:     base.Strategy,
+		TokenLimit:   base.TokenLimit,
+		Languages:    base.Languages,
+	}
+	return
 }
 
 // mergeBreadcrumbs combines the parent and child heading breadcrumbs into a
@@ -239,29 +338,19 @@ func runTier(tier StrategyTier, text string, cfg SplitterConfig, profile *DocPro
 }
 
 // ensureDefaults fills in zero-value config fields with sane defaults.
-// Mirrors buildSplitterConfig in internal/application/service/knowledge.go
-// so direct callers of this package get the same numbers.
+// Size/overlap defaulting is shared with NormalizeSplitterConfig via
+// defaultChunkSizeAndOverlap so service callers and direct callers stay aligned.
 //
 // When cfg.TokenLimit is set, ChunkSize is clamped to the character budget
 // that fits within that token limit (with a 10% safety factor). This makes
 // chunks safe for embedding APIs that have hard token caps.
 func ensureDefaults(cfg SplitterConfig) SplitterConfig {
-	if cfg.ChunkSize <= 0 {
-		cfg.ChunkSize = DefaultChunkSize
-	}
-	if cfg.ChunkOverlap <= 0 {
-		cfg.ChunkOverlap = DefaultChunkOverlap
-	}
+	cfg = defaultChunkSizeAndOverlap(cfg)
 	if len(cfg.Separators) == 0 {
 		cfg.Separators = []string{"\n\n", "\n", "。"}
 	}
 	if cfg.TokenLimit > 0 {
-		lang := LangMixed
-		if len(cfg.Languages) > 0 {
-			lang = cfg.Languages[0]
-		}
-		charBudget := CharsForTokenLimit(cfg.TokenLimit, lang)
-		if charBudget > 0 && (cfg.ChunkSize == 0 || charBudget < cfg.ChunkSize) {
+		if charBudget := tokenRuneBudget(cfg); charBudget > 0 && charBudget < cfg.ChunkSize {
 			cfg.ChunkSize = charBudget
 		}
 	}

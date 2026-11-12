@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/Tencent/WeKnora/internal/common"
 	"github.com/Tencent/WeKnora/internal/logger"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 )
 
 // Stream Load 相关常量。
@@ -19,12 +22,37 @@ const (
 	// 主要目的是控制单次 HTTP 请求的尾延迟，超过则自动拆批。
 	streamLoadMaxBatchBytes = 1 << 20 // 1 MiB
 
+	// maxStreamLoadResponseBytes 是 Stream Load 结果体的解析上限。
+	//
+	// Doris 正常只回几百字节控制 JSON（TxnId/Label/Status/计数），即便
+	// "Publish Timeout" 也只是同量级。1 MiB 远高于合法响应，同时避免一个
+	// 行为异常的 FE/BE（或被代理改写的响应）让进程按对方意愿分配内存。
+	maxStreamLoadResponseBytes = 1 << 20
+
+	// maxStreamLoadErrorPreviewBytes 限制失败响应被回显进错误与日志的字节数。
+	//
+	// 失败体来自对端，内容不可控；整段拼进 error 会被调用方记入日志，
+	// 因此只保留预览，并按 rune 边界收敛（common.TruncateUTF8Bytes）。
+	maxStreamLoadErrorPreviewBytes = 4 << 10
+
 	// HTTP 头 Authorization 用 Basic auth；Stream Load 也支持 token，
 	// 这里走最常用的用户名/密码方案与 MySQL 协议保持一致。
 	headerAuthorization = "Authorization"
 	headerExpect        = "Expect"
 	headerContentType   = "Content-Type"
 )
+
+// readStreamLoadResponse 读取成功的 Stream Load 结果体，超过上限即拒绝。
+func readStreamLoadResponse(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxStreamLoadResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read stream load response: %w", err)
+	}
+	if len(data) > maxStreamLoadResponseBytes {
+		return nil, fmt.Errorf("stream load response exceeds %d bytes", maxStreamLoadResponseBytes)
+	}
+	return data, nil
+}
 
 // streamLoadResponse 是 Doris FE/BE 返回的 Stream Load 结果体。
 //
@@ -52,7 +80,51 @@ type streamLoadResponse struct {
 // streamLoadURL 拼装某张表的 Stream Load HTTP 端点。
 func (r *dorisRepository) streamLoadURL(table string) string {
 	return fmt.Sprintf("%s/api/%s/%s/_stream_load",
-		r.feHTTPBase, r.database, table)
+		r.feHTTPBase, url.PathEscape(r.database), url.PathEscape(table))
+}
+
+// newDorisStreamLoadHTTPClient protects both the initial FE request and every
+// FE -> BE redirect at connection time. Doris requires Basic auth to survive
+// the 307 redirect, so redirect targets on another host must be explicitly
+// trusted through the SSRF whitelist before credentials are forwarded.
+func newDorisStreamLoadHTTPClient() *http.Client {
+	cfg := secutils.DefaultSSRFSafeHTTPClientConfig()
+	// Stream Load calls carry their own context deadline. Preserve the previous
+	// client behaviour instead of imposing the generic 30-second HTTP timeout.
+	cfg.Timeout = 0
+
+	client := secutils.NewSSRFSafeHTTPClient(cfg)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= cfg.MaxRedirects {
+			return fmt.Errorf("stopped after %d redirects", cfg.MaxRedirects)
+		}
+		if len(via) == 0 {
+			return nil
+		}
+
+		// Stream Load deliberately replays PUT bodies to a BE. Keep this
+		// exception local to Doris; generic clients must not replay requests
+		// across origins. Every cross-origin destination must be trusted.
+		source := via[0].URL
+		sameOrigin := strings.EqualFold(source.Scheme, req.URL.Scheme) &&
+			strings.EqualFold(source.Host, req.URL.Host)
+		if !sameOrigin && !secutils.IsSSRFWhitelisted(req.URL.Hostname()) {
+			return fmt.Errorf("%w: stream load target host %q is not trusted to receive credentials",
+				secutils.ErrSSRFRedirectBlocked, req.URL.Hostname())
+		}
+		if strings.EqualFold(source.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+			return fmt.Errorf("%w: stream load HTTPS downgrade is forbidden", secutils.ErrSSRFRedirectBlocked)
+		}
+		if err := secutils.ValidateURLForSSRF(req.URL.String()); err != nil {
+			return fmt.Errorf("%w: %w", secutils.ErrSSRFRedirectBlocked, err)
+		}
+
+		// The shared transport still validates each URL and connection. Preserve
+		// load options and restore Basic auth only after checking the destination.
+		req.Header.Set(headerAuthorization, via[0].Header.Get(headerAuthorization))
+		return nil
+	}
+	return client
 }
 
 // partialUpdateRows 把若干行通过 Stream Load 的 partial update 模式写回目标表。
@@ -96,6 +168,12 @@ func (r *dorisRepository) streamLoadOnce(ctx context.Context,
 	}
 
 	url := r.streamLoadURL(table)
+	// Validate at the final outbound boundary as well as when user-supplied
+	// vector-store configuration is created. This covers stored/env configs and
+	// keeps the tainted value from reaching http.Client.Do unchecked.
+	if err := secutils.ValidateURLForSSRF(url); err != nil {
+		return fmt.Errorf("stream load URL blocked by SSRF validation: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build stream load request: %w", err)
@@ -124,17 +202,21 @@ func (r *dorisRepository) streamLoadOnce(ctx context.Context,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read stream load response: %w", err)
-	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("stream load HTTP %d: %s", resp.StatusCode, string(respBody))
+		preview, _ := io.ReadAll(io.LimitReader(resp.Body, maxStreamLoadErrorPreviewBytes+1))
+		return fmt.Errorf("stream load HTTP %d: %s", resp.StatusCode,
+			common.TruncateUTF8Bytes(string(preview), maxStreamLoadErrorPreviewBytes))
+	}
+
+	respBody, err := readStreamLoadResponse(resp.Body)
+	if err != nil {
+		return err
 	}
 
 	var result streamLoadResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return fmt.Errorf("decode stream load response: %w (raw=%s)", err, string(respBody))
+		return fmt.Errorf("decode stream load response: %w (raw=%s)", err,
+			common.TruncateUTF8Bytes(string(respBody), maxStreamLoadErrorPreviewBytes))
 	}
 
 	switch result.Status {

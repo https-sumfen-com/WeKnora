@@ -5,37 +5,44 @@
       <div class="wiki-graph">
         <div ref="graphRef" class="wiki-graph-canvas"></div>
 
+        <div v-if="graphReady" class="graph-navigation-hint">
+          {{ $t('knowledgeEditor.wikiBrowser.graphNavigationHint') }}
+        </div>
+
+        <div v-if="graphReady && graphFocusGroup" class="graph-focus-bar"
+          :class="{ 'focus-bar-shifted': graphDrawerVisible }">
+          <t-dropdown v-if="graphGroupMenu.length" :options="graphGroupMenu" trigger="click" placement="top"
+            attach="body" :max-height="320" @click="(item: any) => focusGraphGroup(String(item.value))">
+            <button type="button" class="graph-focus-name" :title="$t('knowledgeEditor.wikiBrowser.focusGroupSwitch')">
+              <span>{{ $t('knowledgeEditor.wikiBrowser.focusGroupViewing', { name: graphFocusGroup.name }) }}</span>
+              <t-icon name="chevron-up" />
+            </button>
+          </t-dropdown>
+          <span v-else class="graph-focus-name" :title="graphFocusGroup.name">
+            {{ $t('knowledgeEditor.wikiBrowser.focusGroupViewing', { name: graphFocusGroup.name }) }}
+          </span>
+          <button type="button" class="graph-focus-back" @click="exitGraphFocus">
+            <t-icon name="rollback" />
+            <span>{{ $t('knowledgeEditor.wikiBrowser.focusGroupBack') }}</span>
+            <kbd>Esc</kbd>
+          </button>
+        </div>
+
         <!-- Graph Search Overlay -->
-        <div v-if="graphReady" class="wiki-graph-search-container">
+        <div v-if="graphControlsVisible" class="wiki-graph-search-container">
           <div class="wiki-graph-search-row">
             <div class="wiki-graph-search">
-              <t-select
-                v-model="graphSearchValue"
-                filterable
-                :options="graphSearchEffectiveOptions"
-                :loading="graphSearchLoading"
-                :on-search="handleGraphRemoteSearch"
-                :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
-                @change="handleGraphSearchSelect"
-                @enter="handleGraphSearchEnter"
-                :popup-props="{ zIndex: 100 }"
-                class="graph-search-select"
-              >
+              <t-select v-model="graphSearchValue" filterable :options="graphSearchEffectiveOptions"
+                :loading="graphSearchLoading" :on-search="handleGraphRemoteSearch"
+                :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')" @change="handleGraphSearchSelect"
+                @enter="handleGraphSearchEnter" :popup-props="{ zIndex: 100 }" class="graph-search-select">
                 <template #prefixIcon><t-icon name="search" /></template>
               </t-select>
             </div>
-            <t-popup
-              trigger="click"
-              placement="bottom-right"
-              :show-arrow="true"
-              overlay-class-name="wiki-graph-help-popup"
-            >
-              <div
-                class="wiki-graph-help-trigger"
-                role="button"
-                tabindex="0"
-                :title="$t('knowledgeEditor.wikiBrowser.helpButtonTitle')"
-              >
+            <t-popup trigger="click" placement="bottom-right" :show-arrow="true"
+              overlay-class-name="wiki-graph-help-popup">
+              <div class="wiki-graph-help-trigger" role="button" tabindex="0"
+                :title="$t('knowledgeEditor.wikiBrowser.helpButtonTitle')">
                 <t-icon name="help-circle" />
               </div>
               <template #content>
@@ -51,72 +58,69 @@
               </template>
             </t-popup>
           </div>
-          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status graph-issues-badge" @click="showGlobalIssuesDrawer = true">
+          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status graph-issues-badge"
+            @click="showGlobalIssuesDrawer = true">
             <t-icon name="error-circle" style="color: var(--td-warning-color);" />
-            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', { count: stats.pending_issues }) }}</span>
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', {
+              count:
+                stats.pending_issues
+            })
+            }}</span>
           </div>
         </div>
 
         <!-- Legend Overlay -->
-        <div v-if="graphReady" class="wiki-graph-legend" :class="{ 'legend-shifted': graphDrawerVisible }">
+        <div v-if="graphControlsVisible" class="wiki-graph-legend" :class="{ 'legend-shifted': graphDrawerVisible }">
           <div class="legend-items">
-            <div 
-              class="legend-item clickable" 
-              :class="{ disabled: !graphFilterTypes.has('summary') }"
-              @click="toggleGraphFilterType('summary')"
-            >
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('summary') }"
+              @click="toggleGraphFilterType('summary')">
               <span class="legend-dot" style="background: #0052d9"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterSummary') }}
             </div>
-            <div 
-              class="legend-item clickable"
-              :class="{ disabled: !graphFilterTypes.has('entity') }"
-              @click="toggleGraphFilterType('entity')"
-            >
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('entity') }"
+              @click="toggleGraphFilterType('entity')">
               <span class="legend-dot" style="background: #2ba471"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterEntity') }}
             </div>
-            <div 
-              class="legend-item clickable"
-              :class="{ disabled: !graphFilterTypes.has('concept') }"
-              @click="toggleGraphFilterType('concept')"
-            >
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('concept') }"
+              @click="toggleGraphFilterType('concept')">
               <span class="legend-dot" style="background: #e37318"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterConcept') }}
             </div>
-            <div 
-              class="legend-item clickable"
-              :class="{ disabled: !graphFilterTypes.has('synthesis') }"
-              @click="toggleGraphFilterType('synthesis')"
-            >
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('synthesis') }"
+              @click="toggleGraphFilterType('synthesis')">
               <span class="legend-dot" style="background: #0594fa"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterSynthesis') }}
             </div>
-            <div 
-              class="legend-item clickable"
-              :class="{ disabled: !graphFilterTypes.has('comparison') }"
-              @click="toggleGraphFilterType('comparison')"
-            >
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('comparison') }"
+              @click="toggleGraphFilterType('comparison')">
               <span class="legend-dot" style="background: #d54941"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterComparison') }}
+            </div>
+            <div v-if="graphFamiliarCount > 0" class="legend-item">
+              <span class="legend-familiar-ring"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.legendFamiliar') }}
             </div>
           </div>
           <div class="legend-divider"></div>
           <div class="legend-actions">
+            <button v-if="graphUnlinkedSlugs.size > 0" type="button" class="legend-action graph-unlinked-toggle"
+              :aria-pressed="showUnlinkedNodes" @click="toggleUnlinkedNodes">
+              <span class="legend-action-icon"><t-icon :name="showUnlinkedNodes ? 'browse-off' : 'browse'" /></span>
+              <span>{{ $t(showUnlinkedNodes ? 'knowledgeEditor.wikiBrowser.hideUnlinked' : 'knowledgeEditor.wikiBrowser.showUnlinked', { count: graphUnlinkedSlugs.size }) }}</span>
+            </button>
             <div class="legend-action" @click="fitGraphToView" title="Fit to View">
               <span class="legend-action-icon"><t-icon name="focus" /></span>
               <span>{{ $t('knowledgeEditor.wikiBrowser.fitView') || '适应屏幕' }}</span>
             </div>
             <div class="legend-action" @click="toggleArrows">
               <span class="legend-action-icon"><t-icon :name="showArrows ? 'browse-off' : 'browse'" /></span>
-              <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') : $t('knowledgeEditor.wikiBrowser.showArrows') }}</span>
+              <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') :
+                $t('knowledgeEditor.wikiBrowser.showArrows')
+              }}</span>
             </div>
-            <div
-              v-if="graphMode === 'ego' && graphFrontierCount > 0"
-              class="legend-action"
-              @click="growFrontier"
-              :title="$t('knowledgeEditor.wikiBrowser.growFrontierTitle', { count: graphFrontierCount })"
-            >
+            <div v-if="graphMode === 'ego' && graphFrontierCount > 0" class="legend-action" @click="growFrontier"
+              :title="$t('knowledgeEditor.wikiBrowser.growFrontierTitle', { count: graphFrontierCount })">
               <span class="legend-action-icon"><t-icon name="chart-bubble" /></span>
               <span>{{ $t('knowledgeEditor.wikiBrowser.growFrontier', { count: graphFrontierCount }) }}</span>
             </div>
@@ -124,6 +128,15 @@
               <span class="legend-action-icon"><t-icon name="rollback" /></span>
               <span>{{ $t('knowledgeEditor.wikiBrowser.backToOverview') }}</span>
             </div>
+          </div>
+          <div v-if="graphMode === 'overview'" class="legend-detail">
+            <div class="legend-detail-label">
+              <span>{{ $t('knowledgeEditor.wikiBrowser.graphDetailLevel') }}</span>
+              <span class="legend-detail-value">{{ graphDetailLabel }}</span>
+            </div>
+            <t-slider v-model="graphDetailLevel" :min="0" :max="GRAPH_DETAIL_MAX" :step="1"
+              :marks="graphDetailMarks" :label="graphDetailLabel" />
+            <div class="legend-detail-hint">{{ $t('knowledgeEditor.wikiBrowser.graphDetailHint') }}</div>
           </div>
           <template v-if="graphStatusCard">
             <div class="wiki-graph-status-card">
@@ -146,54 +159,40 @@
           <div v-else class="wiki-empty-icon">
             <t-icon name="chart-bubble" size="48px" />
           </div>
-          <p class="wiki-empty-desc">{{ graphLoading ? $t('knowledgeEditor.wikiBrowser.graphEmpty') : $t('knowledgeEditor.wikiBrowser.graphNoData') }}</p>
+          <p class="wiki-empty-desc">{{ graphLoading ? $t('knowledgeEditor.wikiBrowser.graphEmpty') :
+            $t('knowledgeEditor.wikiBrowser.graphNoData') }}</p>
         </div>
 
         <!-- Graph page detail drawer -->
-        <t-drawer
-          v-model:visible="graphDrawerVisible"
-          :header="graphDrawerPage?.title || ''"
-          size="480px"
-          :footer="false"
-          placement="right"
-          :attach="false"
-          :show-overlay="false"
-          :close-btn="true"
-          destroy-on-close
-          class="wiki-graph-drawer"
-        >
+        <t-drawer v-model:visible="graphDrawerVisible" :header="graphDrawerPage?.title || ''" size="480px"
+          :footer="false" placement="right" :show-overlay="false" :close-btn="true" destroy-on-close
+          class="wiki-graph-drawer">
           <template v-if="graphDrawerPage">
             <div class="wiki-reader-meta" style="margin-bottom: 8px;">
               <t-tag size="small" :theme="getTypeTheme(graphDrawerPage.page_type)" variant="light-outline">
                 {{ getTypeLabel(graphDrawerPage.page_type) }}
               </t-tag>
-              <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: graphDrawerPage.version }) }}</span>
-              <t-button
-                v-if="graphMode === 'ego' && graphCenter !== graphDrawerPage.slug"
-                size="small"
-                variant="outline"
-                theme="default"
-                style="margin-left: auto;"
-                :disabled="!graphDrawerCanBloom"
-                @click="loadBloomNeighbors(graphDrawerPage.slug)"
-              >
+              <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', {
+                ver:
+                  graphDrawerPage.version
+              }) }}</span>
+              <t-button v-if="graphMode === 'ego' && graphCenter !== graphDrawerPage.slug" size="small"
+                variant="outline" theme="default" style="margin-left: auto;" :disabled="!graphDrawerCanBloom"
+                @click="loadBloomNeighbors(graphDrawerPage.slug)">
                 {{ $t('knowledgeEditor.wikiBrowser.bloomNeighbors') }}
               </t-button>
-              <t-button
-                v-if="graphMode !== 'ego' || graphCenter !== graphDrawerPage.slug"
-                size="small"
-                variant="outline"
-                theme="primary"
+              <t-button v-if="graphMode !== 'ego' || graphCenter !== graphDrawerPage.slug" size="small"
+                variant="outline" theme="primary"
                 :style="graphMode === 'ego' && graphCenter !== graphDrawerPage.slug ? '' : 'margin-left: auto;'"
-                @click="loadEgoGraph(graphDrawerPage.slug)"
-              >
+                @click="loadEgoGraph(graphDrawerPage.slug)">
                 {{ $t('knowledgeEditor.wikiBrowser.expandNeighbors') }}
               </t-button>
             </div>
             <div v-if="graphDrawerNeighborHint" class="wiki-drawer-neighbor-hint" style="margin-bottom: 16px;">
               {{ graphDrawerNeighborHint }}
             </div>
-            <div ref="drawerBodyRef" class="wiki-reader-body" v-html="graphDrawerContent" @click="handleGraphDrawerClick"></div>
+            <div ref="drawerBodyRef" class="wiki-reader-body" v-html="graphDrawerContent"
+              @click="handleGraphDrawerClick"></div>
           </template>
         </t-drawer>
       </div>
@@ -206,20 +205,21 @@
         <div class="wiki-sidebar-header">
           <div v-if="stats && (stats.pending_tasks > 0 || stats.is_active)" class="wiki-queue-status">
             <t-loading size="small" />
-            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.queueStatus', { count: stats.pending_tasks || 0 }) }}</span>
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.queueStatus', {
+              count: stats.pending_tasks || 0
+            }) }}</span>
           </div>
           <!-- Global Issues -->
-          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status" @click="showGlobalIssuesDrawer = true">
+          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status"
+            @click="showGlobalIssuesDrawer = true">
             <t-icon name="error-circle" style="color: var(--td-warning-color);" />
-            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', { count: stats.pending_issues }) }}</span>
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', {
+              count:
+                stats.pending_issues
+            }) }}</span>
           </div>
-          <t-input
-            v-model="searchQuery"
-            :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
-            clearable
-            @enter="doSearch"
-            @clear="searchResults = null"
-          >
+          <t-input v-model="searchQuery" :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')" clearable
+            @enter="doSearch" @clear="searchResults = null">
             <template #prefixIcon><t-icon name="search" /></template>
           </t-input>
         </div>
@@ -228,12 +228,8 @@
           <!-- Search mode: flat list of hits, no group chrome. Clearing
                the search snaps back to the bucketed view below. -->
           <template v-if="searchResults !== null">
-            <div
-              v-for="page in searchResults"
-              :key="page.id"
-              :class="['wiki-page-item', { active: selectedPage?.id === page.id }]"
-              @click="selectPage(page)"
-            >
+            <div v-for="page in searchResults" :key="page.id"
+              :class="['wiki-page-item', { active: selectedPage?.id === page.id }]" @click="selectPage(page)">
               <div class="wiki-page-item-title">{{ page.title }}</div>
               <div class="wiki-page-item-summary">{{ page.summary }}</div>
               <div class="wiki-page-item-meta">
@@ -249,83 +245,169 @@
             <!-- Index overview (pinned at top). Rendered lazily from a
                  structured API response — never loads the full directory
                  as markdown. -->
-            <div
-              v-if="indexAvailable"
-              :class="['wiki-nav-item', { active: activeSystemView === 'index' }]"
-              @click="openIndexView"
-            >
+            <div v-if="indexAvailable" :class="['wiki-nav-item', { active: activeSystemView === 'index' }]"
+              @click="openIndexView">
               <t-icon name="catalog" class="wiki-nav-icon" />
               <span class="wiki-nav-text">{{ $t('knowledgeEditor.wikiBrowser.indexTitle') }}</span>
             </div>
 
-            <!-- Log feed (pinned). Events live in wiki_log_entries and
-                 are loaded lazily when the user clicks this entry. -->
-            <div
-              v-if="logAvailable"
-              :class="['wiki-nav-item', { active: activeSystemView === 'log' }]"
-              @click="openLogView"
-            >
-              <t-icon name="history" class="wiki-nav-icon" />
-              <span class="wiki-nav-text">{{ $t('knowledgeEditor.wikiBrowser.logTitle') }}</span>
-            </div>
+            <div class="wiki-sidebar-divider" v-if="indexAvailable"></div>
 
-            <div class="wiki-sidebar-divider" v-if="indexAvailable || logAvailable"></div>
-
-            <!-- Horizontal tab bar: one per non-empty page_type. Clicking a
-                 tab swaps the visible list to that bucket. Parallel tabs are
-                 easier to scan than a vertical stack of collapsibles and
-                 sidestep nested-scroller UX entirely — only one virtualized
-                 list is mounted at a time. -->
-            <div v-if="visibleTabs.length > 0" class="wiki-tab-bar">
-              <div
-                v-for="tab in visibleTabs"
-                :key="tab.type"
-                :class="['wiki-tab', { active: activeTab === tab.type }]"
-                @click="setActiveTab(tab.type)"
-              >
-                <span class="wiki-tab-label">{{ tab.label }}</span>
-                <span class="wiki-tab-count">{{ tab.total }}</span>
-              </div>
-            </div>
-
-            <!-- Active-tab list -->
-            <template v-if="activeGroup">
-              <RecycleScroller
-                ref="groupScrollerRef"
-                class="wiki-group-scroller"
-                :items="activeGroup.pages"
-                :item-size="WIKI_PAGE_ITEM_HEIGHT"
-                key-field="id"
-                :buffer="400"
-                page-mode
-                v-slot="{ item }"
-              >
-                <div
-                  :class="['wiki-page-item', { active: selectedPage?.id === item.id }]"
-                  @click="selectPage(item)"
-                >
-                  <div class="wiki-page-item-title">{{ item.title }}</div>
-                  <div class="wiki-page-item-summary">{{ item.summary }}</div>
-                  <div class="wiki-page-item-meta">
-                    <span>{{ formatDate(item.updated_at) }}</span>
+            <!-- Tab bar + tree share one horizontal inset so the "new folder"
+                 action lines up with the folder rows below. -->
+            <div v-if="visibleTabs.length > 0 || activeGroup" class="wiki-tree-panel">
+              <div v-if="visibleTabs.length > 0" class="wiki-tab-bar">
+                <div class="wiki-tab-bar-scroll">
+                  <div v-for="tab in visibleTabs" :key="tab.type"
+                    :class="['wiki-tab', { active: activeTab === tab.type }]" @click="setActiveTab(tab.type)">
+                    <span class="wiki-tab-label">{{ tab.label }}</span>
+                    <span class="wiki-tab-count">{{ tab.total }}</span>
                   </div>
                 </div>
-              </RecycleScroller>
-              <!-- Sentinel: when this hits the viewport, fetch the next
-                   page. Page-mode RecycleScroller delegates scrolling to
-                   `.wiki-page-list`, so scroll-end events don't fire on
-                   the scroller itself; IntersectionObserver is the right
-                   primitive here and degrades gracefully while loading. -->
-              <div
-                v-if="activeGroup.hasMore"
-                ref="groupSentinelRef"
-                class="wiki-group-sentinel"
-                :data-type="activeGroup.type"
-              ></div>
-              <div v-if="activeGroup.loading" class="wiki-group-loading">
-                <t-loading size="small" />
+                <div class="wiki-tab-bar-actions">
+                  <div class="wiki-view-toggle" role="group"
+                    :aria-label="$t('knowledgeEditor.wikiBrowser.viewModeToggle')">
+                    <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.viewTree')" placement="top">
+                      <button type="button" class="wiki-view-toggle-btn"
+                        :class="{ active: sidebarViewMode === 'tree' }" :aria-pressed="sidebarViewMode === 'tree'"
+                        :aria-label="$t('knowledgeEditor.wikiBrowser.viewTree')" :disabled="sidebarViewSwitching"
+                        @click="switchSidebarViewMode('tree')">
+                        <t-icon name="tree-list" />
+                      </button>
+                    </t-tooltip>
+                    <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.viewList')" placement="top">
+                      <button type="button" class="wiki-view-toggle-btn"
+                        :class="{ active: sidebarViewMode === 'list' }" :aria-pressed="sidebarViewMode === 'list'"
+                        :aria-label="$t('knowledgeEditor.wikiBrowser.viewList')" :disabled="sidebarViewSwitching"
+                        @click="switchSidebarViewMode('list')">
+                        <t-icon name="view-list" />
+                      </button>
+                    </t-tooltip>
+                  </div>
+                  <t-tooltip v-if="props.canEdit" :content="$t('knowledgeEditor.wikiBrowser.newRootFolder')" placement="top">
+                    <button type="button" class="wiki-tab-bar-action"
+                      :disabled="sidebarViewMode !== 'tree' || sidebarViewSwitching || sidebarTabSwitching"
+                      :aria-label="$t('knowledgeEditor.wikiBrowser.newRootFolder')"
+                      @click.stop="startCreateRootFolder">
+                      <t-icon name="folder-add" />
+                    </button>
+                  </t-tooltip>
+                  <t-tooltip v-if="props.canEdit" :content="$t('knowledgeEditor.wikiBrowser.newPageBtn')" placement="top">
+                    <button type="button" class="wiki-tab-bar-action"
+                      :aria-label="$t('knowledgeEditor.wikiBrowser.newPageBtn')" @click.stop="openCreatePageDialog">
+                      <t-icon name="file-add" />
+                    </button>
+                  </t-tooltip>
+                </div>
               </div>
-            </template>
+
+              <!-- Active-tab list -->
+              <template v-if="activeGroup && sidebarViewMode === 'tree'">
+                <!-- The list container is itself the "move to root" drop target;
+                   folder rows stop propagation so their own drop wins. This
+                   avoids inserting/removing a drop bar during the drag, which
+                   was cancelling the native drag after the first success. -->
+                <div ref="treeListRef"
+                  :class="['wiki-tree-list', { 'wiki-tree-list--root-drop': dropTargetKey === '__root__' }]"
+                  @dragover.prevent="onRootDragOver" @dragleave="onDirectoryDragLeave('__root__')"
+                  @drop.prevent="onDropOnDirectory($event, '', [])">
+                  <div v-if="creatingRootFolder" class="wiki-directory-item wiki-directory-item--editing"
+                    :style="{ '--wiki-tree-depth': 0 }" @click.stop>
+                    <input ref="creatingRootFolderInputRef" v-model="creatingRootFolderName"
+                      class="wiki-directory-rename-input"
+                      :placeholder="$t('knowledgeEditor.wikiBrowser.folderNamePlaceholder')"
+                      @keydown.enter="submitCreateRootFolder" @keydown.esc="cancelCreateRootFolder" />
+                    <div class="wiki-tree-trailing wiki-folder-inline-actions">
+                      <t-button variant="text" theme="default" size="small" class="wiki-folder-action-btn confirm"
+                        @click.stop="submitCreateRootFolder">
+                        <t-icon name="check" size="16px" />
+                      </t-button>
+                      <t-button variant="text" theme="default" size="small" class="wiki-folder-action-btn cancel"
+                        @click.stop="cancelCreateRootFolder">
+                        <t-icon name="close" size="16px" />
+                      </t-button>
+                    </div>
+                  </div>
+                  <template v-for="item in activeTreeRows" :key="item.rowKey">
+                    <div v-if="item.kind === 'directory'"
+                      :class="['wiki-directory-item', { 'wiki-directory-item--drop': dropTargetKey === item.pathKey }]"
+                      :style="{ '--wiki-tree-depth': item.depth }" :draggable="editingFolderId !== item.folderId"
+                      @click="toggleDirectory(item.pathKey)"
+                      @dragstart="onFolderDragStart($event, item.folderId, item.path)" @dragend="onPageDragEnd"
+                      @dragover.prevent.stop="onDirectoryDragOver($event, item.pathKey)"
+                      @dragleave.stop="onDirectoryDragLeave(item.pathKey)"
+                      @drop.prevent.stop="onDropOnDirectory($event, item.folderId, item.path)">
+                      <t-icon :name="item.collapsed ? 'chevron-right' : 'chevron-down'" class="wiki-directory-toggle" />
+                      <input v-if="editingFolderId === item.folderId" v-model="editingName"
+                        class="wiki-directory-rename-input"
+                        :placeholder="$t('knowledgeEditor.wikiBrowser.folderNamePlaceholder')" @click.stop
+                        @keydown.enter="commitRenameFolder(item.folderId, item.label)" @keydown.esc="cancelRenameFolder"
+                        @blur="commitRenameFolder(item.folderId, item.label)" />
+                      <template v-else>
+                        <span class="wiki-directory-title">{{ item.label }}</span>
+                        <div class="wiki-tree-trailing">
+                          <span class="wiki-directory-count">{{ item.count }}</span>
+                          <WikiFolderActions v-if="item.folderId" :name="item.label" :page-count="item.count"
+                            :has-children="item.hasChildren"
+                            @create="(name: string) => createFolder(item.folderId, item.path, name)"
+                            @rename="() => startRenameFolder(item.folderId, item.label)"
+                            @delete="() => deleteFolder(item.folderId)" />
+                        </div>
+                      </template>
+                    </div>
+                    <div v-else-if="item.kind === 'load-more'" class="wiki-directory-load-more"
+                      :data-loadmore-key="item.rowKey" :style="{ '--wiki-tree-depth': item.depth }"
+                      @click="loadPagesForType(item.type, { categoryPath: item.path })">
+                      <t-loading v-if="item.loading" size="small" />
+                      <template v-else>
+                        <t-icon name="chevron-down" />
+                        <span>{{ $t('knowledgeEditor.wikiBrowser.loadMoreShort') }}</span>
+                      </template>
+                    </div>
+                    <div v-else
+                      :class="['wiki-page-item', 'wiki-page-item--tree', { active: selectedPage?.id === item.page.id }]"
+                      :style="{ '--wiki-tree-depth': item.depth }" :title="item.page.title" draggable="true"
+                      @click="selectPage(item.page)" @dragstart="onPageDragStart($event, item.page)"
+                      @dragend="onPageDragEnd">
+                      <t-icon :name="getPageIcon(item.page)"
+                        :class="['wiki-page-file-icon', `wiki-page-file-icon--${item.page.page_type}`]" />
+                      <span class="wiki-page-item-title">{{ item.page.title }}</span>
+                    </div>
+                  </template>
+                </div>
+                <!-- Sentinel: when this hits the viewport, fetch the next
+                   page. The tree list itself is intentionally plain DOM:
+                   rows are already paged, and avoiding dynamic row
+                   measurement keeps expand/collapse visually stable. -->
+                <div v-if="activeGroup.hasMore" ref="groupSentinelRef" class="wiki-group-sentinel"
+                  :data-type="activeGroup.type"></div>
+                <div v-if="activeGroup.loading" class="wiki-group-loading">
+                  <t-loading size="small" />
+                </div>
+              </template>
+
+              <!-- Classic flat list. It owns a separate paged dataset because
+                   tree mode requests one directory at a time. -->
+              <template v-else-if="activeGroup">
+                <RecycleScroller class="wiki-group-scroller" :items="activeFlatPages"
+                  :item-size="WIKI_PAGE_ITEM_HEIGHT" key-field="id" :buffer="400" page-mode
+                  v-slot="{ item }">
+                  <div :class="['wiki-page-item', 'wiki-page-item--list', { active: selectedPage?.id === item.id }]"
+                    @click="selectPage(item)">
+                    <div class="wiki-page-item-title">{{ item.title }}</div>
+                    <div class="wiki-page-item-summary">{{ item.summary }}</div>
+                    <div class="wiki-page-item-meta">
+                      <span>{{ formatDate(item.updated_at) }}</span>
+                    </div>
+                  </div>
+                </RecycleScroller>
+                <div v-if="activeFlatState?.hasMore" ref="groupSentinelRef" class="wiki-group-sentinel"
+                  :data-type="activeGroup.type"></div>
+                <div v-if="activeFlatState?.loading" class="wiki-group-loading">
+                  <t-loading size="small" />
+                </div>
+              </template>
+            </div>
 
             <!-- Empty state -->
             <div v-if="!hasContentPages && !loading" class="wiki-empty-state">
@@ -354,120 +436,213 @@
 
               <!-- Page header -->
               <div class="wiki-reader-header">
-                <h2 class="wiki-reader-title" style="display: flex; align-items: center;">
-                  {{ selectedPage.title }}
-                  
-                  <t-popup
-                    v-if="pageIssues.length > 0"
-                    v-model="showIssuesBox"
-                    placement="bottom-left"
-                    trigger="click"
-                    :overlayInnerStyle="{ padding: 0, boxShadow: 'var(--td-shadow-3)', borderRadius: '8px', width: '560px', maxWidth: '90vw' }"
-                  >
-                    <span 
-                      class="wiki-issue-trigger"
-                      :title="$t('knowledgeEditor.wikiBrowser.issueTitle', { count: pageIssues.length })"
-                    >
-                      <t-icon name="error-circle-filled" style="color: var(--td-warning-color);" />
-                    </span>
+                <div class="wiki-reader-title-row">
+                  <div class="wiki-reader-title-block">
+                    <h2 v-if="!editingPage" class="wiki-reader-title">
+                      <span class="wiki-reader-title-text">{{ selectedPage.title }}</span>
 
-                    <template #content>
-                      <div class="wiki-issue-popup-content">
-                        <div class="wiki-issue-popup-header">
-                          <div class="wiki-issue-popup-title">
-                            <span>{{ $t('knowledgeEditor.wikiBrowser.issueFixSuggestions', { count: pageIssues.length }) }}</span>
-                          </div>
-                          <t-button v-if="props.canEdit" size="small" theme="primary" variant="base" @click="triggerAutoFix">
-                            <template #icon><t-icon name="tools" /></template>
-                            {{ $t('knowledgeEditor.wikiBrowser.issueFixBtn') }}
-                          </t-button>
-                        </div>
-                      <div class="wiki-issue-popup-list">
-                        <div v-for="issue in pageIssues" :key="issue.id" class="wiki-issue-popup-item">
-                          <div class="wiki-issue-popup-main">
-                            <div class="wiki-issue-popup-tags">
-                              <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
-                              <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
-                              <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
-                              <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+                      <t-popup v-if="pageIssues.length > 0" v-model="showIssuesBox" placement="bottom-left"
+                        trigger="click"
+                        :overlayInnerStyle="{ padding: 0, boxShadow: 'var(--td-shadow-3)', borderRadius: '8px', width: '560px', maxWidth: '90vw' }">
+                        <span class="wiki-issue-trigger"
+                          :title="$t('knowledgeEditor.wikiBrowser.issueTitle', { count: pageIssues.length })">
+                          <t-icon name="error-circle-filled" style="color: var(--td-warning-color);" />
+                        </span>
+
+                        <template #content>
+                          <div class="wiki-issue-popup-content">
+                            <div class="wiki-issue-popup-header">
+                              <div class="wiki-issue-popup-title">
+                                <span>{{ $t('knowledgeEditor.wikiBrowser.issueFixSuggestions', {
+                                  count:
+                                    pageIssues.length
+                                })
+                                }}</span>
+                              </div>
+                              <AssistantButton v-if="props.canEdit"
+                                :label="$t('knowledgeEditor.wikiBrowser.issueFixBtn')" @click="triggerAutoFix" />
                             </div>
-                            <div class="wiki-issue-popup-desc">
-                              {{ issue.description }}
-                            </div>
-                            <div class="wiki-issue-popup-meta">
-                              <span class="wiki-issue-popup-reporter">
-                                {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
-                              </span>
-                              <div v-if="props.canEdit" class="wiki-issue-popup-actions">
-                                <span class="wiki-issue-popup-action" @click="triggerFixIssue(issue)" style="margin-right: 12px; font-weight: 500;">
-                                  <t-icon name="tools" style="margin-right: 4px;" />{{ $t('knowledgeEditor.wikiBrowser.issueFixSingle') }}
-                                </span>
-                                <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+                            <div class="wiki-issue-popup-list">
+                              <div v-for="issue in pageIssues" :key="issue.id" class="wiki-issue-popup-item">
+                                <div class="wiki-issue-popup-main">
+                                  <div class="wiki-issue-popup-tags">
+                                    <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light"
+                                      size="small">{{
+                                        $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
+                                    <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger"
+                                      variant="light" size="small">{{
+                                        $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
+                                    <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light"
+                                      size="small">{{
+                                        $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
+                                    <t-tag v-else theme="primary" variant="light" size="small">{{
+                                      $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+                                  </div>
+                                  <div class="wiki-issue-popup-desc">
+                                    {{ issue.description }}
+                                  </div>
+                                  <div class="wiki-issue-popup-meta">
+                                    <span class="wiki-issue-popup-reporter">
+                                      {{ issue.reported_by === 'wiki-researcher-agent' ?
+                                        $t('knowledgeEditor.wikiBrowser.issueAiLinter') :
+                                        $t('knowledgeEditor.wikiBrowser.issueReportedBy', {
+                                          reporter:
+                                            issue.reported_by
+                                        }) }}
+                                    </span>
+                                    <div v-if="props.canEdit" class="wiki-issue-popup-actions">
+                                      <AssistantButton :label="$t('knowledgeEditor.wikiBrowser.issueFixSingle')"
+                                        @click="triggerFixIssue(issue)" />
+                                      <span class="wiki-issue-popup-action"
+                                        style="color: var(--td-text-color-placeholder);"
+                                        @click="handleIssueIgnore(issue.id)">{{
+                                          $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
-                      </div>
-                      </div>
-                    </template>
-                  </t-popup>
-                </h2>
-                <div v-if="selectedPage.aliases && selectedPage.aliases.length" class="wiki-reader-aliases">
-                  <span class="wiki-alias-label">{{ $t('knowledgeEditor.wikiBrowser.aliases') }}:</span>
-                  <t-tag v-for="alias in selectedPage.aliases" :key="alias" size="small" variant="light" class="wiki-alias-tag">
-                    {{ alias }}
-                  </t-tag>
+                        </template>
+                      </t-popup>
+                    </h2>
+                    <t-input v-else v-model="editForm.title" class="wiki-edit-field wiki-edit-field--title"
+                      :placeholder="$t('knowledgeEditor.wikiBrowser.editTitlePlaceholder')" />
+                    <div class="wiki-reader-title-badges wiki-reader-title-badges--secondary">
+                      <span v-if="editingPage" class="wiki-badge wiki-badge--editing">
+                        {{ $t('knowledgeEditor.wikiBrowser.editingBadge') }}
+                      </span>
+                      <span class="wiki-badge wiki-badge--type">
+                        <t-icon :name="getPageIcon(selectedPage)" />
+                        {{ getTypeLabel(selectedPage.page_type) }}
+                      </span>
+                      <span class="wiki-badge wiki-badge--ver">
+                        {{ $t('knowledgeEditor.wikiBrowser.version', { ver: selectedPage.version }) }}
+                      </span>
+                      <t-tooltip v-if="editSourceVisible(selectedPage.last_edit_source)"
+                        :content="editSourceLabel(selectedPage.last_edit_source)">
+                        <span class="wiki-badge wiki-badge--source">
+                          <t-icon :name="editSourceIcon(selectedPage.last_edit_source)" />
+                          {{ editSourceLabel(selectedPage.last_edit_source) }}
+                        </span>
+                      </t-tooltip>
+                      <span v-for="alias in (selectedPage.aliases || [])" :key="alias"
+                        class="wiki-badge wiki-badge--alias"
+                        :title="`${$t('knowledgeEditor.wikiBrowser.aliases')} ${alias}`">
+                        <t-icon name="link" />
+                        {{ alias }}
+                      </span>
+                    </div>
+                    <p v-if="!editingPage && selectedPage.summary" class="wiki-reader-lead">{{ selectedPage.summary }}</p>
+                    <t-textarea v-if="editingPage" v-model="editForm.summary"
+                      class="wiki-edit-field wiki-edit-field--summary" :autosize="{ minRows: 2, maxRows: 4 }"
+                      :placeholder="$t('knowledgeEditor.wikiBrowser.editSummaryPlaceholder')" />
+                  </div>
+                  <div class="wiki-reader-aside">
+                    <div class="wiki-reader-actions" role="toolbar"
+                      :aria-label="$t('knowledgeEditor.wikiBrowser.pageActions')">
+                      <template v-if="editingPage">
+                        <t-button theme="primary" size="small" :loading="savingPage" @click="savePageEdit()">
+                          {{ $t('common.save') }}
+                        </t-button>
+                        <t-button variant="text" size="small" :disabled="savingPage" @click="cancelEditPage">
+                          {{ $t('common.cancel') }}
+                        </t-button>
+                      </template>
+                      <template v-else>
+                        <AssistantActionsButton icon-only :label="$t('assistant.actions.readContent')"
+                          :actions="readingAssistantActions" />
+                        <t-tooltip v-if="props.canEdit" :content="$t('knowledgeEditor.wikiBrowser.editBtn')"
+                          placement="top">
+                          <button type="button" class="wiki-action-btn"
+                            :aria-label="$t('knowledgeEditor.wikiBrowser.editBtn')" @click="startEditPage">
+                            <t-icon name="edit" />
+                          </button>
+                        </t-tooltip>
+                        <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.historyBtn')" placement="top">
+                          <button type="button" class="wiki-action-btn"
+                            :aria-label="$t('knowledgeEditor.wikiBrowser.historyBtn')" @click="openRevisionDrawer">
+                            <t-icon name="history" />
+                          </button>
+                        </t-tooltip>
+                        <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.viewInGraph')" placement="top">
+                          <button type="button" class="wiki-action-btn"
+                            :aria-label="$t('knowledgeEditor.wikiBrowser.viewInGraph')"
+                            @click="emit('view-graph', selectedPage.slug)">
+                            <t-icon name="chart-bubble" />
+                          </button>
+                        </t-tooltip>
+                        <t-popconfirm v-if="props.canEdit" theme="danger"
+                          :content="$t('knowledgeEditor.wikiBrowser.deletePageConfirm', { title: selectedPage.title })"
+                          @confirm="confirmDeletePage">
+                          <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.deletePageBtn')" placement="top">
+                            <button type="button" class="wiki-action-btn wiki-action-btn--danger"
+                              :aria-label="$t('knowledgeEditor.wikiBrowser.deletePageBtn')">
+                              <t-icon name="delete" />
+                            </button>
+                          </t-tooltip>
+                        </t-popconfirm>
+                      </template>
+                    </div>
+                    <div v-if="!editingPage" class="wiki-reader-aside-meta">
+                      <span class="wiki-reader-aside-meta-item">
+                        <t-icon name="time" size="14px" />
+                        {{ formatDate(selectedPage.updated_at) }}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div class="wiki-reader-meta">
-                  <t-tag size="small" :theme="getTypeTheme(selectedPage.page_type)" variant="light-outline">
-                    {{ getTypeLabel(selectedPage.page_type) }}
-                  </t-tag>
-                  <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: selectedPage.version }) }}</span>
-                  <span class="wiki-reader-meta-text">{{ formatDate(selectedPage.updated_at) }}</span>
-                  <t-link
-                    theme="primary"
-                    hover="color"
-                    class="wiki-reader-graph-link"
-                    @click="emit('view-graph', selectedPage.slug)"
-                  >
-                    <template #prefixIcon><t-icon name="chart-bubble" /></template>
-                    {{ $t('knowledgeEditor.wikiBrowser.viewInGraph') }}
-                  </t-link>
-                </div>
-              </div>
-
-              <!-- Backlinks (in_links) -->
-              <div v-if="selectedPage.in_links?.length" class="wiki-reader-backlinks">
-                <span class="wiki-backlink-label">
-                  <t-icon name="link" size="14px" />
-                  {{ $t('knowledgeEditor.wikiBrowser.linkedFrom') }}
-                </span>
-                <a
-                  v-for="link in selectedPage.in_links"
-                  :key="'in-' + link"
-                  href="#"
-                  class="wiki-backlink-tag"
-                  @click.prevent="navigateToSlug(link)"
-                >{{ slugDisplayName(link) }}</a>
               </div>
 
               <!-- Content -->
-              <div ref="readerBodyRef" class="wiki-reader-body" v-html="renderedContent" @click="handleContentClick"></div>
-
-              <!-- Source refs -->
-              <div v-if="parsedSourceRefs.length" class="wiki-reader-sources">
-                <span class="wiki-link-label">{{ $t('knowledgeEditor.wikiBrowser.sources') }}</span>
-                <a
-                  v-for="ref in parsedSourceRefs"
-                  :key="ref.id"
-                  href="#"
-                  class="wiki-source-ref"
-                  @click.prevent="emit('open-source-doc', ref.id)"
-                >
-                  <t-icon name="file" size="14px" />
-                  {{ ref.title }}
-                </a>
+              <div v-if="!editingPage" ref="readerBodyRef" class="wiki-reader-body" v-html="renderedContent"
+                @click="handleContentClick">
               </div>
+
+              <!-- Inline markdown editor (canEdit only). Saves are guarded by
+                   the page version captured at edit start; the backend answers
+                   409 when someone (or the pipeline) edited in between. -->
+              <div v-else class="wiki-page-editor">
+                <t-textarea v-model="editForm.content" class="wiki-edit-field wiki-edit-field--content"
+                  :autosize="{ minRows: 16, maxRows: 40 }"
+                  :placeholder="$t('knowledgeEditor.wikiBrowser.editContentPlaceholder')" />
+                <t-alert v-if="editConflictVersion !== null" theme="warning" class="wiki-page-editor-conflict"
+                  :message="t('knowledgeEditor.wikiBrowser.editConflictHint', { ver: editConflictVersion })">
+                  <template #operation>
+                    <span class="wiki-page-editor-conflict-actions">
+                      <t-link theme="primary" hover="color" @click="reloadLatestIntoEditor">
+                        {{ $t('knowledgeEditor.wikiBrowser.editConflictReload') }}
+                      </t-link>
+                      <t-link theme="warning" hover="color" @click="overwriteSavePage">
+                        {{ $t('knowledgeEditor.wikiBrowser.editConflictOverwrite') }}
+                      </t-link>
+                    </span>
+                  </template>
+                </t-alert>
+              </div>
+
+              <!-- Page footer: backlinks + sources -->
+              <footer v-if="!editingPage && (selectedPage.in_links?.length || parsedSourceRefs.length)"
+                class="wiki-reader-footer">
+                <div v-if="selectedPage.in_links?.length" class="wiki-reader-footer-row">
+                  <span class="wiki-reader-footer-label">{{ $t('knowledgeEditor.wikiBrowser.linkedFrom') }}</span>
+                  <span class="wiki-reader-footer-value">
+                    <a v-for="link in selectedPage.in_links" :key="'in-' + link" href="#"
+                      class="wiki-content-link" @click.prevent="navigateToSlug(link)">
+                      {{ slugDisplayName(link) }}
+                    </a>
+                  </span>
+                </div>
+                <div v-if="parsedSourceRefs.length" class="wiki-reader-footer-row">
+                  <span class="wiki-reader-footer-label">{{ $t('knowledgeEditor.wikiBrowser.sources') }}</span>
+                  <span class="wiki-reader-footer-value">
+                    <a v-for="ref in parsedSourceRefs" :key="ref.id" href="#" class="wiki-content-link"
+                      @click.prevent="emit('open-source-doc', ref.id)">
+                      {{ ref.title }}
+                    </a>
+                  </span>
+                </div>
+              </footer>
             </template>
 
             <!-- System view: index overview rendered as markdown. Starts
@@ -487,18 +662,14 @@
                 </div>
               </div>
               <div v-if="indexLoading && !indexMarkdown" class="wiki-reader-empty">
-                <p class="wiki-empty-title">{{ $t('knowledgeEditor.wikiBrowser.logLoading') }}</p>
+                <p class="wiki-empty-title">{{ $t('knowledgeEditor.wikiBrowser.loading') }}</p>
               </div>
               <template v-else-if="indexMarkdown">
-                <div
-                  ref="indexBodyRef"
-                  class="wiki-reader-body wiki-index-body"
-                  v-html="renderedIndexMarkdown"
-                  @click="handleContentClick"
-                ></div>
+                <div ref="indexBodyRef" class="wiki-reader-body wiki-index-body" v-html="renderedIndexMarkdown"
+                  @click="handleContentClick"></div>
                 <div v-if="indexHasMore" ref="indexSentinelRef" class="wiki-index-sentinel">
                   <span v-if="indexLoading" class="wiki-index-loading">
-                    {{ $t('knowledgeEditor.wikiBrowser.logLoading') }}
+                    {{ $t('knowledgeEditor.wikiBrowser.loading') }}
                   </span>
                 </div>
               </template>
@@ -507,60 +678,13 @@
               </div>
             </template>
 
-            <!-- System view: log feed. Mutually exclusive with selectedPage. -->
-            <template v-else-if="activeSystemView === 'log'">
-              <div class="wiki-reader-header">
-                <h2 class="wiki-reader-title">{{ $t('knowledgeEditor.wikiBrowser.logTitle') }}</h2>
-                <div class="wiki-reader-meta">
-                  <t-tag size="small" theme="default" variant="light-outline">
-                    {{ $t('knowledgeEditor.wikiBrowser.logFeedTag') }}
-                  </t-tag>
-                </div>
-              </div>
-              <div class="wiki-log-feed">
-                <div v-if="logEntries.length === 0 && logInitialized" class="wiki-log-empty">
-                  {{ $t('knowledgeEditor.wikiBrowser.logEmpty') }}
-                </div>
-                <div v-for="entry in logEntries" :key="entry.id" class="wiki-log-entry">
-                  <div class="wiki-log-entry-header">
-                    <t-tag size="small" :theme="entry.action === 'retract' ? 'danger' : 'primary'" variant="light">
-                      {{ entry.action }}
-                    </t-tag>
-                    <span class="wiki-log-entry-title">{{ entry.doc_title || entry.knowledge_id || '—' }}</span>
-                    <span class="wiki-log-entry-time">{{ formatDate(entry.created_at) }}</span>
-                  </div>
-                  <div v-if="entry.summary" class="wiki-log-entry-summary">{{ entry.summary }}</div>
-                  <div v-if="entry.pages_affected && entry.pages_affected.length" class="wiki-log-entry-pages">
-                    <a
-                      v-for="ref in entry.pages_affected"
-                      :key="entry.id + ':' + ref.slug"
-                      href="#"
-                      class="wiki-log-entry-page"
-                      :title="ref.slug"
-                      @click.prevent="navigateToSlug(ref.slug)"
-                    >{{ ref.title || ref.slug }}</a>
-                  </div>
-                </div>
-                <div v-if="logNextCursor || !logInitialized" class="wiki-log-load-more">
-                  <t-button
-                    size="small"
-                    variant="outline"
-                    theme="default"
-                    :loading="logLoading"
-                    @click="loadMoreLog"
-                  >
-                    {{ logInitialized ? $t('knowledgeEditor.wikiBrowser.logLoadMore') : $t('knowledgeEditor.wikiBrowser.logLoading') }}
-                  </t-button>
-                </div>
-              </div>
-            </template>
-
             <!-- No page selected -->
             <div v-else class="wiki-reader-empty">
               <div class="wiki-empty-icon">
                 <t-icon name="browse" size="48px" />
               </div>
-              <p class="wiki-empty-title" v-if="hasContentPages">{{ $t('knowledgeEditor.wikiBrowser.selectPageHint') }}</p>
+              <p class="wiki-empty-title" v-if="hasContentPages">{{ $t('knowledgeEditor.wikiBrowser.selectPageHint') }}
+              </p>
               <template v-else>
                 <p class="wiki-empty-title">{{ $t('knowledgeEditor.wikiBrowser.emptyTitle') }}</p>
                 <p class="wiki-empty-desc">{{ $t('knowledgeEditor.wikiBrowser.emptyDesc') }}</p>
@@ -570,113 +694,197 @@
         </div>
       </div>
     </template>
-    
+
     <!-- Image Preview -->
     <Teleport to="body">
-      <picturePreview v-if="imagePreviewVisible" :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl" @closePreImg="closeImagePreview" />
+      <picturePreview v-if="imagePreviewVisible" :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl"
+        @closePreImg="closeImagePreview" />
     </Teleport>
-    
+
     <!-- Global Issues Drawer -->
-    <t-drawer
-      v-model:visible="showGlobalIssuesDrawer"
-      :header="$t('knowledgeEditor.wikiBrowser.globalIssuesTitle')"
-      size="480px"
-      :footer="false"
-      class="wiki-global-issues-drawer"
-    >
+    <t-drawer v-model:visible="showGlobalIssuesDrawer" :header="$t('knowledgeEditor.wikiBrowser.globalIssuesTitle')"
+      size="480px" :footer="false" class="wiki-global-issues-drawer">
       <div class="wiki-issue-popup-list">
         <div v-for="issue in globalIssues" :key="issue.id" class="wiki-issue-popup-item">
           <div class="wiki-issue-popup-main">
             <div class="wiki-issue-popup-tags">
-              <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
-              <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
-              <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
-              <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+              <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{
+                $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
+              <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light"
+                size="small">{{
+                  $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
+              <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{
+                $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
+              <t-tag v-else theme="primary" variant="light" size="small">{{
+                $t('knowledgeEditor.wikiBrowser.issueAttention')
+              }}</t-tag>
             </div>
             <div class="wiki-issue-popup-desc">
-              <div style="font-weight: 500; margin-bottom: 4px; color: var(--td-brand-color); cursor: pointer;" @click="navigateToSlugAndFix(issue.slug)">
-                <t-icon name="link" size="12px"/> {{ $t('knowledgeEditor.wikiBrowser.issuePagePrefix') }}{{ slugDisplayName(issue.slug) }}
+              <div style="font-weight: 500; margin-bottom: 4px; color: var(--td-brand-color); cursor: pointer;"
+                @click="navigateToSlugAndFix(issue.slug)">
+                <t-icon name="link" size="12px" /> {{ $t('knowledgeEditor.wikiBrowser.issuePagePrefix') }}{{
+                  slugDisplayName(issue.slug) }}
               </div>
               {{ issue.description }}
             </div>
             <div class="wiki-issue-popup-meta">
               <span class="wiki-issue-popup-reporter">
-                {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
+                {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') :
+                  $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
               </span>
               <div class="wiki-issue-popup-actions">
-                <span class="wiki-issue-popup-action" @click="navigateToSlugAndFix(issue.slug)" style="margin-right: 12px; font-weight: 500;">
-                  <t-icon name="arrow-right-circle" style="margin-right: 4px;" />{{ $t('knowledgeEditor.wikiBrowser.issueGoFix') }}
+                <span class="wiki-issue-popup-action" @click="navigateToSlugAndFix(issue.slug)"
+                  style="font-weight: 500;">
+                  <t-icon name="arrow-right-circle" style="margin-right: 4px;" />{{
+                    $t('knowledgeEditor.wikiBrowser.issueGoFix') }}
                 </span>
-                <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleGlobalIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+                <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);"
+                  @click="handleGlobalIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
               </div>
             </div>
           </div>
         </div>
-        <div v-if="globalIssues.length === 0" style="padding: 40px; text-align: center; color: var(--td-text-color-placeholder);">
+        <div v-if="globalIssues.length === 0"
+          style="padding: 40px; text-align: center; color: var(--td-text-color-placeholder);">
           {{ $t('knowledgeEditor.wikiBrowser.globalIssuesEmpty') }}
         </div>
       </div>
     </t-drawer>
 
-    <!-- Fix Chat Drawer -->
-    <t-drawer
-      v-model:visible="showFixDrawer"
-      :header="$t('knowledgeEditor.wikiBrowser.fixAssistantTitle')"
-      size="700px"
-      :footer="false"
-      class="wiki-fix-drawer"
-    >
-      <ChatView 
-        v-if="showFixDrawer"
-        :session_id="currentFixSessionId" 
-        agentId="builtin-wiki-fixer" 
-        :kbIds="[props.knowledgeBaseId]"
-        :embeddedMode="true"
-      />
-    </t-drawer>
+    <!-- Revision history drawer -->
+    <WikiRevisionDrawer v-model:visible="showRevisionDrawer" :kb-id="props.knowledgeBaseId"
+      :slug="selectedPage?.slug || ''" :current-page="selectedPage" :can-edit="props.canEdit"
+      @reverted="onPageReverted" />
+
+    <!-- Create page dialog -->
+    <t-dialog v-model:visible="showCreatePageDialog" :header="$t('knowledgeEditor.wikiBrowser.newPageTitle')"
+      :confirm-btn="{ content: $t('common.confirm'), loading: creatingPage }" :cancel-btn="$t('common.cancel')"
+      width="520px" @confirm="submitCreatePage">
+      <div class="wiki-create-page-form">
+        <div class="wiki-create-page-field">
+          <label>{{ $t('knowledgeEditor.wikiBrowser.newPageTitleLabel') }}</label>
+          <t-input v-model="createPageForm.title"
+            :placeholder="$t('knowledgeEditor.wikiBrowser.newPageTitlePlaceholder')" @input="syncCreatePageSlug" />
+        </div>
+        <div class="wiki-create-page-field">
+          <label>{{ $t('knowledgeEditor.wikiBrowser.newPageSlugLabel') }}</label>
+          <t-input v-model="createPageForm.slug"
+            :placeholder="$t('knowledgeEditor.wikiBrowser.newPageSlugPlaceholder')"
+            @input="createPageSlugTouched = true" />
+          <div class="wiki-create-page-hint">{{ $t('knowledgeEditor.wikiBrowser.newPageSlugHint') }}</div>
+        </div>
+        <div class="wiki-create-page-field">
+          <label>{{ $t('knowledgeEditor.wikiBrowser.newPageTypeLabel') }}</label>
+          <t-select v-model="createPageForm.pageType">
+            <t-option value="concept" :label="$t('knowledgeEditor.wikiBrowser.filterConcept')" />
+            <t-option value="entity" :label="$t('knowledgeEditor.wikiBrowser.filterEntity')" />
+            <t-option value="synthesis" :label="$t('knowledgeEditor.wikiBrowser.filterSynthesis')" />
+            <t-option value="comparison" :label="$t('knowledgeEditor.wikiBrowser.filterComparison')" />
+          </t-select>
+        </div>
+        <div class="wiki-create-page-field">
+          <label>{{ $t('knowledgeEditor.wikiBrowser.newPageContentLabel') }}</label>
+          <t-textarea v-model="createPageForm.content" :autosize="{ minRows: 6, maxRows: 16 }"
+            :placeholder="$t('knowledgeEditor.wikiBrowser.editContentPlaceholder')" />
+        </div>
+      </div>
+    </t-dialog>
+
+    <!-- In-place move confirmation, anchored at the drop point. Confirming runs
+         the actual move API; cancelling discards the staged move. -->
+    <teleport to="body">
+      <div v-if="pendingMove" class="wiki-move-confirm-mask" @click="cancelPendingMove">
+        <div class="wiki-move-confirm anchored-form-popup-card"
+          :style="{ left: `${pendingMove.x}px`, top: `${pendingMove.y}px` }" @click.stop>
+          <div class="anchored-form-popup-title">
+            {{ $t('knowledgeEditor.wikiBrowser.moveConfirmTitle') }}
+          </div>
+          <div class="anchored-form-popup-body">
+            {{ $t('knowledgeEditor.wikiBrowser.moveConfirm', { target: pendingMove.targetLabel }) }}
+          </div>
+          <div class="anchored-form-popup-footer">
+            <t-button variant="outline" @click="cancelPendingMove">
+              {{ $t('common.cancel') }}
+            </t-button>
+            <t-button theme="primary" @click="confirmPendingMove">
+              {{ $t('common.confirm') }}
+            </t-button>
+          </div>
+        </div>
+      </div>
+    </teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useAssistantDataChange } from '@/utils/assistantDataChange'
+import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useMenuStore } from '@/stores/menu'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from 'vue-i18n'
-import { marked } from 'marked'
+import { marked, Renderer, type Tokens } from 'marked'
+import { ensureLiteralSingleTildeOnGlobalMarked } from '@/utils/markedLiteralTilde'
 import { MessagePlugin } from 'tdesign-vue-next'
-// RecycleScroller virtualizes the sidebar page lists so expanding a
-// 40k-item group no longer commits 40k DOM nodes. Each item has a fixed
-// height (title + 2-line summary + meta + padding) which keeps recycle
-// mode cheap — no measurement overhead per item.
 import { RecycleScroller } from 'vue-virtual-scroller'
-import { hydrateProtectedFileImages } from '@/utils/security'
+import { hydrateProtectedFileImages, sanitizeMarkdownHTML } from '@/utils/security'
+import type { ProtectedFileAccessContext } from '@/utils/protectedFileAccess'
 import picturePreview from '@/components/picture-preview.vue'
-import { createSessions } from '@/api/chat'
-import ChatView from '@/views/chat/index.vue'
+import WikiFolderActions from './WikiFolderActions.vue'
+import WikiRevisionDrawer from './WikiRevisionDrawer.vue'
+import {
+  expandedWikiDirectoryPaths,
+  expandWikiDirectoryPath,
+} from './wikiDirectoryState'
+import { resolveWikiBacklinkTitle } from './wikiBacklinkTitles'
+import { buildGraphLayout, graphNodeRadius, stepGraphLayout, visibleGraphLabels, graphPointBounds, initialGraphViewport, graphClusterOutline, graphLandmarkTitle, graphDetailSlugs, graphDetailLevelForSlug, GRAPH_DETAIL_MAX, type GraphBounds, type GraphCluster, type LayoutPlacement } from './wikiGraphLayout'
+import { getKnowledgeDetails } from '@/api/knowledge-base'
+import { useAssistantStore } from '@/stores/assistant'
+import AssistantButton from '@/components/assistant/AssistantButton.vue'
+import AssistantActionsButton from '@/components/assistant/AssistantActionsButton.vue'
+import { useAssistantPageContext } from '@/composables/useAssistantPageContext'
 import {
   listWikiPages,
+  listWikiFolders,
+  createWikiFolder,
+  updateWikiFolder,
+  deleteWikiFolder,
+  moveWikiPage,
+  createWikiPage,
+  updateWikiPage,
+  deleteWikiPage,
   getWikiPage,
   getWikiIndex,
-  getWikiLog,
   getWikiGraph,
   getWikiStats,
   searchWikiPages,
   listWikiIssues,
   updateWikiIssueStatus,
   type WikiPage,
+  type WikiFolderNode,
   type WikiGraphData,
   type WikiStats,
   type WikiPageIssue,
-  type WikiLogEntry,
   type WikiIndexGroup,
   type WikiIndexEntryDTO,
 } from '@/api/wiki'
 
 const router = useRouter()
 const route = useRoute()
-const menuStore = useMenuStore()
+const assistant = useAssistantStore()
 const settingsStore = useSettingsStore()
+
+ensureLiteralSingleTildeOnGlobalMarked()
+
+class WikiRenderer extends Renderer {
+  override link(token: Tokens.Link): string {
+    // Wiki pages have no source directory to resolve a sibling Markdown file against.
+    if (/^(?![a-z][a-z\d+.-]*:|\/)[^?#]*\.md(?:[?#]|$)/i.test(token.href)) {
+      return this.parser.parseInline(token.tokens)
+    }
+    return super.link(token)
+  }
+}
+const wikiRenderer = new WikiRenderer()
 
 const { t } = useI18n()
 
@@ -695,6 +903,13 @@ const emit = defineEmits<{
   (e: 'status-change', payload: { pendingTasks: number; isActive: boolean; pendingIssues: number }): void
   (e: 'view-graph', slug: string): void
 }>()
+
+// Wiki content can reference objects owned by the KB's source tenant (shared
+// KBs), which the tenant-scoped /files proxy rejects as cross-tenant.
+const kbFileAccess = computed<ProtectedFileAccessContext>(() => ({
+  mode: 'knowledgeBase',
+  kbId: props.knowledgeBaseId,
+}))
 const pages = ref<WikiPage[]>([])
 const selectedPage = ref<WikiPage | null>(null)
 
@@ -719,8 +934,50 @@ interface PageTypeBucket {
   total: number      // KB-wide count reported by the backend for this type
   loading: boolean
   initialized: boolean // true once the first page has been fetched
+  categoryPaths: Array<{ path: string[]; count: number }>
+  // folderIdByPath maps a materialized folder path ("AI/LLM") to its stable
+  // wiki_folders id, populated as folder levels load. Drag-and-drop and the
+  // directory rows resolve a folder's id through this map.
+  folderIdByPath: Record<string, string>
+  categoriesLoading: boolean
+  categoriesInitialized: boolean
+  // categoryPages tracks the directory-skeleton pagination per parent level,
+  // keyed by directoryPathKey(type, parentPath). Each level is paged in on
+  // demand so a folder with thousands of siblings doesn't arrive in one shot.
+  categoryPages: Record<string, DirectoryCategoryState>
+  directoryPages: Record<string, DirectoryPageState>
+  flatItems: WikiPage[]
+  flatNextPage: number
+  flatTotal: number
+  flatLoading: boolean
+  flatInitialized: boolean
+}
+interface DirectoryPageState {
+  nextPage: number
+  total: number
+  loading: boolean
+  initialized: boolean
+}
+interface DirectoryCategoryState {
+  nextPage: number   // next directory page to fetch, 1-based
+  totalPages: number
+  loading: boolean
+  initialized: boolean
+}
+type WikiTreeRow =
+  | { kind: 'directory'; rowKey: string; pathKey: string; folderId: string; path: string[]; label: string; depth: number; count: number; hasChildren: boolean; collapsed: boolean }
+  | { kind: 'load-more'; rowKey: string; type: string; path: string[]; depth: number; loading: boolean }
+  | { kind: 'page'; rowKey: string; page: WikiPage; depth: number }
+interface WikiTreeDirectory {
+  label: string
+  path: string[]
+  dirs: Map<string, WikiTreeDirectory>
+  pages: WikiPage[]
+  count: number
 }
 const pagesByType = ref<Record<string, PageTypeBucket>>({})
+const collapsedDirectories = ref<Set<string>>(new Set())
+const touchedDirectories = ref<Set<string>>(new Set())
 // Index view state. The reader renders an incrementally-built markdown
 // string rather than a structured list — opening the view loads intro
 // only, and "Load more" appends one directory section at a time in a
@@ -754,38 +1011,38 @@ const INDEX_SECTION_ORDER = [
   'synthesis',
   'comparison',
 ] as const
-// logAvailable is a flag: the sidebar "Log" entry is always shown once a
-// KB exists, because the backing wiki_log_entries table is KB-independent
-// and `GET /wiki/log` returns an empty entries list when nothing has been
-// logged yet. We don't need a full WikiPage object anymore — selecting
-// Log swaps the reader into a dedicated feed view below.
-const logAvailable = ref(true)
-
-// activeSystemView lets the reader toggle between a regular wiki page
-// (selectedPage) and a "virtual" system view — index overview and log
-// feed. These modes are mutually exclusive: entering a system view
-// clears selectedPage, and picking a page clears the system view flag.
-const activeSystemView = ref<'' | 'index' | 'log'>('')
-
-// Paginated state for the log view. `entries` grows as the user scrolls;
-// `nextCursor` is the opaque cursor returned by the backend and empty
-// signals end-of-feed. `loading` is the guard that prevents overlapping
-// loadMore calls while a request is in flight.
-const logEntries = ref<WikiLogEntry[]>([])
-const logNextCursor = ref('')
-const logLoading = ref(false)
-const logInitialized = ref(false)
+// activeSystemView lets the reader toggle between a regular wiki page and the
+// virtual index overview. Entering the index clears the selected page, and
+// picking a page clears the system view flag.
+const activeSystemView = ref<'' | 'index'>('')
 
 // When the user types into the search box we leave pagination mode and
 // show a flat result list instead. Bucketed state is preserved behind
 // the scenes so clearing the query can snap back without re-fetching.
 const searchResults = ref<WikiPage[] | null>(null)
 const pageIssues = ref<WikiPageIssue[]>([])
+const readingAssistantActions = computed(() => {
+  const source = JSON.stringify({ knowledge_base_id: props.knowledgeBaseId, wiki_slug: selectedPage.value?.slug });
+  return [
+    { key: 'summary', label: t('assistant.actions.readSummary'), query: t('assistant.prompts.readSummary', { source }) },
+    { key: 'steps', label: t('assistant.actions.readSteps'), query: t('assistant.prompts.readSteps', { source }) },
+    { key: 'faq', label: t('assistant.actions.extractFaq'), query: t('assistant.prompts.extractFaq', { source }) },
+  ];
+})
 const showIssuesBox = ref(false)
-const showFixDrawer = ref(false)
+useAssistantPageContext(() => {
+  const page = selectedPage.value
+  if (!page) return null
+  return {
+    page: 'wiki',
+    knowledgeBaseId: props.knowledgeBaseId,
+    wikiSlug: page.slug,
+    wikiTitle: page.title,
+    wikiIssueIds: pageIssues.value.map(issue => issue.id),
+  }
+})
 const showGlobalIssuesDrawer = ref(false)
 const globalIssues = ref<WikiPageIssue[]>([])
-const currentFixSessionId = ref('')
 const stats = ref<WikiStats | null>(null)
 const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
@@ -796,10 +1053,33 @@ const drawerBodyRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
+// Search and type filters must survive an empty or failed render, otherwise
+// the user has no way to leave that state.
+const graphControlsVisible = computed(() => graphReady.value || (!graphLoading.value && graphData.value !== null))
 const showArrows = ref(true)
+const showUnlinkedNodes = ref(true)
+const graphUnlinkedSlugs = computed(() => {
+  const data = graphData.value
+  const endpoints = new Set((data?.edges ?? []).flatMap(e => [e.source, e.target]))
+  return new Set((data?.nodes ?? []).filter(n => n.link_count === 0 && !endpoints.has(n.slug)).map(n => n.slug))
+})
+function toggleUnlinkedNodes() {
+  showUnlinkedNodes.value = !showUnlinkedNodes.value
+  if (showUnlinkedNodes.value && graphMode.value === 'overview' && graphDetailLevel.value < GRAPH_DETAIL_MAX) {
+    // Shelf pages require full detail; the synchronous watcher renders them.
+    graphDetailLevel.value = GRAPH_DETAIL_MAX
+    return
+  }
+  if (!showUnlinkedNodes.value && graphSelectedSlug.value && graphUnlinkedSlugs.value.has(graphSelectedSlug.value)) {
+    graphSelectedSlug.value = null
+    graphHighlightSlug.value = null
+    graphDrawerVisible.value = false
+  }
+  renderGraph()
+}
 
 // Graph filtering
-const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']))
+const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index']))
 
 // Graph slicing state. The backend caps an overview fetch at 500 nodes —
 // tens-of-thousands-page wikis would otherwise crash the browser trying to
@@ -808,20 +1088,34 @@ const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept
 // "back to overview" and show the truncation hint.
 const graphMode = ref<'overview' | 'ego'>('overview')
 const graphCenter = ref<string>('')
+// Start with every fetched page. The user can reduce detail to landmarks or
+// their nearby pages. Ego hides the control and keeps every returned node.
+const graphDetailLevel = ref(GRAPH_DETAIL_MAX)
+const graphDetailMarks = computed<Record<number, string>>(() => ({
+  0: t('knowledgeEditor.wikiBrowser.graphDetailOverview'),
+  1: t('knowledgeEditor.wikiBrowser.graphDetailOneHop'),
+  2: t('knowledgeEditor.wikiBrowser.graphDetailTwoHops'),
+  [GRAPH_DETAIL_MAX]: t('knowledgeEditor.wikiBrowser.graphDetailAll'),
+}))
+const graphDetailLabel = computed(() => graphDetailMarks.value[graphDetailLevel.value])
+const graphDetailClusters = shallowRef<GraphCluster[]>([])
+const graphDetailPlacements = shallowRef(new Map<string, LayoutPlacement>())
 const GRAPH_OVERVIEW_LIMIT = 500
 const GRAPH_EGO_LIMIT = 500
 const GRAPH_EGO_DEFAULT_DEPTH = 1
 
-watch(showGlobalIssuesDrawer, async (val) => {
-  if (val) {
-    try {
-      const res = await listWikiIssues(props.knowledgeBaseId, '', 'pending')
-      globalIssues.value = (res as any).data || res as any || []
-    } catch (e) {
-      console.error('Failed to load global wiki issues:', e)
-      globalIssues.value = []
-    }
+async function loadGlobalIssues() {
+  try {
+    const res = await listWikiIssues(props.knowledgeBaseId, '', 'pending')
+    globalIssues.value = (res as any).data || res as any || []
+  } catch (e) {
+    console.error('Failed to load global wiki issues:', e)
+    globalIssues.value = []
   }
+}
+
+watch(showGlobalIssuesDrawer, (val) => {
+  if (val) void loadGlobalIssues()
 })
 
 async function navigateToSlugAndFix(slug: string) {
@@ -892,18 +1186,47 @@ function applyGraphFilters() {
   // node/edge membership when the allow-list changes.
 }
 
+// Group focus is entered from a landmark caption. Leaving it restores the
+// viewport the user had before the first focus, not a fit-to-view.
+const graphFocusGroup = ref<{ key: string; name: string } | null>(null)
+let graphFocusReturnViewport: { scale: number; x: number; y: number } | null = null
+// Every focusable group, so the focus bar can switch to groups off screen.
+const graphGroups = ref<{ key: string; name: string; count: number }[]>([])
+let graphGroupFocusers = new Map<string, () => void>()
+const graphGroupMenu = computed(() => graphGroups.value
+  .filter(group => group.key !== graphFocusGroup.value?.key)
+  .map(group => ({ value: group.key, content: `${group.name} · ${group.count}` })))
+
+function focusGraphGroup(key: string) {
+  graphGroupFocusers.get(key)?.()
+}
+
+function exitGraphFocus() {
+  if (!graphFocusGroup.value) return
+  graphFocusedSlugs.clear()
+  graphFocusGroup.value = null
+  const back = graphFocusReturnViewport
+  graphFocusReturnViewport = null
+  clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+  if (back && graphPanZoomRef) graphPanZoomRef.flyTo(back.x, back.y, back.scale, 500)
+}
+
 // Fit graph to view
 function fitGraphToView() {
+  graphFocusedSlugs.clear()
+  graphFocusGroup.value = null
+  graphFocusReturnViewport = null
   if (!graphReady.value || !graphPanZoomRef || !graphRef.value || graphNodes.length === 0) return
-  
+  clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+
   const container = graphRef.value
   const width = container.clientWidth
   const height = container.clientHeight
-  
+
   // Find bounding box of all VISIBLE nodes
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   let visibleCount = 0
-  
+
   for (const node of graphNodes) {
     // Every node in graphNodes is a visible candidate now that filtering
     // is server-side — no need to recheck the client-side allow-list.
@@ -913,89 +1236,135 @@ function fitGraphToView() {
     maxY = Math.max(maxY, node.y)
     visibleCount++
   }
-  
+
   if (visibleCount === 0) return // No visible nodes
-  
+
+  // Include the separate shelves as well as the live node coordinates.
+  if (graphLayoutBounds) {
+    minX = Math.min(minX, graphLayoutBounds.left)
+    minY = Math.min(minY, graphLayoutBounds.top)
+    maxX = Math.max(maxX, graphLayoutBounds.right)
+    maxY = Math.max(maxY, graphLayoutBounds.bottom)
+  }
+
   // Calculate center of the bounding box
   const cx = (minX + maxX) / 2
   const cy = (minY + maxY) / 2
-  
+
   // Calculate scale to fit the bounding box (with some padding)
-  const padding = 60
-  const boxWidth = Math.max(maxX - minX, 100) + padding * 2
-  const boxHeight = Math.max(maxY - minY, 100) + padding * 2
-  
-  const scaleX = width / boxWidth
-  const scaleY = height / boxHeight
-  const targetScale = Math.max(0.2, Math.min(2, Math.min(scaleX, scaleY))) // Limit scale between 0.2 and 2
-  
+  const padding = 100
+  const boxWidth = Math.max(maxX - minX, 100)
+  const boxHeight = Math.max(maxY - minY, 100)
+
+  // Reserve room for the legend or page drawer instead of fitting nodes
+  // underneath them. The canvas still pans freely into the reserved space.
+  const sidebarWidth = graphDrawerVisible.value ? 480 : Math.min(240, width * 0.25)
+  const availableWidth = Math.max(160, width - sidebarWidth)
+  const scaleX = Math.max(100, availableWidth - padding * 2) / boxWidth
+  const scaleY = Math.max(100, height - padding * 2) / boxHeight
+  const targetScale = Math.max(0.005, Math.min(2, Math.min(scaleX, scaleY)))
+
   // Offset center if drawer is open
-  const targetCx = width / 2 - (graphDrawerVisible.value ? 240 : 0)
+  const targetCx = availableWidth / 2
   const targetCy = height / 2
-  
+
   // Target translation
   const targetTx = targetCx - cx * targetScale
   const targetTy = targetCy - cy * targetScale
-  
+
   graphPanZoomRef.flyTo(targetTx, targetTy, targetScale, 600)
 }
 
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
 const navHistory = ref<WikiPage[]>([])
-// navFromSystemView remembers which system view (Index / Log) the user
-// was viewing when they clicked into a slug, so goBack can restore it
+// navFromSystemView remembers that the user was viewing the Index when they
+// clicked into a slug, so goBack can restore it
 // once the page-level history stack is empty. We keep this parallel to
 // navHistory rather than widening its element type — navHistory is
 // consumed everywhere as `WikiPage[]` and that contract stays cleaner
 // if the system-view sentinel lives in its own ref.
-const navFromSystemView = ref<'' | 'index' | 'log'>('')
-// Index and log pages are now state refs (loaded by their own endpoints
-// at startup) rather than computed over the full page list. The old
-// computed implementation required pulling every page into memory just
-// to pluck two system pages.
+const navFromSystemView = ref<'' | 'index'>('')
 
 // typeOrder drives the order of groups in the sidebar. Keep in sync
 // with WIKI_PAGE_TYPES on the backend; unknown types fall through to
 // the "other" bucket at the bottom of groupedPages.
 const typeOrder = ['summary', 'entity', 'concept', 'synthesis', 'comparison']
 
+// Entity and concept pages look and behave alike, so the sidebar merges all
+// non-summary content types under a single "knowledge" tab and distinguishes
+// the individual page types by icon instead. Summary keeps its own tab and is
+// shown after the knowledge tab.
+const KNOWLEDGE_TAB = 'knowledge'
+const KNOWLEDGE_TYPES = ['entity', 'concept', 'synthesis', 'comparison']
+// CONTENT_TABS are the sidebar tabs in display order: the merged knowledge tab
+// first, then summary. Each tab maps to its own bucket keyed by the tab id.
+const CONTENT_TABS = [KNOWLEDGE_TAB, 'summary']
+
+// tabPageTypes maps a sidebar tab onto the comma-separated page_type filter the
+// backend expects. The knowledge tab folds every non-summary content type into
+// one request so the server returns a single merged list and directory
+// skeleton — no per-type fan-out on the client.
+function tabPageTypes(tab: string): string {
+  return tab === KNOWLEDGE_TAB ? KNOWLEDGE_TYPES.join(',') : tab
+}
+
+// Pick the default sidebar tab in CONTENT_TABS display order (knowledge
+// before summary), not whatever tab happened to finish loading first.
+function preferredDefaultTab(tabs: Array<{ type: string }>): string {
+  for (const tab of CONTENT_TABS) {
+    if (tabs.some(t => t.type === tab)) return tab
+  }
+  return tabs[0]?.type || ''
+}
+
 // groupedPages projects the bucketed state into the shape the sidebar
 // template expects: one {type, label, items, total, loading, hasMore}
-// per displayed group. Groups with zero total are hidden (nothing to
-// show) but groups with total > 0 but items.length === 0 still render
-// so the collapse header can trigger a lazy fetch.
+// per displayed group. Built-in tab totals come from whole-library stats;
+// groups with no pages remain visible when they still contain directories.
 const groupedPages = computed(() => {
-  const out: {
+  type Group = {
     type: string
     label: string
     pages: WikiPage[]
     total: number
     loading: boolean
     hasMore: boolean
-  }[] = []
-  const seen = new Set<string>()
-  const push = (type: string) => {
-    const bucket = pagesByType.value[type]
-    if (!bucket) return
-    if (bucket.total === 0) return
-    out.push({
-      type,
-      label: getTypeLabel(type),
-      pages: bucket.items,
-      total: bucket.total,
-      loading: bucket.loading,
-      hasMore: bucket.items.length < bucket.total,
-    })
-    seen.add(type)
   }
-  for (const type of typeOrder) push(type)
-  // Any types present in the buckets but not in typeOrder go last in
-  // insertion order so the sidebar doesn't suddenly hide a future type.
-  for (const type of Object.keys(pagesByType.value)) {
-    if (seen.has(type)) continue
-    if (type === 'index' || type === 'log') continue
-    push(type)
+  const out: Group[] = []
+  const seen = new Set<string>()
+  // Stats are reported per real page_type; the knowledge tab sums its members
+  // so the count is available before the first page request completes.
+  const statTotal = (tab: string) => {
+    const byType = stats.value?.pages_by_type
+    if (!byType) return 0
+    if (tab === KNOWLEDGE_TAB) return KNOWLEDGE_TYPES.reduce((sum, t) => sum + (byType[t] || 0), 0)
+    return byType[tab] || 0
+  }
+  const push = (tab: string) => {
+    const bucket = pagesByType.value[tab]
+    if (!bucket) return
+    const total = CONTENT_TABS.includes(tab)
+      ? statTotal(tab)
+      : bucket.total || statTotal(tab) || bucket.categoryPaths.length
+    if (total === 0 && bucket.items.length === 0 && bucket.categoryPaths.length === 0) return
+    out.push({
+      type: tab,
+      label: getTypeLabel(tab),
+      pages: bucket.items,
+      total,
+      loading: bucket.loading,
+      hasMore: bucket.total > 0 && bucket.items.length < bucket.total,
+    })
+    seen.add(tab)
+  }
+  for (const tab of CONTENT_TABS) push(tab)
+  // Any tabs present in the buckets but not handled above go last in insertion
+  // order so the sidebar doesn't suddenly hide a future tab.
+  for (const tab of Object.keys(pagesByType.value)) {
+    if (seen.has(tab)) continue
+    if (tab === 'index') continue
+    push(tab)
   }
   return out
 })
@@ -1006,23 +1375,60 @@ const groupedPages = computed(() => {
 // reported by the backend — zero everywhere means no content pages.
 const hasContentPages = computed(() => {
   for (const bucket of Object.values(pagesByType.value)) {
-    if (bucket.total > 0) return true
+    if (bucket.total > 0 || bucket.categoryPaths.length > 0) return true
   }
   return false
 })
 
-// Parse source refs in "id|title" format
+// Pipeline ingest stores source_refs as bare knowledge IDs (see wiki_ingest_batch)
+// so filenames do not leak into LLM citation strings. Resolve titles for display.
+const sourceRefTitleCache = reactive<Record<string, string>>({})
+let sourceRefTitleRequestSeq = 0
+
+function parseSourceRefEntry(ref: string): { id: string; title: string } {
+  const pipeIdx = ref.indexOf('|')
+  if (pipeIdx > 0) {
+    return { id: ref.substring(0, pipeIdx), title: ref.substring(pipeIdx + 1) }
+  }
+  const cached = sourceRefTitleCache[ref]
+  if (cached) {
+    return { id: ref, title: cached }
+  }
+  return {
+    id: ref,
+    title: ref.length > 20 ? ref.substring(0, 8) + '...' : ref,
+  }
+}
+
 const parsedSourceRefs = computed(() => {
   if (!selectedPage.value?.source_refs?.length) return []
-  return selectedPage.value.source_refs.map(ref => {
-    const pipeIdx = ref.indexOf('|')
-    if (pipeIdx > 0) {
-      return { id: ref.substring(0, pipeIdx), title: ref.substring(pipeIdx + 1) }
-    }
-    // Fallback: show raw ref (backwards compat with old data)
-    return { id: ref, title: ref.length > 20 ? ref.substring(0, 8) + '...' : ref }
-  })
+  return selectedPage.value.source_refs.map(parseSourceRefEntry)
 })
+
+async function hydrateSourceRefTitles(refs: string[]) {
+  const ids = refs.filter((ref) => ref.indexOf('|') < 0 && !sourceRefTitleCache[ref])
+  if (!ids.length) return
+  const seq = ++sourceRefTitleRequestSeq
+  for (const id of ids) {
+    try {
+      const res = await getKnowledgeDetails(id)
+      if (seq !== sourceRefTitleRequestSeq) return
+      const data = (res as any)?.data ?? res
+      const title = data?.title || data?.file_name || data?.fileName
+      if (title) sourceRefTitleCache[id] = title
+    } catch {
+      // Keep truncated-ID fallback when the doc was deleted or is inaccessible.
+    }
+  }
+}
+
+watch(
+  () => selectedPage.value?.source_refs,
+  (refs) => {
+    if (refs?.length) hydrateSourceRefTitles(refs)
+  },
+  { immediate: true },
+)
 
 // Rendered content for graph drawer
 const graphDrawerContent = computed(() => {
@@ -1166,6 +1572,8 @@ const graphFrontierCount = computed(() => {
   return count
 })
 
+const graphFamiliarCount = computed(() => graphData.value?.meta?.familiar_count || 0)
+
 // graphStatusCard drives the little summary panel below the legend.
 //
 // The old design ("以 A 为中心 · 1 跳 · 7 个节点" / "showing 500 / 40000,
@@ -1223,14 +1631,32 @@ const graphStatusCard = computed((): { icon: string; title: string; primary: str
     }
   }
   if (meta.mode === 'overview') {
-    const secondary = meta.truncated
+    if (graphDetailLevel.value < GRAPH_DETAIL_MAX) {
+      return {
+        icon: 'chart-bubble',
+        title: t('knowledgeEditor.wikiBrowser.cardOverviewTitle'),
+        primary: t('knowledgeEditor.wikiBrowser.cardOverviewPrimary', {
+          returned: graphDetailSlugs(
+            graphDetailClusters.value,
+            graphDetailPlacements.value,
+            graphDetailLevel.value,
+          ).size,
+          total: meta.total,
+        }),
+        secondary: t('knowledgeEditor.wikiBrowser.cardOverviewDetailHint'),
+      }
+    }
+    const hiddenCount = showUnlinkedNodes.value ? 0 : graphUnlinkedSlugs.value.size
+    const secondary = hiddenCount > 0
+      ? t('knowledgeEditor.wikiBrowser.unlinkedHidden', { count: hiddenCount })
+      : meta.truncated
       ? t('knowledgeEditor.wikiBrowser.cardOverviewHintTruncated')
       : t('knowledgeEditor.wikiBrowser.cardOverviewHintFull')
     return {
       icon: 'chart-bubble',
       title: t('knowledgeEditor.wikiBrowser.cardOverviewTitle'),
       primary: t('knowledgeEditor.wikiBrowser.cardOverviewPrimary', {
-        returned: meta.returned,
+        returned: data.nodes.length - hiddenCount,
         total: meta.total,
       }),
       secondary,
@@ -1250,7 +1676,7 @@ function closeImagePreview() {
 watch(graphDrawerContent, async () => {
   await nextTick()
   if (drawerBodyRef.value) {
-    await hydrateProtectedFileImages(drawerBodyRef.value)
+    await hydrateProtectedFileImages(drawerBodyRef.value, kbFileAccess.value)
   }
 })
 
@@ -1263,8 +1689,8 @@ function renderMarkdown(content: string): string {
     return `<a href="#" class="wiki-content-link" data-slug="${slug}">${display}</a>`
   })
 
-  // Use marked to render the markdown to HTML
-  return marked.parse(preprocessed, { breaks: true, async: false }) as string
+  const html = marked.parse(preprocessed, { breaks: true, async: false, renderer: wikiRenderer })
+  return sanitizeMarkdownHTML(html)
 }
 
 async function openGraphDrawer(slug: string) {
@@ -1294,35 +1720,106 @@ function handleGraphDrawerClick(e: MouseEvent) {
 
 // activeTab drives which page_type's list is visible in the sidebar.
 // Pre-tabbed UX stacked collapsible groups, but on a 40k-page KB the
-// expanded groups nest RecycleScroller viewports and scroll events get
+// expanded groups left multiple virtualized viewports and scroll events got
 // ambiguous — "which list am I scrolling?" The tabbed version removes
 // that ambiguity by mounting exactly one scroller at a time.
 const activeTab = ref<string>('')
-// The outer scroll container — the RecycleScroller runs in page-mode and
-// delegates scrolling here, so we need a handle to reset scrollTop on
-// tab switches. Otherwise the retained scroll position from the old tab
-// re-triggers the sentinel on the new tab's (shorter) list and cascades
-// load-more calls until the new bucket catches up.
+type SidebarViewMode = 'tree' | 'list'
+const SIDEBAR_VIEW_MODE_KEY = 'weknora.wiki.sidebar.viewMode'
+function initialSidebarViewMode(): SidebarViewMode {
+  try {
+    return localStorage.getItem(SIDEBAR_VIEW_MODE_KEY) === 'list' ? 'list' : 'tree'
+  } catch {
+    return 'tree'
+  }
+}
+const sidebarViewMode = ref<SidebarViewMode>(initialSidebarViewMode())
+// Suppress visibleTabs watcher during the first sidebar load. Knowledge and
+// summary buckets load in parallel; whichever API returns first used to win
+// the race and stick on summary even though knowledge is the intended default.
+let initialSidebarLoad = true
+// The outer scroll container. We reset it on tab switches so the retained
+// scroll position from the old tab doesn't immediately expose the new
+// tab's sentinel and cascade load-more calls.
 const pageListRef = ref<HTMLElement | null>(null)
-// Handle on the active RecycleScroller. In page-mode the scroller only
-// recomputes its visible window on scroll events; when we extend `items`
-// in place the previously-rendered tail remains mounted at its old
-// offsets, so newly appended rows appear out of order at the bottom
-// until the user jiggles the scroll. Calling `updateVisibleItems` after
-// a batch arrives forces the recompute and avoids that "ghost last page"
-// artifact.
-const groupScrollerRef = ref<{ updateVisibleItems?: (force: boolean) => void } | null>(null)
+const sidebarViewSwitching = ref(false)
+const sidebarTabSwitching = ref(false)
 
-function setActiveTab(type: string) {
-  if (activeTab.value === type) return
-  activeTab.value = type
+watch(sidebarViewMode, (mode) => {
+  try { localStorage.setItem(SIDEBAR_VIEW_MODE_KEY, mode) } catch { /* ignore */ }
+  cancelCreateRootFolder()
+  if (pageListRef.value) pageListRef.value.scrollTop = 0
+})
+
+async function switchSidebarViewMode(mode: SidebarViewMode) {
+  if (mode === sidebarViewMode.value || sidebarViewSwitching.value) return
+  sidebarViewSwitching.value = true
+  try {
+    // The flat list has its own unscoped pagination stream. Fetch its first
+    // page before swapping containers so the user never lands on an empty
+    // RecycleScroller while the request is still in flight.
+    if (mode === 'list' && activeTab.value) {
+      const ready = await loadFlatPagesForType(activeTab.value)
+      if (!ready && activeFlatPages.value.length === 0) return
+    }
+    sidebarViewMode.value = mode
+  } finally {
+    sidebarViewSwitching.value = false
+  }
+}
+
+function waitForTabData(type: string, mode: SidebarViewMode): Promise<void> {
+  const isBusy = () => {
+    const bucket = pagesByType.value[type]
+    if (!bucket) return false
+    return mode === 'list'
+      ? bucket.flatLoading
+      : bucket.loading || bucket.categoriesLoading
+  }
+  if (!isBusy()) return Promise.resolve()
+
+  return new Promise(resolve => {
+    const stop = watch(isBusy, (busy) => {
+      if (!busy) {
+        stop()
+        resolve()
+      }
+    }, { flush: 'post' })
+    // The request may finish between the initial check and watcher setup.
+    if (!isBusy()) {
+      stop()
+      resolve()
+    }
+  })
+}
+
+async function setActiveTab(type: string) {
+  if (activeTab.value === type || sidebarTabSwitching.value) return
+  sidebarTabSwitching.value = true
+  ensureBucket(type)
+  try {
+    // Initial sidebar requests run in parallel. A tab can become visible from
+    // stats before its page/folder requests finish, so prepare the target
+    // bucket before replacing the current content instead of briefly mounting
+    // an empty tree/list on the first click after refresh.
+    if (sidebarViewMode.value === 'list') {
+      await loadFlatPagesForType(type)
+    } else {
+      await Promise.all([
+        loadPagesForType(type),
+        loadCategoriesForType(type),
+      ])
+    }
+    await waitForTabData(type, sidebarViewMode.value)
+
+    cancelCreateRootFolder()
+    activeTab.value = type
+  } finally {
+    sidebarTabSwitching.value = false
+  }
   // Snap back to the top before the new list renders so the sentinel
   // has to be scrolled to, not simply appear at a retained scroll depth.
   if (pageListRef.value) pageListRef.value.scrollTop = 0
-  const bucket = pagesByType.value[type]
-  if (bucket && !bucket.initialized && !bucket.loading) {
-    loadPagesForType(type)
-  }
 }
 
 // visibleTabs mirrors groupedPages but is meant for rendering the
@@ -1340,29 +1837,221 @@ const activeGroup = computed(() => {
   return groupedPages.value.find(g => g.type === activeTab.value) || null
 })
 
+const activeFlatPages = computed(() => {
+  if (!activeTab.value) return []
+  return pagesByType.value[activeTab.value]?.flatItems || []
+})
+
+const activeFlatState = computed(() => {
+  if (!activeTab.value) return null
+  const bucket = pagesByType.value[activeTab.value]
+  if (!bucket) return null
+  return {
+    loading: bucket.flatLoading,
+    hasMore: !bucket.flatInitialized || bucket.flatItems.length < bucket.flatTotal,
+  }
+})
+
+function pageCategoryPath(page: WikiPage): string[] {
+  const raw = Array.isArray(page.category_path) ? page.category_path : []
+  return raw.map(part => String(part || '').trim()).filter(Boolean)
+}
+
+function directoryPathKey(type: string, parts: string[]): string {
+  return `${type}:${parts.join('/')}`
+}
+
+function toggleDirectory(pathKey: string) {
+  const next = new Set(collapsedDirectories.value)
+  if (next.has(pathKey)) {
+    next.delete(pathKey)
+    const parsed = parseDirectoryPathKey(pathKey)
+    if (parsed) {
+      loadCategoriesForType(parsed.type, { parentPath: parsed.path })
+      loadPagesForType(parsed.type, { categoryPath: parsed.path })
+    }
+  } else {
+    next.add(pathKey)
+  }
+  collapsedDirectories.value = next
+
+  const touched = new Set(touchedDirectories.value)
+  touched.add(pathKey)
+  touchedDirectories.value = touched
+}
+
+function parseDirectoryPathKey(pathKey: string): { type: string; path: string[] } | null {
+  const idx = pathKey.indexOf(':')
+  if (idx < 0) return null
+  const type = pathKey.slice(0, idx)
+  const path = pathKey.slice(idx + 1).split('/').map(part => part.trim()).filter(Boolean)
+  return { type, path }
+}
+
+function clearDirectoryStateForType(type: string) {
+  const prefix = `${type}:`
+  collapsedDirectories.value = new Set([...collapsedDirectories.value].filter(key => !key.startsWith(prefix)))
+  touchedDirectories.value = new Set([...touchedDirectories.value].filter(key => !key.startsWith(prefix)))
+}
+
+function initializeDefaultCollapsedDirectories(type: string, pagesToInspect: WikiPage[]) {
+  if (pagesToInspect.length === 0) return
+
+  const next = new Set(collapsedDirectories.value)
+  const touched = touchedDirectories.value
+  let changed = false
+
+  for (const page of pagesToInspect) {
+    const path = pageCategoryPath(page)
+    for (let i = 0; i < path.length; i++) {
+      const key = directoryPathKey(type, path.slice(0, i + 1))
+      if (touched.has(key) || next.has(key)) continue
+      next.add(key)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    collapsedDirectories.value = next
+  }
+}
+
+const activeTreeRows = computed<WikiTreeRow[]>(() => {
+  const group = activeGroup.value
+  if (!group) return []
+  const groupType = group.type
+
+  const rows: WikiTreeRow[] = []
+  const root: WikiTreeDirectory = {
+    label: '',
+    path: [],
+    dirs: new Map(),
+    pages: [],
+    count: 0,
+  }
+
+  function ensureDirectory(parent: WikiTreeDirectory, label: string): WikiTreeDirectory {
+    const existing = parent.dirs.get(label)
+    if (existing) return existing
+
+    const dir: WikiTreeDirectory = {
+      label,
+      path: [...parent.path, label],
+      dirs: new Map(),
+      pages: [],
+      count: 0,
+    }
+    parent.dirs.set(label, dir)
+    return dir
+  }
+
+  // Each tab maps to a single bucket; the knowledge tab's bucket already holds
+  // the server-merged pages and directory skeleton (page_type=entity,concept,…).
+  const bucket = pagesByType.value[groupType]
+  const hasCategorySkeleton = (bucket?.categoryPaths.length || 0) > 0
+  for (const category of bucket?.categoryPaths || []) {
+    const categoryPath = category.path
+    let cursor = root
+    for (let i = 0; i < categoryPath.length; i++) {
+      const part = categoryPath[i]
+      cursor = ensureDirectory(cursor, part)
+      if (i === categoryPath.length - 1) {
+        cursor.count = category.count
+      }
+    }
+  }
+
+  for (const page of group.pages) {
+    const path = pageCategoryPath(page)
+    let cursor = root
+    if (!hasCategorySkeleton) cursor.count += 1
+
+    for (const part of path) {
+      cursor = ensureDirectory(cursor, part)
+      if (!hasCategorySkeleton) cursor.count += 1
+    }
+
+    cursor.pages.push(page)
+  }
+
+  function appendDirectory(dir: WikiTreeDirectory, depth: number) {
+    const key = directoryPathKey(groupType, dir.path)
+    const collapsed = collapsedDirectories.value.has(key)
+    rows.push({
+      kind: 'directory',
+      rowKey: `dir:${key}`,
+      pathKey: key,
+      folderId: bucket?.folderIdByPath[dir.path.join('/')] || '',
+      path: dir.path,
+      label: dir.label,
+      depth,
+      count: dir.count,
+      hasChildren: dir.dirs.size > 0,
+      collapsed,
+    })
+    if (collapsed) return
+
+    for (const child of dir.dirs.values()) {
+      appendDirectory(child, depth + 1)
+    }
+    for (const page of dir.pages) {
+      rows.push({
+        kind: 'page',
+        rowKey: `page:${page.id}`,
+        page,
+        depth: depth + 1,
+      })
+    }
+    const state = bucket?.directoryPages[key]
+    const hasMore = state && state.total > 0 && (state.nextPage - 1) * WIKI_SIDEBAR_PAGE_SIZE < state.total
+    if (state?.loading || hasMore) {
+      rows.push({
+        kind: 'load-more',
+        rowKey: `load-more:${key}`,
+        type: groupType,
+        path: dir.path,
+        depth: depth + 1,
+        loading: !!state?.loading,
+      })
+    }
+  }
+
+  for (const dir of root.dirs.values()) {
+    appendDirectory(dir, 0)
+  }
+  for (const page of root.pages) {
+    rows.push({
+      kind: 'page',
+      rowKey: `page:${page.id}`,
+      page,
+      depth: 0,
+    })
+  }
+  return rows
+})
+
 // Keep activeTab in sync with what's available. When loadPages first
 // populates buckets, pick the first non-empty tab. When a user deletes
 // the last page of the active type we transparently switch to the next
 // available one so the sidebar never shows "tab selected with no list".
 watch(visibleTabs, (tabs) => {
+  if (initialSidebarLoad) return
   if (tabs.length === 0) {
     activeTab.value = ''
     return
   }
   if (!tabs.some(t => t.type === activeTab.value)) {
-    activeTab.value = tabs[0].type
+    activeTab.value = preferredDefaultTab(tabs)
   }
 })
 
-// IntersectionObserver-driven infinite scroll for the active tab.
-// In page-mode the RecycleScroller doesn't emit scroll-end, so we
-// observe a 1px sentinel placed after the list. When it enters the
-// viewport we pull the next page for the active bucket; guards in
-// loadPagesForType prevent double-fetching. We re-bind whenever the
-// sentinel element changes (tab switch, empty/has-more transitions).
+// IntersectionObserver-driven infinite scroll for the active tab. We
+// observe a 1px sentinel placed after the list; when it enters the
+// viewport we pull the next page for the active bucket. Guards in
+// loadPagesForType prevent double-fetching.
 const groupSentinelRef = ref<HTMLElement | null>(null)
 let groupSentinelObserver: IntersectionObserver | null = null
-watch(groupSentinelRef, (el) => {
+watch([groupSentinelRef, sidebarViewMode], ([el]) => {
   if (groupSentinelObserver) {
     groupSentinelObserver.disconnect()
     groupSentinelObserver = null
@@ -1372,49 +2061,115 @@ watch(groupSentinelRef, (el) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue
       const type = (entry.target as HTMLElement).dataset.type
-      if (type) loadPagesForType(type)
+      if (!type) continue
+      if (sidebarViewMode.value === 'list') loadFlatPagesForType(type)
+      else loadPagesForType(type)
     }
   }, { rootMargin: '200px' })
   groupSentinelObserver.observe(el)
 }, { flush: 'post' })
 
-// WIKI_PAGE_ITEM_HEIGHT must match the rendered height of .wiki-page-item
-// INCLUDING its bottom margin. RecycleScroller absolutely positions
-// items at multiples of this value; if the CSS renders at a different
-// height, siblings overlap. Measured height with 1-line title + 2-line
-// 12/1.5 summary + meta + 10/10 padding = ~95px; we lock the item to
-// exactly 100px below so the math is independent of summary text length.
 const WIKI_PAGE_ITEM_HEIGHT = 100
+
+// Auto-load for the "load more" rows that live INSIDE the tree (more
+// pages within an expanded directory, or more sub-folders at a level).
+// The bottom group sentinel only covers the root page list; these rows
+// can sit in the MIDDLE of the list, so we observe each of them. When a
+// row scrolls into view it fires its loader instead of waiting for a
+// manual click. Re-attaching on every activeTreeRows change also drains
+// the case the user asked about — "current page loaded but more remain,
+// and the row never reached the bottom": observe() re-fires for any row
+// still intersecting after the previous batch rendered, and the loader
+// guards stop the cascade once the directory is exhausted or the row is
+// pushed out of view.
+const treeListRef = ref<HTMLElement | null>(null)
+let loadMoreObserver: IntersectionObserver | null = null
+
+function dispatchLoadMore(rowKey: string) {
+  const row = activeTreeRows.value.find(r => r.rowKey === rowKey)
+  if (!row) return
+  if (row.kind === 'load-more') {
+    loadPagesForType(row.type, { categoryPath: row.path })
+  }
+}
+
+watch([activeTreeRows, treeListRef], () => {
+  if (loadMoreObserver) {
+    loadMoreObserver.disconnect()
+    loadMoreObserver = null
+  }
+  const container = treeListRef.value
+  if (!container) return
+  loadMoreObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      const key = (entry.target as HTMLElement).dataset.loadmoreKey
+      if (key) dispatchLoadMore(key)
+    }
+  }, { rootMargin: '200px' })
+  container.querySelectorAll<HTMLElement>('[data-loadmore-key]')
+    .forEach(el => loadMoreObserver!.observe(el))
+}, { flush: 'post' })
 
 function getTypeTheme(type: string): string {
   const map: Record<string, string> = {
     summary: 'primary', entity: 'success', concept: 'warning',
-    synthesis: 'primary', comparison: 'danger', index: 'default', log: 'default',
+    synthesis: 'primary', comparison: 'danger', index: 'default',
   }
   return map[type] || 'default'
 }
 
 function getTypeLabel(type: string): string {
   const map: Record<string, string> = {
+    knowledge: t('knowledgeEditor.wikiBrowser.filterKnowledge'),
     summary: t('knowledgeEditor.wikiBrowser.filterSummary'),
     entity: t('knowledgeEditor.wikiBrowser.filterEntity'),
     concept: t('knowledgeEditor.wikiBrowser.filterConcept'),
     synthesis: t('knowledgeEditor.wikiBrowser.filterSynthesis'),
     comparison: t('knowledgeEditor.wikiBrowser.filterComparison'),
     index: 'Index',
-    log: 'Log',
   }
   return map[type] || type
 }
 
+// getPageIcon picks a distinct icon per page_type so the merged knowledge
+// tab can still tell entities, concepts, etc. apart at a glance.
+function getPageIcon(page: WikiPage): string {
+  const map: Record<string, string> = {
+    entity: 'tag',
+    concept: 'lightbulb',
+    synthesis: 'relativity',
+    comparison: 'view-module',
+    summary: 'file',
+  }
+  return map[page.page_type] || 'file'
+}
+
 const renderedContent = computed(() => {
   if (!selectedPage.value) return ''
-  return renderMarkdown(selectedPage.value.content)
+  const body = stripDuplicateLeadingTitle(selectedPage.value.content || '', selectedPage.value.title)
+  return renderMarkdown(body)
 })
+
+function stripDuplicateLeadingTitle(content: string, title: string): string {
+  if (!content || !title) return content
+  const lines = content.split('\n')
+  let i = 0
+  while (i < lines.length && lines[i].trim() === '') i++
+  if (i >= lines.length) return content
+  const headingMatch = lines[i].match(/^#\s+(.+?)\s*$/)
+  if (!headingMatch) return content
+  const heading = headingMatch[1].trim()
+  const pageTitle = title.trim()
+  if (heading !== pageTitle && heading.toLowerCase() !== pageTitle.toLowerCase()) return content
+  i++
+  while (i < lines.length && lines[i].trim() === '') i++
+  return lines.slice(i).join('\n')
+}
 
 // Label shown next to the back arrow on page headers. Prefers the
 // nearest page-history entry when available so the user sees where
-// they'll land; falls back to the Index/Log label when the current
+// they'll land; falls back to the Index label when the current
 // page was opened directly from a system view.
 const backLabel = computed(() => {
   if (navHistory.value.length > 0) {
@@ -1422,9 +2177,6 @@ const backLabel = computed(() => {
   }
   if (navFromSystemView.value === 'index') {
     return t('knowledgeEditor.wikiBrowser.indexTitle')
-  }
-  if (navFromSystemView.value === 'log') {
-    return t('knowledgeEditor.wikiBrowser.logTitle')
   }
   return ''
 })
@@ -1448,7 +2200,7 @@ const indexHasMore = computed(() => {
 watch(renderedContent, async () => {
   await nextTick()
   if (readerBodyRef.value) {
-    await hydrateProtectedFileImages(readerBodyRef.value)
+    await hydrateProtectedFileImages(readerBodyRef.value, kbFileAccess.value)
   }
 })
 
@@ -1458,7 +2210,7 @@ watch(renderedContent, async () => {
 watch(renderedIndexMarkdown, async () => {
   await nextTick()
   if (indexBodyRef.value) {
-    await hydrateProtectedFileImages(indexBodyRef.value)
+    await hydrateProtectedFileImages(indexBodyRef.value, kbFileAccess.value)
   }
 })
 
@@ -1481,17 +2233,70 @@ function handleContentClick(e: MouseEvent) {
 // the initial paint is snappy even on a big KB, large enough that the
 // virtualized scroller normally gets everything it needs in one request
 // for common wikis. Later pages are pulled on scroll.
-const WIKI_SIDEBAR_PAGE_SIZE = 50
-
-// CONTENT_PAGE_TYPES is the list of page_type buckets the sidebar
-// renders as collapsible groups. We initialize all of them up-front so
-// the sidebar scaffolding renders immediately with "loading" markers —
-// if a bucket truly has 0 pages server-side, the total field comes back
-// as 0 and groupedPages hides it.
-const CONTENT_PAGE_TYPES = ['summary', 'entity', 'concept', 'synthesis', 'comparison']
+const WIKI_SIDEBAR_PAGE_SIZE = 100
 
 function emptyBucket(): PageTypeBucket {
-  return { items: [], nextPage: 1, total: 0, loading: false, initialized: false }
+  return {
+    items: [],
+    nextPage: 1,
+    total: 0,
+    loading: false,
+    initialized: false,
+    categoryPaths: [],
+    folderIdByPath: {},
+    categoriesLoading: false,
+    categoriesInitialized: false,
+    categoryPages: {},
+    directoryPages: {},
+    flatItems: [],
+    flatNextPage: 1,
+    flatTotal: 0,
+    flatLoading: false,
+    flatInitialized: false,
+  }
+}
+
+async function loadFlatPagesForType(type: string, reset = false): Promise<boolean> {
+  const bucket = ensureBucket(type)
+  if (bucket.flatLoading) return bucket.flatItems.length > 0
+  if (!reset && bucket.flatInitialized && bucket.flatItems.length >= bucket.flatTotal) return true
+
+  bucket.flatLoading = true
+  try {
+    const requestPage = reset ? 1 : bucket.flatNextPage
+    const res = await listWikiPages(props.knowledgeBaseId, {
+      page_type: tabPageTypes(type),
+      page: requestPage,
+      page_size: WIKI_SIDEBAR_PAGE_SIZE,
+      sort_by: 'wiki_path',
+      sort_order: 'asc',
+    })
+    const body: any = (res as any).data || res
+    const batch: WikiPage[] = body?.pages || []
+    if (reset) {
+      bucket.flatItems = batch
+      bucket.flatNextPage = 2
+    } else {
+      const seen = new Set(bucket.flatItems.map(page => page.id))
+      for (const page of batch) {
+        if (!seen.has(page.id)) bucket.flatItems.push(page)
+      }
+      bucket.flatNextPage += 1
+    }
+    bucket.flatTotal = Number(body?.total) || 0
+    bucket.flatInitialized = true
+
+    const seenPages = new Set(pages.value.map(page => page.id))
+    for (const page of batch) {
+      if (!seenPages.has(page.id)) pages.value.push(page)
+    }
+    return true
+  } catch (e) {
+    console.error(`Failed to load flat wiki pages of type ${type}:`, e)
+    return false
+  } finally {
+    bucket.flatLoading = false
+  }
 }
 
 function ensureBucket(type: string): PageTypeBucket {
@@ -1501,37 +2306,425 @@ function ensureBucket(type: string): PageTypeBucket {
   return pagesByType.value[type]
 }
 
+// loadCategoriesForType pulls the child folders of one directory level from the
+// authoritative wiki_folders tree. Empty folders are returned only for the
+// merged knowledge tab (multi page_type); the summary tab omits them.
+// bucket.folderIdByPath; the root level uses id "". Each level's children are
+// returned in one shot (the tree is navigation-sized), so there is no
+// per-level "load more folders" pagination anymore.
+async function loadCategoriesForType(type: string, opts: { reset?: boolean; parentPath?: string[] } = {}) {
+  const bucket = ensureBucket(type)
+  const parentPath = opts.parentPath || []
+  const parentKey = directoryPathKey(type, parentPath)
+  const isRoot = parentPath.length === 0
+
+  const parentId = isRoot ? '' : bucket.folderIdByPath[parentPath.join('/')]
+  // A deeper level whose parent folder id we have not yet recorded cannot be
+  // resolved against the (id-based) folders endpoint — skip until it loads.
+  if (!isRoot && parentId === undefined) return
+
+  let state = bucket.categoryPages[parentKey]
+  if (state?.loading) return
+  if (!opts.reset && state && state.initialized) return // a level is loaded in a single request
+  if (!state) {
+    state = { nextPage: 1, totalPages: 1, loading: false, initialized: false }
+  }
+
+  const setState = (next: DirectoryCategoryState) => {
+    bucket.categoryPages = { ...bucket.categoryPages, [parentKey]: next }
+  }
+  setState({ ...state, loading: true })
+  if (isRoot) bucket.categoriesLoading = true
+  try {
+    const res = await listWikiFolders(props.knowledgeBaseId, parentId || '', tabPageTypes(type))
+    const body: any = (res as any).data || res
+    const folders: WikiFolderNode[] = Array.isArray(body?.folders) ? body.folders : []
+    const incoming = folders
+      .map(folder => ({
+        path: String(folder.path || '').split('/').map(part => part.trim()).filter(Boolean),
+        count: Number(folder.page_count) || 0,
+        id: String(folder.id || ''),
+      }))
+      .filter(entry => entry.path.length > 0)
+      // Summary is a single page_type; empty folders belong in the merged
+      // knowledge view only (backend filters too — belt-and-suspenders).
+      .filter(entry => type !== 'summary' || entry.count > 0)
+
+    const existing = new Map((opts.reset ? [] : bucket.categoryPaths)
+      .map(entry => [directoryPathKey(type, entry.path), entry]))
+    const folderIds = opts.reset ? {} : { ...bucket.folderIdByPath }
+    for (const entry of incoming) {
+      existing.set(directoryPathKey(type, entry.path), { path: entry.path, count: entry.count })
+      folderIds[entry.path.join('/')] = entry.id
+    }
+    bucket.categoryPaths = Array.from(existing.values())
+    bucket.folderIdByPath = folderIds
+    if (opts.reset) bucket.categoryPages = {}
+    setState({ nextPage: 2, totalPages: 1, loading: false, initialized: true })
+    if (isRoot) bucket.categoriesInitialized = true
+    initializeDefaultCollapsedDirectories(type, incoming.map(entry => ({
+      category_path: entry.path,
+    } as WikiPage)))
+  } catch (e) {
+    console.error(`Failed to load wiki folders of type ${type}:`, e)
+    setState({ ...state, loading: false })
+  } finally {
+    if (isRoot) bucket.categoriesLoading = false
+  }
+}
+
+// reloadDirectoryForType resets and reloads both the folder skeleton and the
+// pages for one tab. Used after a structural mutation (move page, create /
+// rename / delete folder) so the tree reflects the new layout authoritatively
+// instead of guessing at the optimistic delta.
+async function reloadDirectoryForType(
+  type: string,
+  opts: { preserveDirectoryState?: boolean } = {},
+) {
+  const refreshFlatList = sidebarViewMode.value === 'list' || ensureBucket(type).flatInitialized
+  const expandedPaths = opts.preserveDirectoryState
+    ? expandedWikiDirectoryPaths(type, collapsedDirectories.value, touchedDirectories.value)
+    : []
+  if (!opts.preserveDirectoryState) clearDirectoryStateForType(type)
+  await loadPagesForType(type, {
+    reset: true,
+    preserveDirectoryState: opts.preserveDirectoryState,
+  })
+  await loadCategoriesForType(type, { reset: true })
+  // Folder data is fetched one level at a time. Reload preserved paths in
+  // parent-first order so each child request can resolve its parent folder id.
+  for (const path of expandedPaths) {
+    await Promise.all([
+      loadPagesForType(type, { categoryPath: path }),
+      loadCategoriesForType(type, { parentPath: path }),
+    ])
+  }
+  if (refreshFlatList) await loadFlatPagesForType(type, true)
+}
+
+// --- Drag-and-drop: move a page or folder into a folder ------------------
+// draggedItem holds whatever is being dragged — a page (move into folder) or a
+// folder (reparent). dropTargetKey is the row highlighted as the hover target
+// ("__root__" for the toolbar drop zone). Both clear on dragend / drop so a
+// cancelled drag leaves no sticky highlight.
+type DraggedItem =
+  | { kind: 'page'; page: WikiPage }
+  | { kind: 'folder'; folderId: string; path: string[] }
+const draggedItem = ref<DraggedItem | null>(null)
+const dropTargetKey = ref<string>('')
+
+// primeDragData sets dataTransfer so the native HTML5 drag actually starts.
+// Firefox refuses to initiate a drag unless some data is set, and without an
+// explicit effectAllowed/dropEffect the cursor shows "no-drop" and the drop
+// event never fires — which is why the move felt impossible to trigger.
+function primeDragData(e: DragEvent) {
+  if (!e.dataTransfer) return
+  e.dataTransfer.effectAllowed = 'move'
+  try {
+    e.dataTransfer.setData('text/plain', '')
+  } catch {
+    // Some browsers throw if setData is called outside a real dragstart; ignore.
+  }
+}
+
+function onPageDragStart(e: DragEvent, page: WikiPage) {
+  draggedItem.value = { kind: 'page', page }
+  primeDragData(e)
+}
+
+function onFolderDragStart(e: DragEvent, folderId: string, path: string[]) {
+  if (!folderId) return
+  draggedItem.value = { kind: 'folder', folderId, path }
+  primeDragData(e)
+}
+
+function onPageDragEnd() {
+  draggedItem.value = null
+  dropTargetKey.value = ''
+}
+
+function onDirectoryDragOver(e: DragEvent, pathKey: string) {
+  if (!draggedItem.value) return
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropTargetKey.value = pathKey
+}
+
+// onRootDragOver fires on the list container itself. Folder rows stop their
+// dragover from bubbling here, so reaching this handler means the cursor is
+// over empty list space (or a page row) — i.e. a "move to root" target.
+function onRootDragOver(e: DragEvent) {
+  if (!draggedItem.value) return
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropTargetKey.value = '__root__'
+}
+
+function onDirectoryDragLeave(pathKey: string) {
+  if (dropTargetKey.value === pathKey) dropTargetKey.value = ''
+}
+
+// A move is staged here on drop and only executed once the user confirms via
+// the in-place confirmation popup (anchored at the drop point). This avoids
+// silently mutating the tree on an accidental drag.
+const pendingMove = ref<
+  | { item: DraggedItem; folderId: string; targetLabel: string; x: number; y: number }
+  | null
+>(null)
+
+function onDropOnDirectory(e: DragEvent, folderId: string, path: string[]) {
+  const item = draggedItem.value
+  draggedItem.value = null
+  dropTargetKey.value = ''
+  if (!item) return
+  const targetPath = path.join('/')
+
+  if (item.kind === 'page') {
+    // No-op when the page already lives in this folder.
+    if ((pageCategoryPath(item.page) || []).join('/') === targetPath) return
+  } else {
+    // Folder reparent. Reject no-op (same parent) and the illegal move of a
+    // folder into itself or one of its descendants.
+    const sourcePath = item.path.join('/')
+    if (sourcePath === targetPath) return
+    if (folderId === item.folderId) return
+    if (targetPath === sourcePath || targetPath.startsWith(`${sourcePath}/`)) {
+      MessagePlugin.warning(t('knowledgeEditor.wikiBrowser.moveFolderIntoSelf'))
+      return
+    }
+  }
+
+  const targetLabel = path.length > 0
+    ? path[path.length - 1]
+    : t('knowledgeEditor.wikiBrowser.rootFolderLabel')
+  pendingMove.value = { item, folderId, targetLabel, x: e.clientX, y: e.clientY }
+}
+
+function cancelPendingMove() {
+  pendingMove.value = null
+}
+
+async function confirmPendingMove() {
+  const move = pendingMove.value
+  pendingMove.value = null
+  if (!move) return
+  const { item, folderId } = move
+
+  if (item.kind === 'page') {
+    try {
+      await moveWikiPage(props.knowledgeBaseId, item.page.slug, folderId)
+      MessagePlugin.success(t('knowledgeEditor.wikiBrowser.movePageSuccess'))
+      await reloadDirectoryForType(activeTab.value)
+    } catch (e) {
+      console.error('Failed to move wiki page:', e)
+      MessagePlugin.error(t('knowledgeEditor.wikiBrowser.movePageFailed'))
+    }
+    return
+  }
+
+  try {
+    await updateWikiFolder(props.knowledgeBaseId, item.folderId, { parent_id: folderId, move_parent: true })
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.moveFolderSuccess'))
+    await reloadDirectoryForType(activeTab.value)
+  } catch (e: any) {
+    console.error('Failed to move wiki folder:', e)
+    MessagePlugin.error(
+      e?.message || t('knowledgeEditor.wikiBrowser.moveFolderFailed'),
+    )
+  }
+}
+
+// --- Folder create / rename / delete -------------------------------------
+// These are invoked by the in-place WikiFolderActions popup (no full-page
+// dialog). The popup owns the input / confirm surface; these handlers only do
+// the API call, surface a toast, and reload the affected tab so the tree
+// reflects the new layout authoritatively.
+async function createFolder(parentId: string, parentPath: string[], name: string) {
+  const type = activeTab.value
+  const scrollTop = pageListRef.value?.scrollTop
+  try {
+    await createWikiFolder(props.knowledgeBaseId, parentId, name)
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.createFolderSuccess'))
+    // Keep the current path expanded so refreshing the authoritative tree does
+    // not collapse it and clamp the sidebar scroll position back to the root.
+    if (parentPath.length > 0) {
+      const state = expandWikiDirectoryPath(
+        type,
+        parentPath,
+        collapsedDirectories.value,
+        touchedDirectories.value,
+      )
+      collapsedDirectories.value = state.collapsed
+      touchedDirectories.value = state.touched
+    }
+    await reloadDirectoryForType(type, { preserveDirectoryState: true })
+    await nextTick()
+    if (activeTab.value === type && scrollTop !== undefined && pageListRef.value) {
+      pageListRef.value.scrollTop = scrollTop
+    }
+  } catch (e: any) {
+    console.error('Failed to create wiki folder:', e)
+    MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.createFolderFailed'))
+  }
+}
+
+// Inline rename: the directory row swaps its label for a text input instead
+// of opening a popup. editingFolderId marks the active row; editingName backs
+// the input. Committed on Enter / blur, abandoned on Escape.
+const editingFolderId = ref('')
+const editingName = ref('')
+
+const creatingRootFolder = ref(false)
+const creatingRootFolderName = ref('')
+const creatingRootFolderInputRef = ref<HTMLInputElement | null>(null)
+
+function startCreateRootFolder() {
+  if (creatingRootFolder.value) return
+  creatingRootFolder.value = true
+  creatingRootFolderName.value = ''
+  nextTick(() => {
+    creatingRootFolderInputRef.value?.focus()
+  })
+}
+
+function cancelCreateRootFolder() {
+  creatingRootFolder.value = false
+  creatingRootFolderName.value = ''
+}
+
+async function submitCreateRootFolder() {
+  const name = creatingRootFolderName.value.trim()
+  if (!name) return
+  cancelCreateRootFolder()
+  await createFolder('', [], name)
+}
+
+function startRenameFolder(folderId: string, currentName: string) {
+  if (!folderId) return
+  editingFolderId.value = folderId
+  editingName.value = currentName
+  // Only one rename input exists at a time; focus + select it once rendered.
+  nextTick(() => {
+    const el = document.querySelector('.wiki-directory-rename-input') as HTMLInputElement | null
+    el?.focus()
+    el?.select()
+  })
+}
+
+function cancelRenameFolder() {
+  editingFolderId.value = ''
+  editingName.value = ''
+}
+
+async function commitRenameFolder(folderId: string, originalName: string) {
+  if (editingFolderId.value !== folderId) return
+  const name = editingName.value.trim()
+  cancelRenameFolder()
+  if (!name || name === originalName) return
+  try {
+    await updateWikiFolder(props.knowledgeBaseId, folderId, { name })
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.renameFolderSuccess'))
+    await reloadDirectoryForType(activeTab.value)
+  } catch (e: any) {
+    console.error('Failed to rename wiki folder:', e)
+    MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.renameFolderFailed'))
+  }
+}
+
+async function deleteFolder(folderId: string) {
+  if (!folderId) return
+  try {
+    await deleteWikiFolder(props.knowledgeBaseId, folderId)
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.deleteFolderSuccess'))
+    await reloadDirectoryForType(activeTab.value)
+  } catch (e: any) {
+    console.error('Failed to delete wiki folder:', e)
+    MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.deleteFolderFailed'))
+  }
+}
+
 // loadPagesForType fetches the next page for a single type bucket. The
 // first call seeds `total` from the backend so subsequent `hasMore`
 // checks work without another round-trip. Guard against concurrent
 // invocations for the same type (e.g. scroll event fires rapidly while
 // a network request is still in flight).
-async function loadPagesForType(type: string, opts: { reset?: boolean } = {}) {
+async function loadPagesForType(
+  type: string,
+  opts: { reset?: boolean; categoryPath?: string[]; preserveDirectoryState?: boolean } = {},
+) {
   const bucket = ensureBucket(type)
-  if (bucket.loading) return
-  if (opts.reset) {
-    bucket.items = []
-    bucket.nextPage = 1
-    bucket.total = 0
-    bucket.initialized = false
+  const categoryPath = opts.categoryPath || []
+  const scopedToCategory = categoryPath.length > 0
+  const scopedPathKey = scopedToCategory ? directoryPathKey(type, categoryPath) : ''
+  if (scopedToCategory && !bucket.directoryPages[scopedPathKey]) {
+    bucket.directoryPages = {
+      ...bucket.directoryPages,
+      [scopedPathKey]: { nextPage: 1, total: 0, loading: false, initialized: false },
+    }
   }
-  if (bucket.initialized && bucket.items.length >= bucket.total) return
+  const scopedState = scopedToCategory ? bucket.directoryPages[scopedPathKey] : null
+  if (scopedState?.loading || (!scopedToCategory && bucket.loading)) return
+  if (scopedToCategory) {
+    const state = scopedState
+    if (!state) return
+    if (state.initialized && state.total > 0 && (state.nextPage - 1) * WIKI_SIDEBAR_PAGE_SIZE >= state.total) return
+  } else if (!opts.reset && bucket.initialized && bucket.items.length >= bucket.total) {
+    return
+  }
 
-  bucket.loading = true
+  if (scopedState) {
+    bucket.directoryPages = {
+      ...bucket.directoryPages,
+      [scopedPathKey]: { ...scopedState, loading: true },
+    }
+  }
+  else bucket.loading = true
   try {
+    const currentScopedState = scopedToCategory ? bucket.directoryPages[scopedPathKey] : null
+    const requestPage = opts.reset ? 1 : (currentScopedState ? currentScopedState.nextPage : bucket.nextPage)
     const res = await listWikiPages(props.knowledgeBaseId, {
-      page_type: type,
-      page: bucket.nextPage,
+      page_type: tabPageTypes(type),
+      page: requestPage,
       page_size: WIKI_SIDEBAR_PAGE_SIZE,
+      sort_by: 'wiki_path',
+      sort_order: 'asc',
+      category_path: categoryPath.join('/'),
+      category_depth: categoryPath.length,
     })
     const body: any = (res as any).data || res
     const batch: WikiPage[] = body?.pages || []
     const reportedTotal = Number(body?.total) || 0
 
-    bucket.items.push(...batch)
-    bucket.total = reportedTotal
-    bucket.nextPage += 1
-    bucket.initialized = true
+    if (!scopedToCategory) {
+      if (opts.reset) {
+        bucket.items = batch
+        bucket.nextPage = 2
+        bucket.directoryPages = {}
+        if (!opts.preserveDirectoryState) clearDirectoryStateForType(type)
+      } else {
+        const seenItems = new Set(bucket.items.map(p => p.id))
+        for (const p of batch) {
+          if (!seenItems.has(p.id)) bucket.items.push(p)
+        }
+        bucket.nextPage += 1
+      }
+      bucket.total = reportedTotal
+      bucket.initialized = true
+    } else if (currentScopedState) {
+      const seenItems = new Set(bucket.items.map(p => p.id))
+      for (const p of batch) {
+        if (!seenItems.has(p.id)) bucket.items.push(p)
+      }
+      bucket.directoryPages = {
+        ...bucket.directoryPages,
+        [scopedPathKey]: {
+          ...currentScopedState,
+          total: reportedTotal,
+          nextPage: currentScopedState.nextPage + 1,
+          initialized: true,
+          loading: false,
+        },
+      }
+    }
+    initializeDefaultCollapsedDirectories(type, batch)
 
     // Mirror the newly arrived rows into the flat pages list so
     // slugDisplayName and friends keep working.
@@ -1544,27 +2737,26 @@ async function loadPagesForType(type: string, opts: { reset?: boolean } = {}) {
   } catch (e) {
     console.error(`Failed to load wiki pages of type ${type}:`, e)
   } finally {
-    bucket.loading = false
+    if (scopedState) {
+      const latest = bucket.directoryPages[scopedPathKey]
+      if (latest?.loading) {
+        bucket.directoryPages = {
+          ...bucket.directoryPages,
+          [scopedPathKey]: { ...latest, loading: false, initialized: true },
+        }
+      }
+    }
+    else bucket.loading = false
   }
 
-  // Kick the RecycleScroller into recomputing its visible window now
-  // that `items` has grown. Without this, new rows appear in the wrong
-  // order at the bottom until the user scrolls to trigger a recompute.
   await nextTick()
-  groupScrollerRef.value?.updateVisibleItems?.(true)
 }
 
-// loadIndexAndLog probes the wiki index so the sidebar knows to show
-// the pinned Index/Log entries. We ask the backend for intro only (zero
+// loadIndex probes the wiki index so the sidebar knows to show the pinned
+// Index entry. We ask the backend for intro only (zero
 // group types) — a bounded response regardless of KB size. Sections are
 // fetched lazily after the user actually opens the Index view; see
 // loadMoreIndexSection.
-//
-// The log "page" is no longer stored in wiki_pages — it lives in the
-// dedicated wiki_log_entries table. We don't need to pre-fetch anything
-// here to decide whether to render the sidebar Log entry; the flag is
-// always on, and the actual feed is fetched lazily when the user clicks
-// the entry (see openLogView / loadMoreLog).
 // stripLegacyIndexDirectory removes the inline "## Summary (N)\n[[...]]
 // ..." directory listing from a legacy index row. Old wiki_pages rows
 // stored "intro + directory markdown" in content; after the refactor
@@ -1580,7 +2772,7 @@ function stripLegacyIndexDirectory(intro: string): string {
   return intro.slice(0, idx).trim()
 }
 
-async function loadIndexAndLog() {
+async function loadIndex() {
   try {
     // We only need intro on the initial probe — the directory groups
     // are fetched lazily once the user opens the Index view. Passing
@@ -1595,7 +2787,6 @@ async function loadIndexAndLog() {
     indexAvailable.value = true
     indexSections.value = {}
     indexSectionIdx.value = 0
-    logAvailable.value = true
   } catch (e) {
     console.error('Failed to load wiki index:', e)
   }
@@ -1610,7 +2801,7 @@ async function openIndexView() {
   if (!indexMarkdown.value) {
     indexLoading.value = true
     try {
-      await loadIndexAndLog()
+      await loadIndex()
     } finally {
       indexLoading.value = false
     }
@@ -1618,6 +2809,31 @@ async function openIndexView() {
   // Observer is mounted/unmounted from a watch on activeSystemView
   // + indexSentinelRef below, so nothing else to do here — entering
   // the view is a render-time concern.
+}
+
+function appendIndexDirectoryLines(items: WikiIndexEntryDTO[]): string {
+  let out = ''
+  const emittedDirs = new Set<string>()
+  for (const entry of items) {
+    const path = (Array.isArray(entry.category_path) ? entry.category_path : [])
+      .map(part => String(part || '').trim())
+      .filter(Boolean)
+    for (let i = 0; i < path.length; i++) {
+      const parts = path.slice(0, i + 1)
+      const key = parts.join('/')
+      if (emittedDirs.has(key)) continue
+      emittedDirs.add(key)
+      out += `${'  '.repeat(i)}**${path[i]}**\n`
+    }
+    const display = entry.title || entry.slug
+    const indent = '  '.repeat(path.length)
+    if (entry.summary) {
+      out += `${indent}[[${entry.slug}|${display}]] — ${entry.summary}\n`
+    } else {
+      out += `${indent}[[${entry.slug}|${display}]]\n`
+    }
+  }
+  return out
 }
 
 // loadMoreIndexSection advances the directory one step forward. The
@@ -1661,27 +2877,7 @@ async function loadMoreIndexSection() {
       const label = getTypeLabel(type)
       appended += `\n## ${label} (${total})\n\n`
     }
-    for (const entry of items) {
-      // Plain lines rather than `- [[slug]]`: marked renders the latter
-      // as <ul><li>, which adds a disc bullet before every slug. Each
-      // entry occupies one line thanks to `breaks: true` in renderMarkdown.
-      //
-      // Use the `[[slug|display]]` form so the anchor text shows the
-      // human-readable title (e.g. "东城区") instead of the URL-safe slug
-      // ("entity/dongcheng-qu"). The [[ ]] preprocessor in renderMarkdown
-      // splits on the pipe and uses the right-hand side for display text
-      // while the left-hand side drives navigation via handleContentClick.
-      //
-      // Fall back to the slug when the page has no title — the backend
-      // guarantees title is non-empty for published pages, but drafts
-      // or partially-indexed pages can slip through.
-      const display = entry.title || entry.slug
-      if (entry.summary) {
-        appended += `[[${entry.slug}|${display}]] — ${entry.summary}\n`
-      } else {
-        appended += `[[${entry.slug}|${display}]]\n`
-      }
-    }
+    appended += appendIndexDirectoryLines(items)
     if (appended) {
       indexMarkdown.value = indexMarkdown.value + appended
     }
@@ -1763,44 +2959,6 @@ onUnmounted(() => {
   }
 })
 
-// openLogView switches the reader into the log feed and (re)loads the
-// first page. Called when the user clicks the sidebar Log entry.
-async function openLogView() {
-  selectedPage.value = null
-  activeSystemView.value = 'log'
-  logEntries.value = []
-  logNextCursor.value = ''
-  logInitialized.value = false
-  await loadMoreLog()
-}
-
-// loadMoreLog appends the next page of log entries using the cursor from
-// the previous response. Guarded so overlapping scroll events don't fire
-// multiple requests and double-append entries.
-async function loadMoreLog() {
-  if (logLoading.value) return
-  // Once a previous request reported end-of-feed (empty next_cursor), we
-  // stop — but only after the first fetch, so a fresh KB still runs the
-  // initial empty request to populate logInitialized.
-  if (logInitialized.value && !logNextCursor.value) return
-  logLoading.value = true
-  try {
-    const res = await getWikiLog(props.knowledgeBaseId, {
-      cursor: logNextCursor.value || undefined,
-      limit: 50,
-    })
-    const body: any = (res as any).data || res
-    const entries: WikiLogEntry[] = body?.entries || []
-    logEntries.value.push(...entries)
-    logNextCursor.value = body?.next_cursor || ''
-    logInitialized.value = true
-  } catch (e) {
-    console.error('Failed to load wiki log:', e)
-  } finally {
-    logLoading.value = false
-  }
-}
-
 // loadPages is the sidebar's top-level initialization. It wires up the
 // empty buckets (so groupedPages produces stable group slots even
 // before any fetch completes), pulls the pinned system pages, and then
@@ -1815,22 +2973,27 @@ async function loadPages() {
   loading.value = true
   try {
     searchResults.value = null
-    for (const type of CONTENT_PAGE_TYPES) ensureBucket(type)
-    await loadIndexAndLog()
-    await Promise.all(CONTENT_PAGE_TYPES.map(type => loadPagesForType(type, { reset: true })))
+    for (const tab of CONTENT_TABS) ensureBucket(tab)
+    await loadIndex()
+    await Promise.all(CONTENT_TABS.map(async tab => {
+      await loadPagesForType(tab, { reset: true })
+      await loadCategoriesForType(tab, { reset: true })
+    }))
 
-    // Pick the first non-empty bucket as the default active tab.
-    // Keeping `activeTab` unset while buckets are still loading would
-    // momentarily render no list at all, so we only overwrite it when
-    // the current selection is empty or missing.
-    if (!activeTab.value || !pagesByType.value[activeTab.value] || pagesByType.value[activeTab.value].total === 0) {
-      for (const type of CONTENT_PAGE_TYPES) {
-        const bucket = pagesByType.value[type]
-        if (bucket && bucket.total > 0) {
-          activeTab.value = type
-          break
-        }
+    // Default to the knowledge tab (first in CONTENT_TABS) once every
+    // bucket has had a chance to load. On later reloads (e.g. after
+    // indexing finishes) keep the user's current tab when still valid.
+    if (initialSidebarLoad) {
+      activeTab.value = preferredDefaultTab(visibleTabs.value)
+      initialSidebarLoad = false
+    } else {
+      const tabValid = activeTab.value && visibleTabs.value.some(tab => tab.type === activeTab.value)
+      if (!tabValid) {
+        activeTab.value = preferredDefaultTab(visibleTabs.value)
       }
+    }
+    if (sidebarViewMode.value === 'list' && activeTab.value) {
+      await loadFlatPagesForType(activeTab.value, true)
     }
 
     // Auto-select based on query string or default to the index
@@ -1886,6 +3049,235 @@ async function loadStats() {
   } catch (e) { /* ignore */ }
 }
 
+// --- Manual page editing / version management ---------------------------
+
+const editingPage = ref(false)
+const savingPage = ref(false)
+const editForm = ref({ title: '', summary: '', content: '' })
+// Version the user started editing from — the optimistic-lock guard sent
+// with the save. 409 → someone (or the pipeline) edited in between.
+const editBaseVersion = ref(0)
+const editConflictVersion = ref<number | null>(null)
+
+const showRevisionDrawer = ref(false)
+
+const showCreatePageDialog = ref(false)
+const creatingPage = ref(false)
+const createPageForm = ref({ title: '', slug: '', pageType: 'concept', content: '' })
+const createPageSlugTouched = ref(false)
+
+// Navigating to another page (or view) silently drops an in-progress edit;
+// the editor is inline, so a route-level guard would be overkill here.
+watch(() => selectedPage.value?.slug, () => {
+  editingPage.value = false
+  editConflictVersion.value = null
+})
+
+function startEditPage() {
+  if (!selectedPage.value) return
+  editForm.value = {
+    title: selectedPage.value.title,
+    summary: selectedPage.value.summary || '',
+    content: selectedPage.value.content || '',
+  }
+  editBaseVersion.value = selectedPage.value.version
+  editConflictVersion.value = null
+  editingPage.value = true
+}
+
+function cancelEditPage() {
+  editingPage.value = false
+  editConflictVersion.value = null
+}
+
+async function savePageEdit(versionOverride?: number) {
+  if (!selectedPage.value) return
+  const slug = selectedPage.value.slug
+  savingPage.value = true
+  try {
+    const res = await updateWikiPage(props.knowledgeBaseId, slug, {
+      title: editForm.value.title,
+      summary: editForm.value.summary,
+      content: editForm.value.content,
+      version: versionOverride ?? editBaseVersion.value,
+    })
+    const updated = ((res as any).data || res) as WikiPage
+    // Updates omit the display-only titles; retain the current detail map.
+    selectedPage.value = { ...selectedPage.value, ...updated }
+    editingPage.value = false
+    editConflictVersion.value = null
+    updateSidebarPageTitle(slug, updated.title)
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.editSaveSuccess'))
+  } catch (e: any) {
+    // The request interceptor rejects with a flattened { status, message,
+    // ...body } object, so the conflict payload sits on `e` directly.
+    if (e?.status === 409) {
+      editConflictVersion.value = e?.current_version ?? 0
+    } else {
+      MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.editSaveFailed'))
+    }
+  } finally {
+    savingPage.value = false
+  }
+}
+
+// overwriteSavePage resolves an edit conflict by re-saving on top of the
+// server's current version (last write wins, but the loser's version stays
+// in the revision history, so nothing is destroyed).
+async function overwriteSavePage() {
+  if (!selectedPage.value) return
+  try {
+    const res = await getWikiPage(props.knowledgeBaseId, selectedPage.value.slug)
+    const latest = ((res as any).data || res) as WikiPage
+    await savePageEdit(latest.version)
+  } catch (e) {
+    console.error('Failed to fetch latest version for overwrite save:', e)
+    MessagePlugin.error(t('knowledgeEditor.wikiBrowser.editSaveFailed'))
+  }
+}
+
+// reloadLatestIntoEditor resolves an edit conflict by discarding the local
+// draft and re-opening the editor on the server's current content.
+async function reloadLatestIntoEditor() {
+  await refreshSelectedPage()
+  startEditPage()
+}
+
+async function confirmDeletePage() {
+  if (!selectedPage.value) return
+  const slug = selectedPage.value.slug
+  try {
+    await deleteWikiPage(props.knowledgeBaseId, slug)
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.deletePageSuccess'))
+    selectedPage.value = null
+    editingPage.value = false
+    loadPages()
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.deletePageFailed'))
+  }
+}
+
+function openRevisionDrawer() {
+  if (!selectedPage.value) return
+  showRevisionDrawer.value = true
+}
+
+function onPageReverted(page: WikiPage) {
+  selectedPage.value = page
+  editingPage.value = false
+  updateSidebarPageTitle(page.slug, page.title)
+}
+
+function openCreatePageDialog() {
+  createPageForm.value = { title: '', slug: '', pageType: 'concept', content: '' }
+  createPageSlugTouched.value = false
+  showCreatePageDialog.value = true
+}
+
+// syncCreatePageSlug derives "<type>/<slugified-title>" while the user has
+// not touched the slug field themselves. Only ASCII-ish titles produce a
+// usable slug automatically; otherwise the user types one.
+function syncCreatePageSlug() {
+  if (createPageSlugTouched.value) return
+  const base = createPageForm.value.title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '')
+  createPageForm.value.slug = base ? `${createPageForm.value.pageType}/${base}` : ''
+}
+
+async function submitCreatePage() {
+  const title = createPageForm.value.title.trim()
+  const slug = createPageForm.value.slug.trim().replace(/^\/+|\/+$/g, '')
+  if (!title || !slug) {
+    MessagePlugin.warning(t('knowledgeEditor.wikiBrowser.newPageMissingFields'))
+    return
+  }
+  if (!/^[\p{L}\p{N}][\p{L}\p{N}\s_\-/]*$/u.test(slug)) {
+    MessagePlugin.warning(t('knowledgeEditor.wikiBrowser.newPageSlugHint'))
+    return
+  }
+  creatingPage.value = true
+  try {
+    await createWikiPage(props.knowledgeBaseId, {
+      slug,
+      title,
+      page_type: createPageForm.value.pageType,
+      content: createPageForm.value.content,
+    })
+    showCreatePageDialog.value = false
+    MessagePlugin.success(t('knowledgeEditor.wikiBrowser.newPageSuccess'))
+    loadPages()
+    navigateToSlug(slug)
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('knowledgeEditor.wikiBrowser.newPageFailed'))
+  } finally {
+    creatingPage.value = false
+  }
+}
+
+// updateSidebarPageTitle patches the already-loaded sidebar entries in place
+// after a rename so the tree reflects the edit without a full reload.
+function updateSidebarPageTitle(slug: string, title: string) {
+  for (const p of pages.value) {
+    if (p.slug === slug) p.title = title
+  }
+  for (const bucket of Object.values(pagesByType.value)) {
+    for (const p of bucket.items) {
+      if (p.slug === slug) p.title = title
+    }
+    for (const p of bucket.flatItems) {
+      if (p.slug === slug) p.title = title
+    }
+  }
+}
+
+function editSourceVisible(source?: string): boolean {
+  return source === 'user' || source === 'agent' || source === 'revert'
+}
+
+function editSourceLabel(source?: string): string {
+  switch (source) {
+    case 'user':
+      return t('knowledgeEditor.wikiBrowser.editSourceUser')
+    case 'agent':
+      return t('knowledgeEditor.wikiBrowser.editSourceAgent')
+    case 'revert':
+      return t('knowledgeEditor.wikiBrowser.editSourceRevert')
+    default:
+      return t('knowledgeEditor.wikiBrowser.editSourcePipeline')
+  }
+}
+
+function editSourceIcon(source?: string): string {
+  switch (source) {
+    case 'user':
+      return 'user'
+    case 'agent':
+      return 'tools'
+    case 'revert':
+      return 'rollback'
+    default:
+      return 'file-code'
+  }
+}
+
+function editSourceTheme(source?: string): 'primary' | 'success' | 'warning' | 'default' {
+  switch (source) {
+    case 'user':
+      return 'success'
+    case 'agent':
+      return 'primary'
+    case 'revert':
+      return 'warning'
+    default:
+      return 'default'
+  }
+}
+
 // Refresh the currently selected page's content without touching navigation history
 async function refreshSelectedPage() {
   if (!selectedPage.value) return
@@ -1907,7 +3299,7 @@ async function refreshSelectedPage() {
 // there (empty == no filter == return everything, the opposite of what
 // the user meant).
 function graphFilterTypesToArray(): string[] | undefined {
-  const all = ['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']
+  const all = ['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index']
   if (all.every(t => graphFilterTypes.value.has(t))) {
     return undefined
   }
@@ -1971,6 +3363,7 @@ async function loadGraph() {
 // loadGraph() again.
 async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
   if (!slug) return
+  showUnlinkedNodes.value = true
   graphLoading.value = true
   graphReady.value = false
   if (graphFilterSelectsNothing()) {
@@ -1998,13 +3391,16 @@ async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
     // generation counter — we're no longer accumulating on top of the
     // previous canvas, so every node belongs to generation 0.
     resetBloomGenerations(graphData.value?.nodes)
+    // Select before rendering so the new center also receives its highlight.
+    graphSelectedSlug.value = slug
+    graphHighlightSlug.value = null
     await nextTick()
     renderGraph()
-    // After a fresh ego render, preselect the center so the highlight /
-    // drawer context matches what the user just asked for.
-    graphSelectedSlug.value = slug
   } catch (e) {
     console.error(`Failed to load ego graph for ${slug}:`, e)
+    // Keep showing the previous graph; the caller still opens the page.
+    await nextTick()
+    renderGraph()
   } finally {
     graphLoading.value = false
   }
@@ -2078,7 +3474,7 @@ async function loadBloomNeighbors(anchorSlug: string, depth = GRAPH_EGO_DEFAULT_
 
     graphData.value = merged
     await nextTick()
-    renderGraph({ preserveLayout: true, anchorSlug })
+    renderGraph({ preserveLayout: true })
   } catch (e) {
     console.error(`Failed to bloom neighbors for ${anchorSlug}:`, e)
   } finally {
@@ -2098,9 +3494,12 @@ function mergeGraphData(
   const nodeBySlug = new Map<string, WikiGraphData['nodes'][number]>()
   for (const n of base.nodes) nodeBySlug.set(n.slug, n)
   for (const n of incoming.nodes) {
-    if (!nodeBySlug.has(n.slug)) {
+    const existing = nodeBySlug.get(n.slug)
+    if (!existing) {
       nodeBySlug.set(n.slug, n)
       bloomGenerations.set(n.slug, gen)
+    } else if (n.familiar) {
+      existing.familiar = true
     }
   }
   const edgeKey = (e: { source: string; target: string }) => `${e.source}→${e.target}`
@@ -2114,15 +3513,18 @@ function mergeGraphData(
     const k = edgeKey(e)
     if (!edgeSeen.has(k)) { edgeSeen.add(k); edges.push(e) }
   }
+  const nodes = Array.from(nodeBySlug.values())
+  const familiarCount = nodes.filter((n) => n.familiar).length
   return {
-    nodes: Array.from(nodeBySlug.values()),
+    nodes,
     edges,
     meta: {
       // Meta from the latest ego response describes the most recent
       // bloom, but we keep the overview denominator so the truncation
       // hint still reflects the KB-wide total.
       ...incoming.meta,
-      returned: nodeBySlug.size,
+      returned: nodes.length,
+      familiar_count: familiarCount || undefined,
     },
   }
 }
@@ -2180,7 +3582,7 @@ const GROW_FRONTIER_CONCURRENCY = 6
 // interesting neighborhood"). We keep them visible and individually
 // expandable (double-click / shift-click / ⊕ all still work), but they
 // don't participate in batch expansion.
-const GRAPH_SYSTEM_PAGE_TYPES = new Set(['index', 'log'])
+const GRAPH_SYSTEM_PAGE_TYPES = new Set(['index'])
 
 function isFrontierCandidate(
   node: { slug: string; page_type: string; link_count: number },
@@ -2275,9 +3677,7 @@ async function growFrontier() {
 
     graphData.value = merged
     await nextTick()
-    // anchorSlug intentionally omitted — new nodes have no single natural
-    // landing point, so we fall back to random canvas-center placement
-    // and let the force simulation untangle them.
+    // Place each new node near an existing neighbor, retaining the old layout.
     renderGraph({ preserveLayout: true })
   } finally {
     graphLoading.value = false
@@ -2348,11 +3748,7 @@ function goBack() {
     const view = navFromSystemView.value
     navFromSystemView.value = ''
     selectedPage.value = null
-    if (view === 'index') {
-      openIndexView()
-    } else if (view === 'log') {
-      openLogView()
-    }
+    if (view === 'index') openIndexView()
   }
 }
 
@@ -2367,57 +3763,30 @@ async function handleIssueIgnore(issueId: string) {
   }
 }
 
-async function startFixSession(prompt: string) {
-  try {
-    const res = await createSessions({})
-    if (res && (res as any).data && (res as any).data.id) {
-      const sessionId = (res as any).data.id
-      const now = new Date().toISOString()
-      
-      menuStore.updataMenuChildren({
-        title: t('knowledgeEditor.wikiBrowser.fixAssistantTitle'),
-        path: `chat/${sessionId}`,
-        id: sessionId,
-        isMore: false,
-        isNoTitle: true,
-        created_at: now,
-        updated_at: now
-      })
-      
-      menuStore.changeIsFirstSession(true)
-      menuStore.changeFirstQuery(prompt, [], '', [])
-      
-      currentFixSessionId.value = sessionId
-      showFixDrawer.value = true
-      showIssuesBox.value = false // Hide issues box
-    } else {
-      MessagePlugin.error(t('knowledgeEditor.wikiBrowser.fixStartError'))
-    }
-  } catch (e) {
-    console.error('Failed to create fix session', e)
-    MessagePlugin.error(t('knowledgeEditor.wikiBrowser.fixStartError'))
-  }
-}
-
 function triggerFixIssue(issue: WikiPageIssue) {
   if (!selectedPage.value) return
-  const prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptSingle', {
-    slug: selectedPage.value.slug,
-    id: issue.id
+  showIssuesBox.value = false
+  assistant.open({
+    query: t('knowledgeEditor.wikiBrowser.issueFixPromptSingle', { description: issue.description }),
+    focus: { wikiIssueIds: [issue.id] },
   })
-  startFixSession(prompt)
 }
 
 function triggerAutoFix() {
   if (!selectedPage.value || pageIssues.value.length === 0) return
-  let prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptAutoStart', { slug: selectedPage.value.slug }) + '\n\n'
-  
-  pageIssues.value.forEach((issue, idx) => {
-    prompt += `${idx + 1}. Issue ID: ${issue.id}\n`
+  showIssuesBox.value = false
+  assistant.open({
+    query: t('knowledgeEditor.wikiBrowser.issueFixPromptAll', { count: pageIssues.value.length }),
+    focus: { wikiIssueIds: pageIssues.value.map(issue => issue.id) },
   })
-  
-  startFixSession(prompt)
 }
+
+// The assistant may have rewritten the page or resolved its issues.
+watch(() => assistant.visible, (visible, wasVisible) => {
+  if (!wasVisible || visible || editingPage.value) return
+  void refreshSelectedPage()
+  void loadStats()
+})
 
 async function doSearch() {
   if (!searchQuery.value.trim()) {
@@ -2450,6 +3819,7 @@ function toggleArrows() {
       e.line.removeAttribute('marker-start')
     }
   }
+  refreshGraphLabels()
 }
 
 function formatDate(dateStr: string) {
@@ -2461,12 +3831,7 @@ function formatDate(dateStr: string) {
 
 // Convert slug like "entity/acme-corp" to a readable label "acme-corp"
 function slugDisplayName(slug: string): string {
-  // Find the page title if loaded
-  const page = pages.value.find(p => p.slug === slug)
-  if (page) return page.title
-  // Fallback: strip type prefix, replace hyphens
-  const parts = slug.split('/')
-  return parts.length > 1 ? parts.slice(1).join('/') : slug
+  return resolveWikiBacklinkTitle(slug, selectedPage.value?.in_link_titles ?? {}, pages.value)
 }
 
 // ─── Graph Rendering (interactive SVG force-directed graph) ───
@@ -2476,12 +3841,24 @@ interface GNode {
   x: number; y: number; vx: number; vy: number
   slug: string; title: string; type: string
   linkCount: number; pinned: boolean
+  familiar: boolean
+  labelWidth: number
 }
 
 // Persistent graph state so it survives re-renders
 let graphNodes: GNode[] = []
+let graphLayoutBounds: GraphBounds | null = null
+let graphClusterEls: { group: SVGGElement; cluster: GraphCluster; anchorSlug: string; labelWidth: number; priority: number }[] = []
+let graphContourEls: { path: SVGPathElement; cluster: GraphCluster; scale?: number; positions?: number[] }[] = []
+let graphSectionEls: { text: SVGTextElement; top: number }[] = []
+let graphImportantSlugs = new Set<string>()
+let graphFocusedSlugs = new Set<string>()
+let graphHoverSuppressedUntil = 0
 let graphSvg: SVGSVGElement | null = null
 let graphAnimFrame = 0
+let refreshGraphLabels = () => {}
+let graphEdgeMarkersVisible = true
+let disposeGraphPanZoom = () => {}
 // Shared timer for debouncing node mouseleave -> mouseenter transitions.
 // Prevents flickering when the pointer quickly moves between adjacent nodes.
 let graphHoverLeaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -2492,7 +3869,8 @@ let graphPanZoomRef: {
   setTranslate: (x: number, y: number) => void,
   apply: () => void,
   flyTo: (x: number, y: number, s?: number, duration?: number) => void,
-  getScale: () => number
+  getScale: () => number,
+  getTranslate: () => { x: number; y: number }
 } | null = null
 
 const graphHighlightSlug = ref<string | null>(null)
@@ -2501,37 +3879,54 @@ const graphSelectedSlug = ref<string | null>(null)
 // Color map for node types
 const nodeColorMap: Record<string, string> = {
   summary: '#0052d9', entity: '#2ba471', concept: '#e37318',
-  synthesis: '#0594fa', comparison: '#d54941', index: '#8c8c8c', log: '#8c8c8c',
+  synthesis: '#0594fa', comparison: '#d54941', index: '#8c8c8c',
 }
+const graphEdgeColor = '#aeb5c0'
+const graphEdgeWidth = '0.8'
+const graphEdgeOpacity = '0.42'
 
-// RenderGraphOpts tweaks how renderGraph initializes node positions when
-// repainting the canvas. The default (no opts) does a full layout reset —
-// every node gets a fresh circular starting position and the force
-// simulation runs from scratch. With `preserveLayout: true` we reuse the
-// x/y/vx/vy of any node that already existed in the previous graphNodes
-// list, and only new nodes get initial positions. This is what the
-// "bloom neighbors" interaction needs: when the user expands a second
-// ego around a neighbor, the nodes they already see don't jump to new
-// positions — only the newly arrived neighbors fly in.
+// Incremental expansion preserves existing positions and the viewport.
 interface RenderGraphOpts {
   preserveLayout?: boolean
-  // anchorSlug: if set and the node is new, it is placed near the anchor
-  // with a small random jitter so related nodes visually land together.
-  anchorSlug?: string
 }
 
 function renderGraph(opts: RenderGraphOpts = {}) {
   const container = graphRef.value
   const data = graphData.value
   if (!container) return
-  if (!data || !data.nodes?.length) {
-    container.innerHTML = ''
-    return
-  }
-
-  // Stop any previous animation
   if (graphAnimFrame) { cancelAnimationFrame(graphAnimFrame); graphAnimFrame = 0 }
   if (graphHoverLeaveTimer) { clearTimeout(graphHoverLeaveTimer); graphHoverLeaveTimer = null }
+  const previousViewport = opts.preserveLayout && graphPanZoomRef
+    ? { scale: graphPanZoomRef.getScale(), ...graphPanZoomRef.getTranslate() } : undefined
+  disposeGraphPanZoom()
+  refreshGraphLabels = () => {}
+  graphPanZoomRef = null
+  graphSvg = null
+  graphLayoutBounds = null
+  graphClusterEls = []
+  graphContourEls = []
+  graphSectionEls = []
+  graphFocusedSlugs.clear()
+  graphFocusGroup.value = null
+  graphFocusReturnViewport = null
+  graphGroups.value = []
+  graphGroupFocusers = new Map()
+  graphReady.value = false
+  if (!data || !data.nodes?.length) {
+    container.innerHTML = ''
+    graphNodes = []
+    graphNodeElsRef = []
+    graphEdgeElsRef = []
+    graphAdjacencyRef = new Map()
+    if (graphMode.value === 'overview') {
+      graphDetailClusters.value = []
+      graphDetailPlacements.value = new Map()
+    }
+    return
+  }
+  const graph = showUnlinkedNodes.value ? data : {
+    ...data, nodes: data.nodes.filter(n => !graphUnlinkedSlugs.value.has(n.slug)),
+  }
 
   const width = container.clientWidth || 800
   const height = container.clientHeight || 600
@@ -2539,10 +3934,10 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   // Snapshot prior node coordinates before we rebuild graphNodes. Used
   // when preserveLayout is true to avoid the whole canvas jumping during
   // an incremental bloom.
-  const priorCoords = new Map<string, { x: number; y: number; vx: number; vy: number; pinned: boolean }>()
+  const priorCoords = new Map<string, { x: number; y: number; pinned: boolean }>()
   if (opts.preserveLayout) {
     for (const n of graphNodes) {
-      priorCoords.set(n.slug, { x: n.x, y: n.y, vx: n.vx, vy: n.vy, pinned: n.pinned })
+      priorCoords.set(n.slug, { x: n.x, y: n.y, pinned: n.pinned })
     }
   }
 
@@ -2551,6 +3946,8 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
   svg.style.width = '100%'
   svg.style.height = '100%'
+  svg.style.cursor = 'grab'
+  svg.style.userSelect = 'none'
   container.innerHTML = ''
   container.appendChild(svg)
   graphSvg = svg
@@ -2562,79 +3959,180 @@ function renderGraph(opts: RenderGraphOpts = {}) {
 
   // Edge group (below nodes)
   const edgeG = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  edgeG.setAttribute('pointer-events', 'none')
   rootG.appendChild(edgeG)
 
   // Node group (above edges)
   const nodeG = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   rootG.appendChild(nodeG)
 
+  // Overview detail needs the spanning tree and anchors. A non-empty prior
+  // map clears both, so the overview always lays out the full fetched slice
+  // and then overlays preserved coordinates onto the slugs that remain.
+  const layoutPrior = graphMode.value === 'overview' ? new Map<string, { x: number; y: number }>() : priorCoords
+  const layout = buildGraphLayout(graph.nodes, graph.edges, width, height, layoutPrior)
+  const visibleSlugs = graphMode.value === 'overview'
+    ? graphDetailSlugs(layout.clusters, layout.placements, graphDetailLevel.value)
+    : new Set(graph.nodes.map(n => n.slug))
+  if (graphMode.value === 'overview') {
+    graphDetailClusters.value = layout.clusters
+    graphDetailPlacements.value = layout.placements
+  }
+  const renderNodes = graph.nodes.filter(n => visibleSlugs.has(n.slug))
+  // Ego and bloom keep every returned link. Overview draws only the level's edges.
+  const renderEdges = graphMode.value === 'overview'
+    ? graph.edges.filter(edge => visibleSlugs.has(edge.source) && visibleSlugs.has(edge.target))
+    : graph.edges
+  const showClusterChrome = graphMode.value === 'overview' && graphDetailLevel.value >= GRAPH_DETAIL_MAX
+
   // Build adjacency for highlight
   const adjacency = new Map<string, Set<string>>()
-  for (const edge of data.edges) {
+  for (const edge of renderEdges) {
     if (!adjacency.has(edge.source)) adjacency.set(edge.source, new Set())
     if (!adjacency.has(edge.target)) adjacency.set(edge.target, new Set())
     adjacency.get(edge.source)!.add(edge.target)
     adjacency.get(edge.target)!.add(edge.source)
   }
 
-  // Locate the anchor's prior coordinates so new nodes land near it in
-  // bloom mode. Falls back to canvas center if the anchor is itself new
-  // (e.g. ego was pivoted rather than bloomed).
-  const anchorCoord = opts.anchorSlug ? priorCoords.get(opts.anchorSlug) : undefined
-  const anchorX = anchorCoord?.x ?? width / 2
-  const anchorY = anchorCoord?.y ?? height / 2
-
-  // Build nodes
-  const nodeMap = new Map<string, GNode>()
-  graphNodes = data.nodes.map((n, i) => {
-    const prior = opts.preserveLayout ? priorCoords.get(n.slug) : undefined
-    let x: number
-    let y: number
-    let vx: number
-    let vy: number
-    let pinned: boolean
-    if (prior) {
-      // Reuse the node's existing position so the user's mental map of
-      // the canvas stays stable across bloom iterations.
-      x = prior.x
-      y = prior.y
-      vx = prior.vx
-      vy = prior.vy
-      pinned = prior.pinned
-    } else if (opts.preserveLayout && opts.anchorSlug) {
-      // New node arriving during a bloom — spawn it right next to the
-      // anchor with a small random kick so the force simulation pushes
-      // it into place alongside its siblings.
-      const jitterR = 40
-      const angle = Math.random() * Math.PI * 2
-      x = anchorX + jitterR * Math.cos(angle)
-      y = anchorY + jitterR * Math.sin(angle)
-      vx = 0
-      vy = 0
-      pinned = false
-    } else {
-      // Full repaint — classic circular layout.
-      const angle = (2 * Math.PI * i) / data.nodes.length
-      const r = Math.min(width, height) * 0.35
-      x = width / 2 + r * Math.cos(angle) + (Math.random() - 0.5) * 50
-      y = height / 2 + r * Math.sin(angle) + (Math.random() - 0.5) * 50
-      vx = 0
-      vy = 0
-      pinned = false
+  const regions = showClusterChrome || graphMode.value !== 'overview' ? layout.sections : []
+  if (regions.length) graphLayoutBounds = {
+    left: Math.min(...regions.map(r => r.left)), top: Math.min(...regions.map(r => r.top)),
+    right: Math.max(...regions.map(r => r.right)), bottom: Math.max(...regions.map(r => r.bottom)),
+  }
+  graphImportantSlugs = new Set([...renderNodes]
+    .sort((a, b) => b.link_count - a.link_count)
+    .slice(0, Math.max(1, Math.min(12, Math.ceil(renderNodes.length / 30))))
+    .map(n => n.slug))
+  // Outlines and landmark captions are the full-detail overview. Lower levels
+  // draw only the hierarchy slice. Ego exploration shows nodes and links only.
+  const overviewClusters = showClusterChrome ? layout.clusters : []
+  for (const cluster of overviewClusters) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.classList.add('graph-cluster-outline')
+    path.setAttribute('fill', 'var(--td-bg-color-secondarycontainer)')
+    path.setAttribute('data-cluster', cluster.representative)
+    path.setAttribute('stroke', 'var(--td-component-border)')
+    path.setAttribute('stroke-width', '1')
+    path.setAttribute('vector-effect', 'non-scaling-stroke')
+    path.setAttribute('pointer-events', 'visiblePainted')
+    rootG.insertBefore(path, edgeG)
+    graphContourEls.push({ path, cluster })
+  }
+  if (overviewClusters.length) {
+    const clusterBySlug = new Map(overviewClusters.flatMap(c => c.slugs.map(slug => [slug, c.representative] as const)))
+    let hoveredCluster: string | null = null
+    const highlightCluster = (cluster: string | null) => {
+      if (cluster === hoveredCluster) return
+      hoveredCluster = cluster
+      for (const { path, cluster: group } of graphContourEls) path.classList.toggle('is-hovered', group.representative === cluster)
     }
+    // Delegation keeps the region highlighted while moving between its
+    // background, nodes and labels. The background still accepts canvas pan.
+    svg.addEventListener('mousemove', e => {
+      const target = e.target as Element
+      const slug = target.closest('[data-graph-node]')?.getAttribute('data-graph-node')
+        ?? target.closest('[data-representative]')?.getAttribute('data-representative')
+      highlightCluster(slug ? clusterBySlug.get(slug) ?? null
+        : target.closest('[data-cluster]')?.getAttribute('data-cluster') ?? null)
+    })
+    svg.addEventListener('mouseleave', () => highlightCluster(null))
+  }
+  // Each landmark names its own page; no individual page is presented as
+  // the title of the entire connected component.
+  if (showClusterChrome) {
+    const pageBySlug = new Map(graph.nodes.map(n => [n.slug, n]))
+    for (const cluster of layout.clusters) {
+      if (cluster.slugs.length < 5) continue
+      const focus = () => {
+        if (!graphPanZoomRef) return
+        if (graphFocusGroup.value?.key === cluster.representative) { exitGraphFocus(); return }
+        if (!graphFocusGroup.value) graphFocusReturnViewport = { scale: graphPanZoomRef.getScale(), ...graphPanZoomRef.getTranslate() }
+        graphFocusGroup.value = { key: cluster.representative,
+          name: graphLandmarkTitle(pageBySlug.get(cluster.anchors[0]!)!.title) }
+        graphFocusedSlugs = new Set(cluster.slugs)
+        graphSelectedSlug.value = null
+        graphHighlightSlug.value = null
+        graphDrawerVisible.value = false
+        graphHoverSuppressedUntil = performance.now() + 500
+        clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+        const availableWidth = Math.max(160, width - Math.min(240, width * 0.25))
+        const members = new Set(cluster.slugs)
+        const bounds = graphPointBounds(graphNodes.filter(n => members.has(n.slug)))
+        const scale = Math.min(1.75, Math.max(0.4, Math.min(
+          (availableWidth - 160) / Math.max(100, bounds.right - bounds.left),
+          (height - 180) / Math.max(100, bounds.bottom - bounds.top))))
+        graphPanZoomRef.flyTo(availableWidth / 2 - (bounds.left + bounds.right) / 2 * scale,
+          height / 2 - (bounds.top + bounds.bottom) / 2 * scale, scale)
+      }
+      const addCaption = (anchorSlug: string, rank: number) => {
+        const label = graphLandmarkTitle(pageBySlug.get(anchorSlug)!.title)
+        const caption = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+        caption.classList.add('graph-cluster-caption')
+        caption.setAttribute('data-representative', anchorSlug)
+        caption.setAttribute('role', 'button')
+        caption.setAttribute('tabindex', '0')
+        caption.setAttribute('aria-label', `${label} · ${t('knowledgeEditor.wikiBrowser.focusGroup')}`)
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        title.textContent = label.length > 20 ? label.slice(0, 20) + '…' : label
+        title.setAttribute('text-anchor', 'middle')
+        title.setAttribute('font-size', '13')
+        title.setAttribute('font-weight', '600')
+        title.setAttribute('fill', 'var(--td-text-color-primary)')
+        // Pill shown while another group is focused, so names read as targets.
+        const pill = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        pill.classList.add('graph-caption-pill')
+        caption.append(pill, title)
+        rootG.appendChild(caption)
+        const textWidth = title.getComputedTextLength() || title.textContent.length * 13
+        pill.setAttribute('x', String(-textWidth / 2 - 12))
+        pill.setAttribute('y', '-17')
+        pill.setAttribute('width', String(textWidth + 24))
+        pill.setAttribute('height', '24')
+        pill.setAttribute('rx', '12')
+        graphClusterEls.push({ group: caption, cluster, anchorSlug,
+          labelWidth: textWidth + 24,
+          priority: 100000 + cluster.slugs.length - rank })
+        caption.addEventListener('click', e => { e.stopPropagation(); focus() })
+        caption.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); focus() }
+        })
+      }
+      cluster.anchors.forEach((slug, rank) => addCaption(slug, rank))
+      graphGroupFocusers.set(cluster.representative, focus)
+      graphGroups.value.push({ key: cluster.representative, count: cluster.slugs.length,
+        name: graphLandmarkTitle(pageBySlug.get(cluster.anchors[0]!)!.title) })
+    }
+  }
+  // Section captions describe why these pages have no visible neighbors.
+  for (const section of regions) {
+    const caption = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    caption.setAttribute('x', String(section.left + 16))
+    caption.setAttribute('y', String(section.top + 20))
+    caption.setAttribute('font-size', '13')
+    caption.setAttribute('fill', 'var(--td-text-color-secondary)')
+    caption.setAttribute('pointer-events', 'none')
+    caption.textContent = t(section.kind === 'unlinked'
+      ? 'knowledgeEditor.wikiBrowser.unlinkedSection'
+      : 'knowledgeEditor.wikiBrowser.offscreenSection', { count: section.count })
+    rootG.insertBefore(caption, edgeG)
+    graphSectionEls.push({ text: caption, top: section.top })
+  }
+
+  const nodeMap = new Map<string, GNode>()
+  graphNodes = renderNodes.map(n => {
+    const prior = priorCoords.get(n.slug)
+    const placement = layout.placements.get(n.slug)!
     const node: GNode = {
-      x, y, vx, vy,
+      x: prior?.x ?? placement.x, y: prior?.y ?? placement.y, vx: 0, vy: 0,
       slug: n.slug, title: n.title, type: n.page_type,
-      linkCount: n.link_count || 0, pinned,
+      linkCount: n.link_count || 0, pinned: prior?.pinned ?? false,
+      familiar: !!n.familiar,
+      labelWidth: Math.min(n.title.length, 15) * 11,
     }
     nodeMap.set(n.slug, node)
     return node
   })
-
-  // Node radius based on link count (logarithmic scale to prevent overly large nodes)
-  function nodeRadius(n: GNode) { 
-    return Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4)) 
-  }
+  const nodeRadius = (n: GNode) => graphNodeRadius(n.linkCount)
 
   // Define arrow markers in SVG <defs>
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
@@ -2650,7 +4148,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   markerEnd.setAttribute('orient', 'auto')
   const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   arrowPath.setAttribute('d', 'M0,0 L10,3 L0,6 L2,3 Z')
-  arrowPath.setAttribute('fill', '#c0c4cc')
+  arrowPath.setAttribute('fill', graphEdgeColor)
   markerEnd.appendChild(arrowPath)
   defs.appendChild(markerEnd)
 
@@ -2665,7 +4163,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   markerStart.setAttribute('orient', 'auto')
   const arrowPathStart = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   arrowPathStart.setAttribute('d', 'M10,0 L0,3 L10,6 L8,3 Z')
-  arrowPathStart.setAttribute('fill', '#c0c4cc')
+  arrowPathStart.setAttribute('fill', graphEdgeColor)
   markerStart.appendChild(arrowPathStart)
   defs.appendChild(markerStart)
 
@@ -2700,7 +4198,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
 
   // Detect bidirectional edges (A→B and B→A both exist)
   const edgePairSet = new Set<string>()
-  for (const edge of data.edges) {
+  for (const edge of renderEdges) {
     edgePairSet.add(`${edge.source}→${edge.target}`)
   }
 
@@ -2709,7 +4207,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   const edgeEls: EdgeEl[] = []
   const processedPairs = new Set<string>()
 
-  for (const edge of data.edges) {
+  for (const edge of renderEdges) {
     const pairKey = [edge.source, edge.target].sort().join('↔')
     if (processedPairs.has(pairKey)) continue
     processedPairs.add(pairKey)
@@ -2717,12 +4215,13 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     const bidir = edgePairSet.has(`${edge.target}→${edge.source}`)
 
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-    line.setAttribute('stroke', '#c0c4cc')
-    line.setAttribute('stroke-width', '1.2')
-    line.setAttribute('stroke-opacity', '0.4')
-    line.setAttribute('marker-end', 'url(#arrow-end)')
+    line.setAttribute('stroke', graphEdgeColor)
+    line.setAttribute('stroke-width', graphEdgeWidth)
+    line.setAttribute('stroke-opacity', graphEdgeOpacity)
+    line.setAttribute('stroke-linecap', 'round')
+    if (showArrows.value) line.setAttribute('marker-end', 'url(#arrow-end)')
     line.style.transition = 'stroke 0.2s, stroke-width 0.2s, stroke-opacity 0.2s'
-    if (bidir) {
+    if (bidir && showArrows.value) {
       line.setAttribute('marker-start', 'url(#arrow-start)')
     }
     edgeG.appendChild(line)
@@ -2734,6 +4233,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   for (const n of graphNodes) {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     g.style.cursor = 'pointer'
+    g.setAttribute('data-graph-node', n.slug)
 
     const r = nodeRadius(n)
 
@@ -2743,7 +4243,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     // still hiding 80 more connections just out of view, so they either
     // click "bloom" on everything (wasteful) or on nothing (miss the
     // interesting pages). adjacency here is the undirected neighbor set
-    // we've already built from data.edges; link_count is the KB-wide
+    // we've already built from graph.edges; link_count is the KB-wide
     // in+out degree reported by the backend. Diff > 0 means there's
     // more to fetch.
     //
@@ -2754,8 +4254,10 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     // thinking there's something to click.
     const visibleNeighbors = adjacency.get(n.slug)?.size ?? 0
     const hiddenNeighbors = Math.max(0, n.linkCount - visibleNeighbors)
-    const isEgoCenter = data.meta?.mode === 'ego' && data.meta.center === n.slug
-    const showExpansionRing = hiddenNeighbors > 0 && !isEgoCenter
+    const isEgoCenter = graph.meta?.mode === 'ego' && graph.meta.center === n.slug
+    // In the overview nearly every page has neighbors beyond the top-N
+    // slice, so the ring would only add noise; it guides ego exploration.
+    const showExpansionRing = graph.meta?.mode === 'ego' && hiddenNeighbors > 0 && !isEgoCenter
     const expansionRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     expansionRing.setAttribute('r', String(r + 3))
     expansionRing.setAttribute('fill', 'none')
@@ -2767,6 +4269,21 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     expansionRing.style.transition = 'opacity 0.2s'
     expansionRing.classList.add('node-expansion-ring')
     g.appendChild(expansionRing)
+
+    // Solid outer ring: this page was built from a document the current
+    // person keeps citing. Distinct from the dashed expansion ring so
+    // "I use this" and "there are more neighbors" do not look the same.
+    if (n.familiar) {
+      const familiarRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      familiarRing.setAttribute('r', String(r + 7))
+      familiarRing.setAttribute('fill', 'none')
+      familiarRing.setAttribute('stroke', '#0052d9')
+      familiarRing.setAttribute('stroke-width', '2')
+      familiarRing.setAttribute('pointer-events', 'none')
+      familiarRing.style.opacity = '0.9'
+      familiarRing.classList.add('node-familiar-ring')
+      g.appendChild(familiarRing)
+    }
 
     // Pulse ring for selected state
     const activeRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
@@ -2783,7 +4300,8 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     circle.setAttribute('r', String(r))
     circle.setAttribute('fill', nodeColorMap[n.type] || '#8c8c8c')
     circle.setAttribute('stroke', '#fff')
-    circle.setAttribute('stroke-width', '2')
+    circle.setAttribute('stroke-width', '1.5')
+    circle.classList.add('node-circle')
     // circle.setAttribute('filter', 'url(#node-shadow)')
     circle.style.transition = 'r 0.2s, stroke-width 0.2s, opacity 0.2s'
     g.appendChild(circle)
@@ -2798,7 +4316,6 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     text.setAttribute('font-size', '11')
     text.setAttribute('fill', 'var(--td-text-color-secondary)')
     text.setAttribute('pointer-events', 'none')
-    text.style.transition = 'opacity 0.2s' // Smooth fade in/out
     text.style.textShadow = '0 1px 3px var(--td-bg-color-container), 0 -1px 3px var(--td-bg-color-container), 1px 0 3px var(--td-bg-color-container), -1px 0 3px var(--td-bg-color-container)'
     text.textContent = n.title.length > 14 ? n.title.substring(0, 14) + '…' : n.title
     g.appendChild(text)
@@ -2813,7 +4330,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     // painter's algorithm draws it on top; the node-shadow filter and
     // the drawer cover it otherwise.
     let bloomBtn: SVGGElement | null = null
-    const bloomBtnEligible = !isEgoCenter && data.meta?.mode === 'ego' && hiddenNeighbors > 0
+    const bloomBtnEligible = !isEgoCenter && graph.meta?.mode === 'ego' && hiddenNeighbors > 0
     if (bloomBtnEligible) {
       bloomBtn = document.createElementNS('http://www.w3.org/2000/svg', 'g')
       bloomBtn.classList.add('node-bloom-btn')
@@ -2831,8 +4348,8 @@ function renderGraph(opts: RenderGraphOpts = {}) {
       btnBg.setAttribute('cx', String(btnX))
       btnBg.setAttribute('cy', String(btnY))
       btnBg.setAttribute('r', '8')
-      btnBg.setAttribute('fill', 'var(--td-bg-color-container, #fff)')
-      btnBg.setAttribute('stroke', 'var(--td-brand-color, #0052d9)')
+      btnBg.setAttribute('fill', 'var(--td-bg-color-container)')
+      btnBg.setAttribute('stroke', 'var(--td-brand-color)')
       btnBg.setAttribute('stroke-width', '1.5')
       bloomBtn.appendChild(btnBg)
 
@@ -2842,7 +4359,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
       btnCrossV.setAttribute('x2', String(btnX))
       btnCrossV.setAttribute('y1', String(btnY - 4))
       btnCrossV.setAttribute('y2', String(btnY + 4))
-      btnCrossV.setAttribute('stroke', 'var(--td-brand-color, #0052d9)')
+      btnCrossV.setAttribute('stroke', 'var(--td-brand-color)')
       btnCrossV.setAttribute('stroke-width', '1.8')
       btnCrossV.setAttribute('stroke-linecap', 'round')
       bloomBtn.appendChild(btnCrossV)
@@ -2852,7 +4369,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
       btnCrossH.setAttribute('x2', String(btnX + 4))
       btnCrossH.setAttribute('y1', String(btnY))
       btnCrossH.setAttribute('y2', String(btnY))
-      btnCrossH.setAttribute('stroke', 'var(--td-brand-color, #0052d9)')
+      btnCrossH.setAttribute('stroke', 'var(--td-brand-color)')
       btnCrossH.setAttribute('stroke-width', '1.8')
       btnCrossH.setAttribute('stroke-linecap', 'round')
       bloomBtn.appendChild(btnCrossH)
@@ -2869,6 +4386,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     // one node to the next doesn't flash through the fully-unhighlighted state
     // (which is what caused the whole-graph flickering).
     g.addEventListener('mouseenter', () => {
+      if (performance.now() < graphHoverSuppressedUntil) return
       if (graphHoverLeaveTimer) {
         clearTimeout(graphHoverLeaveTimer)
         graphHoverLeaveTimer = null
@@ -2977,86 +4495,27 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     nodeEls.push({ g, circle, text, activeRing, node: n })
   }
 
-  // Pan & zoom on SVG background
-  setupPanZoom(svg, rootG)
+  // Measure after all DOM writes to avoid forcing a layout for every node.
+  for (const { text, node } of nodeEls) node.labelWidth = text.getComputedTextLength() || node.labelWidth
+  // Hide only after every measurement, keeping reads and writes separate.
+  // The first label pass reveals only the collision-filtered set.
+  for (const { text } of nodeEls) text.style.display = 'none'
 
-  // Animated force simulation
+  // Pan & zoom on SVG background
+  const centerNode = nodeMap.get(graphCenter.value)
+  const initialFocus = centerNode ?? layout.clusters[0] ?? graphNodes[0]
+  const availableWidth = Math.max(160, width - (graphDrawerVisible.value ? 480 : Math.min(240, width * 0.25)))
+  setupPanZoom(svg, rootG, previousViewport ?? initialGraphViewport(graphNodes, availableWidth, height, initialFocus))
+
+  // Links and repulsion determine the shape without a circular boundary.
+  // Existing nodes stay still during incremental expansion, including pins.
+  const retained = new Set(priorCoords.keys())
   let alpha = 1.0
+  let frame = 0
   function tick() {
     alpha *= 0.985
-    if (alpha < 0.02) { graphAnimFrame = 0; return }
-
-    // Repulsion: Optimized using 1D spatial sorting (X-axis) to reduce O(n²) to O(n log n)
-    // This allows smooth rendering even for > 1000 nodes
-    const sortedNodes = [...graphNodes].sort((a, b) => a.x - b.x)
-    const MAX_REPULSION_DIST = 300 // Only calculate repulsion for nodes within 300px
-    const MAX_REPULSION_DIST_SQ = MAX_REPULSION_DIST * MAX_REPULSION_DIST
-
-    for (let i = 0; i < sortedNodes.length; i++) {
-      const n1 = sortedNodes[i]
-      for (let j = i + 1; j < sortedNodes.length; j++) {
-        const n2 = sortedNodes[j]
-        const dx = n2.x - n1.x
-        
-        // Because nodes are sorted by X, if dx > MAX_REPULSION_DIST, 
-        // all subsequent n2 nodes will also be too far on the X axis, so we can break early
-        if (dx > MAX_REPULSION_DIST) break
-        
-        const dy = n2.y - n1.y
-        if (Math.abs(dy) > MAX_REPULSION_DIST) continue // Too far on Y axis
-        
-        const distSq = dx * dx + dy * dy
-        if (distSq > MAX_REPULSION_DIST_SQ) continue
-
-        const dist = Math.sqrt(distSq) || 1
-        // Prevent extremely high repulsion when nodes are very close
-        const force = (200 * alpha) / Math.max(distSq, 100) * 60
-        const fx = (dx / dist) * force
-        const fy = (dy / dist) * force
-        
-        if (!n1.pinned) { n1.vx -= fx; n1.vy -= fy }
-        if (!n2.pinned) { n2.vx += fx; n2.vy += fy }
-      }
-    }
-
-    // Attraction along edges
-    for (const edge of data.edges) {
-      const s = nodeMap.get(edge.source)
-      const t = nodeMap.get(edge.target)
-      if (!s || !t) continue
-      const dx = t.x - s.x
-      const dy = t.y - s.y
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1
-      const force = (dist - 120) * 0.005 * alpha
-      const fx = (dx / dist) * force
-      const fy = (dy / dist) * force
-      if (!s.pinned) { s.vx += fx; s.vy += fy }
-      if (!t.pinned) { t.vx -= fx; t.vy -= fy }
-    }
-
-    // Center gravity
-    // Increase gravity slightly when there are more nodes to prevent the graph from expanding too much
-    const gravityStrength = Math.min(0.01, 0.001 + graphNodes.length * 0.00002)
-    for (const n of graphNodes) {
-      if (n.pinned) continue
-      n.vx += (width / 2 - n.x) * gravityStrength * alpha
-      n.vy += (height / 2 - n.y) * gravityStrength * alpha
-    }
-
-    // Apply velocity
-    for (const n of graphNodes) {
-      if (n.pinned) continue
-      n.vx *= 0.6
-      n.vy *= 0.6
-      // Cap velocity to prevent nodes from flying off screen during initial explosive layout
-      const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy)
-      if (v > 20) {
-        n.vx = (n.vx / v) * 20
-        n.vy = (n.vy / v) * 20
-      }
-      n.x += n.vx
-      n.y += n.vy
-    }
+    if (alpha < 0.02) { refreshGraphLabels(); graphAnimFrame = 0; return }
+    stepGraphLayout(graphNodes, renderEdges, layout.placements, alpha, retained)
 
     // Update SVG positions
     for (const { g, node } of nodeEls) {
@@ -3070,6 +4529,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
       }
     }
 
+    if (++frame % 6 === 0) refreshGraphLabels()
     graphAnimFrame = requestAnimationFrame(tick)
   }
 
@@ -3089,12 +4549,24 @@ function renderGraph(opts: RenderGraphOpts = {}) {
   graphNodeElsRef = nodeEls
   graphEdgeElsRef = edgeEls.map(e => ({ line: e.line, source: e.source, target: e.target, bidir: e.bidir }))
   graphAdjacencyRef = adjacency
-  
+
   applyGraphFilters()
-  
-  graphAnimFrame = requestAnimationFrame(tick)
+
+  if (graphNodes.length) graphAnimFrame = requestAnimationFrame(tick)
   graphReady.value = true
+  if (graphSelectedSlug.value && nodeMap.has(graphSelectedSlug.value)) {
+    applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls)
+  }
+  refreshGraphLabels()
 }
+
+// The slider is overview-only. Re-render in place so landmarks already on
+// screen keep their coordinates while the newly revealed pages join them.
+// Sync so a search that raises the level can center the node afterwards.
+watch(graphDetailLevel, () => {
+  if (graphMode.value !== 'overview') return
+  renderGraph({ preserveLayout: true })
+}, { flush: 'sync' })
 
 // Set edge line positions, shortened to stop at node circle boundary so arrows are visible
 function setEdgePositions(line: SVGLineElement, s: GNode, t: GNode, nodeRadius: (n: GNode) => number) {
@@ -3104,9 +4576,11 @@ function setEdgePositions(line: SVGLineElement, s: GNode, t: GNode, nodeRadius: 
   const ux = dx / dist
   const uy = dy / dist
 
-  // Shorten each end by the node radius + arrow margin
-  const rS = nodeRadius(s) + 4
-  const rT = nodeRadius(t) + 4
+  // Shorten each end by the node radius, plus a margin only while arrowheads
+  // are drawn; otherwise the gaps form a ring of line ends around every node.
+  const margin = graphEdgeMarkersVisible ? 4 : 0
+  const rS = nodeRadius(s) + margin
+  const rT = nodeRadius(t) + margin
 
   line.setAttribute('x1', String(s.x + ux * rS))
   line.setAttribute('y1', String(s.y + uy * rS))
@@ -3124,6 +4598,7 @@ function setupDrag(
 ) {
   let dragging = false
   let startX = 0, startY = 0
+  let pointerStartX = 0, pointerStartY = 0, moved = false
 
   function getPoint(e: MouseEvent | Touch) {
     const svg = graphSvg
@@ -3143,23 +4618,27 @@ function setupDrag(
     if (e.button !== 0) return
     e.stopPropagation()
     dragging = true
+    moved = false
+    pointerStartX = e.clientX; pointerStartY = e.clientY
     node.pinned = true
     const p = getPoint(e)
     startX = p.x - node.x
     startY = p.y - node.y
-    g.querySelector('circle')?.setAttribute('stroke', nodeColorMap[node.type] || '#8c8c8c')
-    g.querySelector('circle')?.setAttribute('stroke-width', '3')
+    g.querySelector('.node-circle')?.setAttribute('stroke', nodeColorMap[node.type] || '#8c8c8c')
+    g.querySelector('.node-circle')?.setAttribute('stroke-width', '2.5')
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onEnd)
   }
 
   function onMove(e: MouseEvent) {
     if (!dragging) return
+    if (Math.hypot(e.clientX - pointerStartX, e.clientY - pointerStartY) > 4) moved = true
     const p = getPoint(e)
     node.x = p.x - startX
     node.y = p.y - startY
     node.vx = 0; node.vy = 0
     g.setAttribute('transform', `translate(${node.x},${node.y})`)
+    refreshGraphLabels()
     // Update connected edges immediately
     for (const edge of edgeEls) {
       if (edge.source === node.slug || edge.target === node.slug) {
@@ -3173,51 +4652,130 @@ function setupDrag(
   function onEnd() {
     dragging = false
     // Keep pinned after drag so the node stays where user placed it
-    g.querySelector('circle')?.setAttribute('stroke', '#fff')
-    g.querySelector('circle')?.setAttribute('stroke-width', '2')
+    g.querySelector('.node-circle')?.setAttribute('stroke', '#fff')
+    g.querySelector('.node-circle')?.setAttribute('stroke-width', '1.5')
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onEnd)
   }
 
   g.addEventListener('mousedown', onStart)
+  g.addEventListener('click', e => {
+    if (moved) { e.preventDefault(); e.stopImmediatePropagation(); moved = false }
+  }, true)
 }
 
 // ─── Pan & Zoom ───
-function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
-  let scale = 1
-  let translateX = 0, translateY = 0
+function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement, viewport?: { scale: number; x: number; y: number }) {
+  let scale = viewport?.scale ?? 1
+  let translateX = viewport?.x ?? 0, translateY = viewport?.y ?? 0
   let panning = false
   let panStartX = 0, panStartY = 0
   let dragStartX = 0, dragStartY = 0
+  let labelFrame = 0
+  let labelScale: number | undefined
+
+  function scheduleLabelsUpdate() {
+    if (labelFrame) return
+    labelFrame = requestAnimationFrame(() => {
+      labelFrame = 0
+      updateLabelsVisibility()
+    })
+  }
 
   function applyTransform() {
     rootG.setAttribute('transform', `translate(${translateX},${translateY}) scale(${scale})`)
-    updateLabelsVisibility()
+    // Translation does not change screen-space label collisions or contours.
+    // Keep the viewport immediate, but coalesce zoom/layout/hover work per frame.
+    if (scale !== labelScale) scheduleLabelsUpdate()
   }
 
   function updateLabelsVisibility() {
-    // Hide labels when zoomed out too much or hide less important labels
-    // We only want to show labels for important nodes (high link count) when zoomed out
-    for (const { text, node } of graphNodeElsRef) {
-      if (node.slug === graphSelectedSlug.value || node.slug === graphHighlightSlug.value) {
-        text.style.opacity = '1' // Always show selected/highlighted
-        continue
-      }
-      
-      let visibilityThreshold = 0.5 // Default: need to zoom in to at least 0.5 to see all labels
-      
-      // Highly connected nodes get their labels shown earlier
-      if (node.linkCount > 10) visibilityThreshold = 0.2
-      else if (node.linkCount > 5) visibilityThreshold = 0.35
-      else if (node.linkCount > 2) visibilityThreshold = 0.45
-      
-      if (scale < visibilityThreshold) {
-        text.style.opacity = '0'
-      } else {
-        text.style.opacity = '1'
+    labelScale = scale
+    // Arrowheads shrink to specks around every node when zoomed out.
+    rootG.classList.toggle('hide-edge-markers', scale < 0.8)
+    const markersVisible = showArrows.value && scale >= 0.8
+    if (markersVisible !== graphEdgeMarkersVisible) {
+      graphEdgeMarkersVisible = markersVisible
+      const bySlug = new Map(graphNodes.map(n => [n.slug, n]))
+      for (const e of graphEdgeElsRef) {
+        const s = bySlug.get(e.source), t = bySlug.get(e.target)
+        if (s && t) setEdgePositions(e.line, s, t, n => graphNodeRadius(n.linkCount))
       }
     }
+    // Hide labels when zoomed out too much or hide less important labels
+    // We only want to show labels for important nodes (high link count) when zoomed out
+    for (const { text, top } of graphSectionEls) {
+      const fontSize = String(13 / scale), y = String(top - 12 / scale)
+      if (text.getAttribute('font-size') !== fontSize) text.setAttribute('font-size', fontSize)
+      if (text.getAttribute('y') !== y) text.setAttribute('y', y)
+    }
+    const positionsBySlug = new Map(graphNodes.map(n => [n.slug, n]))
+    for (const contour of graphContourEls) {
+      const { path, cluster } = contour
+      const members = cluster.slugs.flatMap(slug => positionsBySlug.has(slug) ? [positionsBySlug.get(slug)!] : [])
+      // Panning and hover do not change geometry. Rebuild only after zoom or
+      // node movement, keeping the more detailed contour cheap to interact with.
+      if (contour.scale !== scale || contour.positions?.length !== members.length * 2
+        || members.some((n, i) => contour.positions![i * 2] !== n.x || contour.positions![i * 2 + 1] !== n.y)) {
+        path.setAttribute('d', graphClusterOutline(members.map(n => ({ ...n, radius: graphNodeRadius(n.linkCount) })), scale))
+        contour.scale = scale
+        contour.positions = members.flatMap(n => [n.x, n.y])
+      }
+      path.classList.toggle('is-dimmed', graphFocusedSlugs.size > 0 && !graphFocusedSlugs.has(cluster.representative))
+    }
+    const groupLabels = graphClusterEls.flatMap(({ group, cluster, anchorSlug, labelWidth, priority }) => {
+      const anchor = positionsBySlug.get(anchorSlug)
+      // While a group is focused, every other group keeps exactly its name,
+      // at any zoom, as the way to switch to it.
+      const outside = graphFocusedSlugs.size > 0 && !graphFocusedSlugs.has(cluster.representative)
+      group.classList.toggle('is-outside-focus', outside)
+      const shown = !!anchor && (outside ? anchorSlug === cluster.anchors[0] : scale < 1.2)
+      if (!shown || !anchor) return []
+      const labelX = anchor.x
+      const labelY = anchor.y + graphNodeRadius(anchor.linkCount) + 18 / scale
+      const x = labelX * scale, y = labelY * scale
+      group.setAttribute('transform', `translate(${labelX},${labelY}) scale(${1 / scale})`)
+      return [{ slug: `anchor:${anchorSlug}`, priority,
+        required: outside || anchor.slug === graphSelectedSlug.value || anchor.slug === graphHighlightSlug.value,
+        left: x - labelWidth / 2 - 8, right: x + labelWidth / 2 + 8, top: y - 16, bottom: y + 5 }]
+    })
+    const captionedSlugs = new Set(groupLabels.map(label => label.slug.slice('anchor:'.length)))
+    const candidates = graphNodeElsRef.flatMap(({ node }) => {
+      const required = node.slug === graphSelectedSlug.value || node.slug === graphHighlightSlug.value
+      // The representative caption replaces its ordinary label at overview
+      // scales, including hover/selection, so the page name appears only once.
+      if (captionedSlugs.has(node.slug)) return []
+      // Reveal names after a modest zoom from the overview. Screen-space
+      // collision filtering below controls clutter, regardless of graph size.
+      const showDetail = scale >= 0.5 || (graphFocusedSlugs.has(node.slug) && scale >= 0.4)
+      const landmark = graphImportantSlugs.has(node.slug) && (groupLabels.length === 0 || scale >= 0.4)
+      if (!required && !showDetail && !landmark) return []
+      const halfWidth = node.labelWidth * 12 / 11 / 2 + 5
+      const baseline = (node.y + graphNodeRadius(node.linkCount)) * scale + 16
+      return [{ slug: node.slug, priority: node.linkCount, required,
+        left: node.x * scale - halfWidth, right: node.x * scale + halfWidth,
+        top: baseline - 15, bottom: baseline + 4 }]
+    })
+    const visible = visibleGraphLabels([...groupLabels, ...candidates])
+    for (const { group, anchorSlug } of graphClusterEls) {
+      const shown = visible.has(`anchor:${anchorSlug}`)
+      const display = shown ? '' : 'none', tabIndex = shown ? '0' : '-1'
+      if (group.style.display !== display) group.style.display = display
+      if (group.getAttribute('tabindex') !== tabIndex) group.setAttribute('tabindex', tabIndex)
+    }
+    for (const { text, node } of graphNodeElsRef) {
+      const shown = visible.has(node.slug)
+      const display = shown ? '' : 'none'
+      if (text.style.display !== display) text.style.display = display
+      if (!shown) continue
+      // Only visible labels need screen-pixel sizing. Check attributes so
+      // hover/layout refreshes at the same zoom do not trigger SVG layout.
+      const fontSize = String(12 / scale), dy = String(graphNodeRadius(node.linkCount) + 16 / scale)
+      if (text.getAttribute('font-size') !== fontSize) text.setAttribute('font-size', fontSize)
+      if (text.getAttribute('dy') !== dy) text.setAttribute('dy', dy)
+    }
   }
+  refreshGraphLabels = scheduleLabelsUpdate
 
   // Export methods for programmatic pan/zoom
   let animId = 0
@@ -3226,6 +4784,7 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
     setTranslate: (x: number, y: number) => { translateX = x; translateY = y },
     apply: applyTransform,
     getScale: () => scale,
+    getTranslate: () => ({ x: translateX, y: translateY }),
     flyTo: (tx: number, ty: number, s?: number, duration = 400) => {
       cancelAnimationFrame(animId)
       const startX = translateX, startY = translateY, startScale = scale
@@ -3248,8 +4807,9 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
   // Zoom with mouse wheel
   svg.addEventListener('wheel', (e) => {
     e.preventDefault()
+    cancelAnimationFrame(animId)
     const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08
-    const newScale = Math.max(0.2, Math.min(5, scale * zoomFactor))
+    const newScale = Math.max(0.005, Math.min(5, scale * zoomFactor))
 
     // Zoom towards cursor
     const rect = svg.getBoundingClientRect()
@@ -3265,7 +4825,8 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
   svg.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return
     // Only pan if clicking the SVG background, not a node
-    if ((e.target as Element).tagName === 'svg' || (e.target as Element).tagName === 'SVG') {
+    if (!(e.target as Element).closest('[data-graph-node], .graph-cluster-caption')) {
+      cancelAnimationFrame(animId)
       panning = true
       panStartX = e.clientX - translateX
       panStartY = e.clientY - translateY
@@ -3275,30 +4836,49 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
     }
   })
 
-  window.addEventListener('mousemove', (e) => {
+  const onMouseMove = (e: MouseEvent) => {
     if (!panning) return
     translateX = e.clientX - panStartX
     translateY = e.clientY - panStartY
     applyTransform()
-  })
+  }
 
-  window.addEventListener('mouseup', (e) => {
+  const onMouseUp = (e: MouseEvent) => {
     if (panning) {
       panning = false
-      svg.style.cursor = 'default'
-      
+      svg.style.cursor = 'grab'
+
       // If we barely moved, consider it a click to clear selection
       const dx = e.clientX - dragStartX
       const dy = e.clientY - dragStartY
       if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
-        if ((e.target as Element).tagName === 'svg' || (e.target as Element).tagName === 'SVG') {
-          graphSelectedSlug.value = null
-          graphDrawerVisible.value = false
-          clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+        if (!(e.target as Element).closest('[data-graph-node], .graph-cluster-caption')) {
+          // Clear the innermost state first: a selection, then the group focus.
+          if (graphSelectedSlug.value || graphDrawerVisible.value) {
+            graphSelectedSlug.value = null
+            graphDrawerVisible.value = false
+            clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+          } else exitGraphFocus()
         }
       }
     }
-  })
+  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !graphFocusGroup.value || graphDrawerVisible.value) return
+    if (e.target instanceof Element && e.target.closest('input, textarea, [contenteditable="true"]')) return
+    exitGraphFocus()
+  }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+  window.addEventListener('keydown', onKeyDown)
+  disposeGraphPanZoom = () => {
+    cancelAnimationFrame(animId)
+    cancelAnimationFrame(labelFrame)
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+    window.removeEventListener('keydown', onKeyDown)
+  }
+  applyTransform()
 }
 
 // ─── Hover Highlight ───
@@ -3309,32 +4889,33 @@ function applyHighlight(
   edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
   hoverSlug?: string
 ) {
+  refreshGraphLabels()
   const neighbors = adjacency.get(slug) || new Set()
   const hoverNeighbors = hoverSlug ? (adjacency.get(hoverSlug) || new Set()) : new Set()
-  
+
   // Helper to get consistent radius
-  const getRadius = (n: GNode) => Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4))
-  
+  const getRadius = (n: GNode) => graphNodeRadius(n.linkCount)
+
   for (const { g, circle, activeRing, node } of nodeEls) {
     const r = getRadius(node)
     if (node.slug === slug) {
       circle.setAttribute('r', String(r + 3))
-      circle.setAttribute('stroke-width', '3')
+      circle.setAttribute('stroke-width', '2.5')
       g.style.opacity = '1'
     } else if (hoverSlug && node.slug === hoverSlug) {
       circle.setAttribute('r', String(r + 3))
-      circle.setAttribute('stroke-width', '3')
+      circle.setAttribute('stroke-width', '2.5')
       g.style.opacity = '1'
     } else if (neighbors.has(node.slug) || (hoverSlug && hoverNeighbors.has(node.slug))) {
       circle.setAttribute('r', String(r))
-      circle.setAttribute('stroke-width', '2')
+      circle.setAttribute('stroke-width', '1.5')
       g.style.opacity = '1'
     } else {
       circle.setAttribute('r', String(r))
-      circle.setAttribute('stroke-width', '2')
+      circle.setAttribute('stroke-width', '1.5')
       g.style.opacity = '0.2'
     }
-    
+
     if (node.slug === graphSelectedSlug.value) {
       activeRing.style.opacity = '1'
     } else {
@@ -3343,26 +4924,35 @@ function applyHighlight(
   }
   for (const e of edgeEls) {
     if (e.source === slug || e.target === slug || (hoverSlug && (e.source === hoverSlug || e.target === hoverSlug))) {
-      e.line.setAttribute('stroke-opacity', '0.9')
-      e.line.setAttribute('stroke-width', '2')
-      
+      e.line.setAttribute('stroke-opacity', '0.85')
+      e.line.setAttribute('stroke-width', '1.5')
+
       // Determine which node is driving the highlight color
       const focusSlug = (hoverSlug && (e.source === hoverSlug || e.target === hoverSlug)) ? hoverSlug : slug
       const hlColor = nodeColorMap[
         nodeEls.find(n => n.node.slug === focusSlug)?.node.type || ''
       ] || '#0052d9'
-      
+
       e.line.setAttribute('stroke', hlColor)
-      e.line.setAttribute('marker-end', 'url(#arrow-end-hl)')
-      if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start-hl)')
+      setEdgeMarkers(e, '-hl')
     } else {
+      e.line.setAttribute('stroke', graphEdgeColor)
       e.line.setAttribute('stroke-opacity', '0.08')
-      e.line.setAttribute('stroke-width', '1')
-      e.line.setAttribute('marker-end', 'url(#arrow-end)')
-      if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
-      else e.line.removeAttribute('marker-start')
+      e.line.setAttribute('stroke-width', graphEdgeWidth)
+      setEdgeMarkers(e)
     }
   }
+}
+
+function setEdgeMarkers(e: { line: SVGLineElement; bidir: boolean }, suffix = '') {
+  if (!showArrows.value) {
+    e.line.removeAttribute('marker-end')
+    e.line.removeAttribute('marker-start')
+    return
+  }
+  e.line.setAttribute('marker-end', `url(#arrow-end${suffix})`)
+  if (e.bidir) e.line.setAttribute('marker-start', `url(#arrow-start${suffix})`)
+  else e.line.removeAttribute('marker-start')
 }
 
 function clearHighlight(
@@ -3374,21 +4964,21 @@ function clearHighlight(
     return
   }
 
-  const getRadius = (n: GNode) => Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4))
+  refreshGraphLabels()
+  const getRadius = (n: GNode) => graphNodeRadius(n.linkCount)
 
   for (const { g, circle, activeRing, node } of nodeEls) {
     circle.setAttribute('r', String(getRadius(node)))
-    circle.setAttribute('stroke-width', '2')
-    g.style.opacity = '1'
+    circle.setAttribute('stroke-width', '1.5')
+    g.style.opacity = graphFocusedSlugs.size && !graphFocusedSlugs.has(node.slug) ? '0.12' : '1'
     activeRing.style.opacity = '0'
   }
   for (const e of edgeEls) {
-    e.line.setAttribute('stroke', '#c0c4cc')
-    e.line.setAttribute('stroke-width', '1.2')
-    e.line.setAttribute('stroke-opacity', '0.4')
-    e.line.setAttribute('marker-end', 'url(#arrow-end)')
-    if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
-    else e.line.removeAttribute('marker-start')
+    e.line.setAttribute('stroke', graphEdgeColor)
+    e.line.setAttribute('stroke-width', graphEdgeWidth)
+    const outsideFocus = graphFocusedSlugs.size && (!graphFocusedSlugs.has(e.source) || !graphFocusedSlugs.has(e.target))
+    e.line.setAttribute('stroke-opacity', outsideFocus ? '0.05' : graphEdgeOpacity)
+    setEdgeMarkers(e)
   }
 }
 
@@ -3474,6 +5064,26 @@ let graphAdjacencyRef = new Map<string, Set<string>>()
 // the target sits in the link_count ranking.
 async function handleGraphSearchSelect(value: string) {
   if (!value) return
+  // A search result must remain reachable even when its shelf was collapsed.
+  const revealUnlinked = !showUnlinkedNodes.value && graphUnlinkedSlugs.value.has(value)
+  if (revealUnlinked) showUnlinkedNodes.value = true
+
+  if (graphMode.value === 'overview') {
+    // A loaded page outside the current level is drawn at the smallest level
+    // that contains it. Shelf pages are not in the spanning tree, so they
+    // use full detail. Raise the slider before centering.
+    const placements = graphDetailPlacements.value
+    const needed = placements.has(value)
+      ? graphDetailLevelForSlug(graphDetailClusters.value, placements, value)
+      : revealUnlinked ? GRAPH_DETAIL_MAX : null
+    if (needed !== null && needed > graphDetailLevel.value) {
+      graphDetailLevel.value = needed
+    } else if (revealUnlinked) {
+      renderGraph()
+    }
+  } else if (revealUnlinked) {
+    renderGraph()
+  }
 
   let node = graphNodes.find(n => n.slug === value)
   if (!node) {
@@ -3576,7 +5186,7 @@ watch(() => props.view, (v) => {
   } else if (v === 'browser') {
     nextTick(async () => {
       if (readerBodyRef.value && renderedContent.value) {
-        await hydrateProtectedFileImages(readerBodyRef.value)
+        await hydrateProtectedFileImages(readerBodyRef.value, kbFileAccess.value)
       }
     })
   }
@@ -3594,6 +5204,14 @@ watch(() => route.query.slug, (newSlug) => {
   }
 })
 
+useAssistantDataChange((changes) => {
+  if (!changes.some(change => change.ids.knowledgeBaseIds.includes(props.knowledgeBaseId))) return
+  void loadPages()
+  void refreshSelectedPage()
+  void loadStats()
+  if (showGlobalIssuesDrawer.value) void loadGlobalIssues()
+}, { areas: ['wiki'] })
+
 onMounted(() => {
   loadPages()
   loadStats()
@@ -3601,6 +5219,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposeGraphPanZoom()
   if (statsTimer) {
     clearInterval(statsTimer)
   }
@@ -3616,6 +5235,10 @@ onUnmounted(() => {
     groupSentinelObserver.disconnect()
     groupSentinelObserver = null
   }
+  if (loadMoreObserver) {
+    loadMoreObserver.disconnect()
+    loadMoreObserver = null
+  }
 })
 </script>
 
@@ -3625,6 +5248,10 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   background: var(--td-bg-color-container);
+  // Align list rows with the session sidebar grid (menu.vue).
+  --wiki-list-inset-x: 10px;
+  --wiki-list-row-radius: 6px;
+  --wiki-list-row-min-height: 30px;
 }
 
 // ── Left Sidebar ──
@@ -3639,10 +5266,12 @@ onUnmounted(() => {
 }
 
 .wiki-sidebar-header {
-  padding: 16px 16px 12px;
+  padding: 0 10px 8px 0;
+  margin-left: -8px;
+  padding-left: 8px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .wiki-queue-status {
@@ -3651,10 +5280,10 @@ onUnmounted(() => {
   gap: 8px;
   padding: 8px 12px;
   background: var(--td-bg-color-secondarycontainer);
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   color: var(--td-text-color-secondary);
-  font-size: 13px;
-  
+  font-size: var(--app-text-md);
+
   .queue-text {
     line-height: 1.2;
   }
@@ -3666,11 +5295,11 @@ onUnmounted(() => {
   gap: 8px;
   padding: 8px 12px;
   background: var(--td-warning-color-light);
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   color: var(--td-warning-color-8);
-  font-size: 13px;
+  font-size: var(--app-text-md);
   cursor: pointer;
-  transition: filter 0.2s;
+  transition: filter var(--app-motion-base);
 
   &:hover {
     filter: brightness(0.95);
@@ -3685,16 +5314,130 @@ onUnmounted(() => {
 .wiki-page-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 12px 12px;
+  padding: 0 8px 12px 0;
+  margin-left: -8px;
+  padding-left: 8px;
 }
 
-// In page-mode the RecycleScroller delegates scrolling to the nearest
-// scrollable ancestor (`.wiki-page-list`), so the scroller itself
-// must not constrain height or introduce its own overflow. We only
-// reserve a minimum to keep the empty-state loader from collapsing.
-.wiki-group-scroller {
-  min-height: 60px;
-  margin-bottom: 4px;
+.wiki-tree-list {
+  padding: 0 0 4px;
+}
+
+// Tab bar + tree list share horizontal inset. Tree rows are plain flex and
+// left-aligned; only folder rows reserve trailing space for count / actions.
+.wiki-tree-panel {
+  --wiki-tree-depth-indent: 14px;
+  padding: 0;
+}
+
+.wiki-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--td-bg-color-container);
+}
+
+.wiki-tab-bar-scroll {
+  display: flex;
+  gap: 16px;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.wiki-tab-bar-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wiki-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--app-radius-sm);
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+}
+
+.wiki-view-toggle-btn {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-xs);
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color var(--app-motion-instant) ease, color var(--app-motion-instant) ease;
+
+  &:hover {
+    color: var(--td-text-color-primary);
+  }
+
+  &.active {
+    color: var(--td-brand-color);
+    background: var(--td-bg-color-container);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  .t-icon {
+    font-size: var(--app-text-lg);
+  }
+}
+
+.wiki-tab-bar-action {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color var(--app-motion-fast) ease, color var(--app-motion-fast) ease;
+
+  .t-icon {
+    font-size: var(--app-text-lg);
+  }
+
+  &:hover {
+    color: var(--td-brand-color);
+    background: var(--td-bg-color-container-hover);
+  }
+
+  &:disabled {
+    color: var(--td-text-color-placeholder);
+    background: transparent;
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+.wiki-tree-trailing {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .wiki-group-sentinel {
@@ -3714,35 +5457,39 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 6px;
+  min-height: var(--wiki-list-row-min-height);
+  padding: 0 10px 0 var(--wiki-list-inset-x);
+  border-radius: var(--wiki-list-row-radius);
   cursor: pointer;
-  margin-bottom: 4px;
-  transition: all 0.15s;
+  margin-bottom: 0;
+  transition: background var(--app-motion-fast) ease, color var(--app-motion-fast) ease;
 
   &:hover {
     background: var(--td-bg-color-container-hover);
   }
 
   &.active {
-    background: var(--td-brand-color-light);
+    background: var(--td-bg-color-container-hover);
+
     .wiki-nav-text {
       color: var(--td-brand-color);
-      font-weight: 600;
+      font-weight: 400;
     }
+
     .wiki-nav-icon {
       color: var(--td-brand-color);
     }
   }
 
   .wiki-nav-icon {
-    font-size: 16px;
+    font-size: var(--app-text-xl);
     color: var(--td-text-color-secondary);
   }
 
   .wiki-nav-text {
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--app-text-base);
+    font-weight: 400;
+    line-height: 20px;
     color: var(--td-text-color-primary);
   }
 }
@@ -3750,100 +5497,104 @@ onUnmounted(() => {
 .wiki-sidebar-divider {
   height: 1px;
   background: var(--td-component-stroke);
-  margin: 8px 12px;
-}
-
-.wiki-tab-bar {
-  display: flex;
-  gap: 4px;
-  padding: 8px 0;
-  overflow-x: auto;
-  // Hide scrollbar while still allowing horizontal pan when types
-  // overflow the sidebar width (rare but happens with long labels).
-  scrollbar-width: none;
-  &::-webkit-scrollbar { display: none; }
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: var(--td-bg-color-container);
+  margin: 6px 0;
 }
 
 .wiki-tab {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 14px;
-  font-size: 12px;
+  gap: 5px;
+  padding: 7px 2px 8px;
+  border-radius: 0;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-secondary);
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
+  position: relative;
+  transition: background var(--app-motion-fast), color var(--app-motion-fast);
 
   &:hover {
-    background: var(--td-bg-color-container-hover);
     color: var(--td-text-color-primary);
   }
 
   &.active {
-    background: var(--td-brand-color-light);
     color: var(--td-brand-color);
-    font-weight: 500;
+    font-weight: 600;
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      right: 2px;
+      bottom: 1px;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: var(--td-brand-color);
+    }
   }
 
   .wiki-tab-count {
-    font-size: 11px;
-    background: var(--td-bg-color-secondarycontainer);
-    border-radius: 10px;
-    padding: 0 6px;
-    line-height: 16px;
+    font-size: var(--app-text-xs);
+    padding: 0;
+    line-height: 1;
     color: var(--td-text-color-placeholder);
   }
 
   &.active .wiki-tab-count {
-    background: var(--td-brand-color-1, rgba(0, 82, 217, 0.12));
     color: var(--td-brand-color);
+    font-weight: 500;
   }
 }
 
 .wiki-page-item {
-  // Lock the rendered height so it matches WIKI_PAGE_ITEM_HEIGHT (100)
-  // minus margin-bottom (2). RecycleScroller absolute-positions rows
-  // at multiples of itemSize, so any variance between actual rendered
-  // height and the constant causes neighbors to overlap.
-  height: 98px;
+  min-height: var(--wiki-list-row-min-height);
   box-sizing: border-box;
   overflow: hidden;
-  padding: 10px 12px;
-  border-radius: 6px;
+  padding: 6px 10px 6px var(--wiki-list-inset-x);
+  border-radius: var(--wiki-list-row-radius);
   cursor: pointer;
-  margin-bottom: 2px;
-  transition: background 0.15s;
+  margin-bottom: 0;
+  user-select: none;
+  transition: background var(--app-motion-fast) ease, color var(--app-motion-fast) ease;
 
   &:hover {
     background: var(--td-bg-color-container-hover);
   }
 
   &.active {
-    background: var(--td-brand-color-light);
+    background: var(--td-bg-color-container-hover);
+
+    .wiki-page-item-title {
+      color: var(--td-brand-color);
+    }
   }
 }
 
-.wiki-page-item-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--td-text-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.wiki-group-scroller {
+  min-height: 60px;
+  margin: 4px 0;
+}
+
+.wiki-page-item--list {
+  height: 98px;
+  padding: 8px 10px 8px var(--wiki-list-inset-x);
+}
+
+.wiki-page-item--list .wiki-page-item-title {
+  display: block;
+  font-size: var(--app-text-base);
+  font-weight: 400;
+  line-height: 20px;
   margin-bottom: 4px;
+  color: var(--td-text-color-primary);
+  transition: color var(--app-motion-fast) ease;
 }
 
 .wiki-page-item-summary {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
+  font-size: var(--app-text-sm);
   line-height: 1.5;
+  color: var(--td-text-color-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -3853,10 +5604,199 @@ onUnmounted(() => {
 
 .wiki-page-item-meta {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  justify-content: space-between;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-placeholder);
+}
+
+.wiki-directory-item {
+  height: 34px;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 calc(var(--wiki-tree-depth, 0) * var(--wiki-tree-depth-indent, 14px) + var(--wiki-list-inset-x));
+  border-radius: var(--wiki-list-row-radius);
+  cursor: pointer;
+  margin: 0;
+  color: var(--td-text-color-secondary);
+  background: transparent;
+  user-select: none;
+  transition: background var(--app-motion-fast) ease, color var(--app-motion-fast) ease;
+
+  &:hover {
+    background: var(--td-bg-color-container-hover);
+    color: var(--td-text-color-primary);
+
+    :deep(.wiki-directory-action--reveal) {
+      opacity: 1;
+    }
+  }
+}
+
+.wiki-directory-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--td-brand-color);
+  border-radius: var(--app-radius-xs);
+  padding: 0 6px;
+  font-size: var(--app-text-md);
+  color: var(--td-text-color-primary);
+  background: var(--td-bg-color-container);
+  outline: none;
+}
+
+.wiki-directory-item--drop {
+  background: var(--td-brand-color-light);
+  box-shadow: inset 0 0 0 1px var(--td-brand-color);
+}
+
+.wiki-directory-item--editing {
+  cursor: default;
+
+  &:hover {
+    background: transparent;
+    color: var(--td-text-color-secondary);
+  }
+}
+
+.wiki-folder-inline-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+
+  :deep(.t-button) {
+    padding: 0 4px;
+    height: 24px;
+  }
+
+  :deep(.wiki-folder-action-btn) {
+    border-radius: var(--app-radius-xs);
+    transition: all var(--app-motion-base) ease;
+
+    .t-icon {
+      font-size: var(--app-text-base);
+    }
+  }
+
+  :deep(.wiki-folder-action-btn.confirm) {
+    background: transparent;
+    color: var(--td-text-color-secondary);
+
+    &:hover {
+      background: var(--td-bg-color-secondarycontainer);
+      color: var(--td-brand-color);
+    }
+  }
+
+  :deep(.wiki-folder-action-btn.cancel) {
+    background: transparent;
+    color: var(--td-text-color-secondary);
+
+    &:hover {
+      background: var(--td-bg-color-secondarycontainer);
+      color: var(--td-error-color);
+    }
+  }
+}
+
+// While dragging, the whole list is the "move to root" target; a subtle inset
+// ring signals it without inserting any element that would shift the layout.
+.wiki-tree-list--root-drop {
+  border-radius: var(--app-radius-sm);
+  box-shadow: inset 0 0 0 1px var(--td-brand-color);
+}
+
+// In-place move confirmation anchored at the drop point (teleported to body).
+.wiki-move-confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3500;
+}
+
+.wiki-move-confirm {
+  position: fixed;
+  // x/y are the drop coords; nudge so the card sits just below-right of the
+  // cursor. max-width + viewport clamping keep it on-screen for edge drops.
+  transform: translate(8px, 8px);
+}
+
+.wiki-directory-toggle,
+.wiki-page-file-icon {
+  flex: 0 0 auto;
+  color: var(--td-text-color-placeholder);
+  font-size: var(--app-text-lg);
+}
+
+.wiki-directory-title,
+.wiki-page-item-title {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--app-text-md);
+  color: var(--td-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-directory-title {
+  font-weight: 600;
+}
+
+.wiki-directory-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  text-align: right;
+  font-size: var(--app-text-xs);
+  line-height: 18px;
+  color: var(--td-text-color-placeholder);
+  font-variant-numeric: tabular-nums;
+}
+
+.wiki-directory-load-more {
+  height: 30px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: calc(var(--wiki-tree-depth, 0) * var(--wiki-tree-depth-indent, 14px));
+  border-radius: var(--app-radius-sm);
+  cursor: pointer;
+  margin: 1px 0;
+  color: var(--td-brand-color);
+  font-size: var(--app-text-sm);
+
+  &:hover {
+    background: var(--td-brand-color-light);
+  }
+}
+
+.wiki-page-item--tree {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  min-height: 34px;
+  padding: 4px 10px 4px calc(var(--wiki-tree-depth, 0) * var(--wiki-tree-depth-indent, 14px) + var(--wiki-list-inset-x));
+  border-radius: var(--wiki-list-row-radius);
+  margin: 0;
+
+  &.active {
+    .wiki-page-file-icon {
+      color: var(--td-brand-color);
+    }
+  }
+}
+
+.wiki-page-item--tree .wiki-page-item-title {
+  font-size: var(--app-text-base);
+  font-weight: 400;
+  line-height: 20px;
+  color: var(--td-text-color-primary);
+  transition: color var(--app-motion-fast) ease;
 }
 
 // ── Right Content ──
@@ -3871,7 +5811,7 @@ onUnmounted(() => {
 .wiki-reader {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
+  padding: 0 24px 16px;
 }
 
 .wiki-reader-inner {
@@ -3879,24 +5819,102 @@ onUnmounted(() => {
 }
 
 .wiki-reader-header {
-  margin-bottom: 16px;
+  margin-bottom: 24px;
+}
+
+.wiki-reader-lead {
+  margin: 10px 0 0;
+  font-size: var(--app-text-lg);
+  line-height: 1.65;
+  color: var(--td-text-color-secondary);
+}
+
+.wiki-reader-title-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.wiki-reader-aside {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.wiki-reader-aside-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  max-width: 220px;
+}
+
+.wiki-reader-aside-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--app-text-sm);
+  line-height: 1.4;
+  color: var(--td-text-color-placeholder);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wiki-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--app-radius-xs);
+  font-size: var(--app-text-sm);
+  line-height: 1.4;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-secondarycontainer);
+
+  .t-icon {
+    font-size: var(--app-text-md);
+    flex-shrink: 0;
+  }
+}
+
+.wiki-badge--ver {
+  font-family: var(--td-font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.wiki-badge--editing {
+  color: var(--td-warning-color);
+  background: var(--td-warning-color-1);
+}
+
+.wiki-badge--source {
+  cursor: default;
+}
+
+.wiki-badge--alias {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wiki-nav-bar {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .wiki-nav-back {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-secondary);
   text-decoration: none;
   padding: 4px 8px;
   margin-left: -8px;
-  border-radius: 4px;
-  transition: all 0.15s;
+  border-radius: var(--app-radius-xs);
+  transition: all var(--app-motion-fast);
 
   &:hover {
     color: var(--td-brand-color);
@@ -3904,12 +5922,125 @@ onUnmounted(() => {
   }
 }
 
+.wiki-reader-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .wiki-reader-title {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 26px;
   font-weight: 600;
   line-height: 1.3;
   color: var(--td-text-color-primary);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wiki-reader-title-text {
+  min-width: 0;
+}
+
+.wiki-reader-title-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.wiki-reader-title-badges--secondary {
+  margin-top: 8px;
+}
+
+.wiki-edit-field {
+  width: 100%;
+
+  :deep(.t-input),
+  :deep(.t-textarea) {
+    border-radius: var(--app-radius-md);
+    background: var(--td-bg-color-container);
+    transition: border-color var(--app-motion-fast) ease, box-shadow var(--app-motion-fast) ease;
+  }
+
+  :deep(.t-input:focus-within),
+  :deep(.t-textarea:focus-within) {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 10%, transparent);
+  }
+}
+
+.wiki-edit-field--title {
+  width: 100%;
+
+  :deep(.t-input__inner) {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.35;
+    padding: 10px 12px;
+    height: auto;
+    min-height: 44px;
+  }
+}
+
+.wiki-edit-field--summary {
+  margin: 10px 0 0;
+
+  :deep(.t-textarea__inner) {
+    font-size: var(--app-text-base);
+    line-height: 1.6;
+    padding: 10px 12px;
+    resize: vertical;
+  }
+}
+
+.wiki-edit-field--content {
+  :deep(.t-textarea__inner) {
+    font-family: var(--td-font-family-mono);
+    font-size: var(--app-text-base);
+    line-height: 1.7;
+    padding: 12px 14px;
+    resize: vertical;
+  }
+}
+
+.wiki-reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.wiki-action-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--td-text-color-placeholder);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: color var(--app-motion-fast) ease;
+
+  .t-icon {
+    font-size: var(--app-text-xl);
+  }
+
+  &:hover {
+    color: var(--td-text-color-primary);
+  }
+
+  &.wiki-action-btn--danger:hover {
+    color: var(--td-error-color);
+  }
 }
 
 .wiki-reader-aliases {
@@ -3917,14 +6048,14 @@ onUnmounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px 8px;
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 8px;
+  font-size: var(--app-text-md);
   line-height: 1.4;
 }
 
 .wiki-alias-label {
   color: var(--td-text-color-placeholder);
-  font-size: 13px;
+  font-size: var(--app-text-md);
   line-height: 1.4;
 }
 
@@ -3936,23 +6067,59 @@ onUnmounted(() => {
 .wiki-reader-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .wiki-reader-meta-text {
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-placeholder);
 }
 
-.wiki-reader-graph-link {
-  margin-left: auto;
-  font-size: 13px;
+.wiki-page-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.wiki-page-editor-conflict {
+  margin-bottom: 0;
+}
+
+.wiki-page-editor-conflict-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wiki-create-page-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  .wiki-create-page-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    label {
+      font-size: var(--app-text-md);
+      color: var(--td-text-color-secondary);
+    }
+  }
+
+  .wiki-create-page-hint {
+    font-size: var(--app-text-sm);
+    color: var(--td-text-color-placeholder);
+  }
 }
 
 .wiki-reader-links {
   padding: 12px 16px;
   background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
   margin-bottom: 20px;
   display: flex;
   flex-direction: column;
@@ -3964,7 +6131,7 @@ onUnmounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--app-text-md);
 }
 
 .wiki-link-label {
@@ -3977,37 +6144,69 @@ onUnmounted(() => {
   color: var(--td-brand-color);
   text-decoration: none;
   font-family: var(--app-font-family-mono);
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   padding: 2px 8px;
-  background: rgba(7, 192, 95, 0.06);
-  border-radius: 4px;
-  transition: background 0.15s;
+  background: color-mix(in srgb, var(--td-brand-color) 6%, transparent);
+  border-radius: var(--app-radius-xs);
+  transition: background var(--app-motion-fast);
 
   &:hover {
-    background: rgba(7, 192, 95, 0.12);
+    background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
   }
 }
 
+// Wiki reader styles are for the knowledge-base document surface only.
+// Chat answer Markdown styles are centralized in components/css/chat-markdown.less.
 .wiki-reader-body {
   line-height: 1.6;
-  font-size: 14px;
+  font-size: var(--app-text-base);
   color: var(--td-text-color-primary);
 
-  :deep(h1) { font-size: 24px; margin: 28px 0 16px; font-weight: 600; line-height: 1.4; }
-  :deep(h2) { font-size: 18px; margin: 24px 0 12px; font-weight: 600; line-height: 1.4; }
-  :deep(h3) { font-size: 16px; margin: 20px 0 10px; font-weight: 600; line-height: 1.5; }
-  :deep(h4), :deep(h5), :deep(h6) { font-size: 14px; margin: 16px 0 8px; font-weight: 600; line-height: 1.5; }
-  
-  :deep(p) { margin: 0 0 14px; }
-  
-  :deep(ul), :deep(ol) { 
-    margin: 0 0 14px; 
-    padding-left: 24px; 
+  :deep(h1) {
+    font-size: var(--app-text-4xl);
+    margin: 28px 0 16px;
+    font-weight: 600;
+    line-height: 1.4;
   }
-  :deep(li) { 
-    margin-bottom: 6px; 
+
+  :deep(h2) {
+    font-size: var(--app-text-2xl);
+    margin: 24px 0 12px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  :deep(h3) {
+    font-size: var(--app-text-xl);
+    margin: 20px 0 10px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  :deep(h4),
+  :deep(h5),
+  :deep(h6) {
+    font-size: var(--app-text-base);
+    margin: 16px 0 8px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  :deep(p) {
+    margin: 0 0 14px;
+  }
+
+  :deep(ul),
+  :deep(ol) {
+    margin: 0 0 14px;
+    padding-left: 24px;
+  }
+
+  :deep(li) {
+    margin-bottom: 6px;
     line-height: 1.6;
   }
+
   :deep(li > p) {
     margin-bottom: 6px;
   }
@@ -4020,23 +6219,23 @@ onUnmounted(() => {
     border-radius: 0 4px 4px 0;
     color: var(--td-text-color-secondary);
   }
-  
+
   :deep(code) {
     font-family: var(--app-font-family-mono);
-    font-size: 13px;
+    font-size: var(--app-text-md);
     padding: 2px 4px;
     background: var(--td-bg-color-secondarycontainer);
-    border-radius: 4px;
+    border-radius: var(--app-radius-xs);
     color: var(--td-brand-color);
   }
-  
+
   :deep(pre) {
     margin: 0 0 14px;
     padding: 12px 16px;
     background: var(--td-bg-color-secondarycontainer);
-    border-radius: 6px;
+    border-radius: var(--app-radius-sm);
     overflow-x: auto;
-    
+
     code {
       padding: 0;
       background: transparent;
@@ -4047,20 +6246,20 @@ onUnmounted(() => {
   :deep(p:has(img)) {
     text-align: center;
     color: var(--td-text-color-secondary);
-    font-size: 13px;
+    font-size: var(--app-text-md);
     margin-top: 16px;
     margin-bottom: 24px;
-    
+
     img {
       max-width: 100%;
       max-height: 400px;
       object-fit: contain;
-      border-radius: 6px;
+      border-radius: var(--app-radius-sm);
       display: block;
       margin: 0 auto 8px;
       cursor: zoom-in;
-      transition: opacity 0.2s;
-      
+      transition: opacity var(--app-motion-base);
+
       &:hover {
         opacity: 0.9;
       }
@@ -4073,6 +6272,7 @@ onUnmounted(() => {
     border-bottom: 1px dashed var(--td-brand-color);
     cursor: pointer;
     font-weight: 500;
+
     &:hover {
       border-bottom-style: solid;
       text-decoration: none !important;
@@ -4090,11 +6290,11 @@ onUnmounted(() => {
     overflow-x: auto;
     margin: 0 0 16px;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: var(--app-text-md);
     line-height: 1.55;
     background: var(--td-bg-color-container);
     border: 1px solid var(--td-component-stroke);
-    border-radius: 6px;
+    border-radius: var(--app-radius-sm);
     -webkit-overflow-scrolling: touch;
   }
 
@@ -4132,72 +6332,52 @@ onUnmounted(() => {
   }
 
   :deep(table code) {
-    font-size: 12px;
+    font-size: var(--app-text-sm);
   }
 }
 
-.wiki-reader-backlinks {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--td-component-stroke);
-  margin-bottom: 24px;
-}
-
-.wiki-backlink-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--td-text-color-placeholder);
-  font-weight: 500;
-  flex-shrink: 0;
-  margin-right: 4px;
-}
-
-.wiki-backlink-tag {
-  color: var(--td-text-color-secondary);
-  text-decoration: none;
-  font-size: 13px;
-  padding: 2px 8px;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 4px;
-  transition: all 0.15s;
-
-  &:hover {
-    color: var(--td-brand-color);
-    background: var(--td-brand-color-light);
-  }
-}
-
-.wiki-reader-sources {
-  margin-top: 24px;
-  padding-top: 16px;
+.wiki-reader-footer {
+  margin-top: 32px;
+  padding-top: 18px;
   border-top: 1px solid var(--td-component-stroke);
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.wiki-source-ref {
-  display: inline-flex;
+.wiki-reader-footer-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  font-size: var(--app-text-md);
+  line-height: 1.65;
+}
+
+.wiki-reader-footer-label {
+  flex: 0 0 64px;
+  font-size: var(--app-text-sm);
+  color: var(--td-text-color-placeholder);
+}
+
+.wiki-reader-footer-value {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  padding: 2px 10px;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 4px;
+  gap: 8px 20px;
+}
+
+.wiki-reader-footer .wiki-content-link {
   color: var(--td-brand-color);
-  font-size: 12px;
   text-decoration: none;
+  border-bottom: 1px dashed var(--td-brand-color);
   cursor: pointer;
-  transition: background 0.15s;
+  font-weight: 500;
 
   &:hover {
-    background: var(--td-brand-color-light);
+    border-bottom-style: solid;
+    text-decoration: none !important;
   }
 }
 
@@ -4212,17 +6392,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-// ── Log feed (system view) ──
-// Rendered when activeSystemView === 'log'. Sits where the markdown body
-// would be for a regular wiki page — so the header/meta rules above
-// already apply. We just style the feed list itself.
-.wiki-log-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 12px;
-}
-
 // ── Index overview (system view) ──
 // The index view renders as markdown through the same pipeline as a
 // normal wiki page, so it inherits .wiki-reader-body styling automatically.
@@ -4235,77 +6404,11 @@ onUnmounted(() => {
   min-height: 32px;
   padding: 16px 0 24px;
   color: var(--td-text-color-placeholder);
-  font-size: 13px;
+  font-size: var(--app-text-md);
 }
 
 .wiki-index-loading {
   opacity: 0.7;
-}
-
-.wiki-log-empty {
-  color: var(--td-text-color-placeholder);
-  text-align: center;
-  padding: 40px 0;
-  font-size: 13px;
-}
-
-.wiki-log-entry {
-  border: 1px solid var(--td-border-level-1-color);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--td-bg-color-container);
-}
-
-.wiki-log-entry-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.wiki-log-entry-title {
-  font-weight: 500;
-  color: var(--td-text-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.wiki-log-entry-time {
-  color: var(--td-text-color-placeholder);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.wiki-log-entry-summary {
-  color: var(--td-text-color-secondary);
-  font-size: 13px;
-  margin: 4px 0;
-}
-
-.wiki-log-entry-pages {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 4px;
-}
-
-.wiki-log-entry-page {
-  color: var(--td-brand-color);
-  font-size: 12px;
-  text-decoration: none;
-}
-
-.wiki-log-entry-page:hover {
-  text-decoration: underline;
-}
-
-.wiki-log-load-more {
-  display: flex;
-  justify-content: center;
-  padding: 12px 0;
 }
 
 .wiki-empty-icon {
@@ -4321,19 +6424,222 @@ onUnmounted(() => {
 }
 
 .wiki-empty-title {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   font-weight: 500;
   color: var(--td-text-color-secondary);
   margin: 0 0 4px;
 }
 
 .wiki-empty-desc {
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-placeholder);
   margin: 0;
 }
 
 // ── Graph ──
+.graph-navigation-hint {
+  position: absolute;
+  left: 20px;
+  bottom: 16px;
+  pointer-events: none;
+  color: var(--td-text-color-placeholder);
+  font-size: var(--app-text-sm);
+  padding: 5px 9px;
+  background: var(--td-bg-color-container);
+  border-radius: var(--app-radius-xs);
+  z-index: 1;
+}
+
+.graph-focus-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 360px);
+  padding: 6px 6px 6px 14px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: var(--app-radius-pill);
+  box-shadow: var(--td-shadow-1);
+  font-size: var(--app-text-md);
+  color: var(--td-text-color-primary);
+  z-index: 2;
+  transition: left var(--app-motion-base) ease;
+
+  &.focus-bar-shifted {
+    left: calc(50% - 240px);
+  }
+}
+
+.graph-focus-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    background: var(--td-bg-color-container-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--td-brand-color);
+    outline-offset: 1px;
+  }
+}
+
+span.graph-focus-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+
+  &:hover {
+    background: transparent;
+  }
+}
+
+.graph-focus-back {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--app-radius-pill);
+  background: var(--td-brand-color-light);
+  color: var(--td-brand-color);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--td-brand-color-focus);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--td-brand-color);
+    outline-offset: 1px;
+  }
+
+  kbd {
+    padding: 0 4px;
+    border: 1px solid currentColor;
+    border-radius: var(--app-radius-xs);
+    font: inherit;
+    font-size: var(--app-text-xs);
+    line-height: 16px;
+    opacity: 0.7;
+  }
+}
+
+.wiki-graph-canvas :deep(.graph-cluster-outline) {
+  fill-opacity: 0.45;
+  stroke-opacity: 0;
+  transition: fill-opacity var(--app-motion-fast) ease, stroke-opacity var(--app-motion-fast) ease, opacity var(--app-motion-fast) ease;
+
+  &.is-hovered {
+    fill-opacity: 0.8;
+    stroke-opacity: 0.8;
+  }
+
+  &.is-dimmed {
+    opacity: 0.3;
+  }
+
+  // Previews the group a switch target leads to.
+  &.is-dimmed.is-hovered {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+.wiki-graph-canvas :deep(.hide-edge-markers line) {
+  marker-start: none;
+  marker-end: none;
+}
+
+.wiki-graph-canvas :deep(.graph-cluster-caption) {
+  cursor: zoom-in;
+  outline: none;
+
+  text {
+    paint-order: stroke;
+    stroke: var(--td-bg-color-container);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+
+  .graph-caption-pill {
+    display: none;
+  }
+
+  &:hover text,
+  &:focus-visible text {
+    fill: var(--td-brand-color);
+    text-decoration: underline;
+  }
+
+  &.is-outside-focus {
+    cursor: pointer;
+
+    .graph-caption-pill {
+      display: inline;
+      fill: var(--td-bg-color-container);
+      stroke: var(--td-component-border);
+      stroke-width: 1px;
+      transition: stroke var(--app-motion-instant) ease;
+    }
+
+    text {
+      fill: var(--td-text-color-secondary);
+      font-weight: 500;
+      stroke: none;
+    }
+
+    &:hover,
+    &:focus-visible {
+      .graph-caption-pill {
+        stroke: var(--td-brand-color);
+      }
+
+      text {
+        fill: var(--td-brand-color);
+        text-decoration: none;
+      }
+    }
+  }
+}
+
+.graph-unlinked-toggle {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
 .wiki-graph {
   flex: 1;
   position: relative;
@@ -4353,7 +6659,7 @@ onUnmounted(() => {
 }
 
 .help-glyph-icon {
-  font-size: 14px !important;
+  font-size: var(--app-text-base) !important;
   font-weight: 600;
   line-height: 14px !important;
   text-align: center;
@@ -4366,7 +6672,7 @@ onUnmounted(() => {
   max-width: 320px;
 
   .help-section-title {
-    font-size: 11px;
+    font-size: var(--app-text-xs);
     line-height: 14px;
     color: var(--td-text-color-placeholder);
     text-transform: uppercase;
@@ -4385,7 +6691,7 @@ onUnmounted(() => {
     display: grid;
     grid-template-columns: 110px 1fr;
     gap: 12px;
-    font-size: 12px;
+    font-size: var(--app-text-sm);
     line-height: 16px;
   }
 
@@ -4414,7 +6720,7 @@ onUnmounted(() => {
 .wiki-graph-search {
   width: 100%;
   box-shadow: var(--td-shadow-1);
-  border-radius: 4px;
+  border-radius: var(--app-radius-xs);
 }
 
 .graph-issues-badge {
@@ -4463,10 +6769,10 @@ onUnmounted(() => {
   background: transparent;
   border: none;
   color: var(--td-text-color-placeholder);
-  font-size: 18px;
+  font-size: var(--app-text-2xl);
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s ease;
+  transition: color var(--app-motion-fast) ease;
 }
 
 .wiki-graph-help-trigger:hover {
@@ -4477,9 +6783,12 @@ onUnmounted(() => {
   position: absolute;
   top: 16px;
   right: 16px;
+  width: 256px;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
   background: var(--td-bg-color-container);
   border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   padding: 10px 12px;
   box-shadow: var(--td-shadow-1);
   display: flex;
@@ -4487,7 +6796,7 @@ onUnmounted(() => {
   gap: 12px;
   z-index: 10;
   opacity: 0.95;
-  transition: right 0.3s cubic-bezier(0.645, 0.045, 0.355, 1);
+  transition: right var(--app-motion-slow) cubic-bezier(0.645, 0.045, 0.355, 1);
 }
 
 .wiki-graph-legend.legend-shifted {
@@ -4504,18 +6813,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-secondary);
-  
+
   &.clickable {
     cursor: pointer;
-    transition: all 0.15s;
-    
+    transition: all var(--app-motion-fast);
+
     &:hover {
       color: var(--td-text-color-primary);
     }
   }
-  
+
   &.disabled {
     color: var(--td-text-color-placeholder);
     text-decoration: line-through;
@@ -4531,6 +6840,17 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+.legend-familiar-ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border: 2px solid #0052d9;
+  background: transparent;
+}
+
 .legend-divider {
   height: 1px;
   background: var(--td-component-stroke);
@@ -4543,19 +6863,62 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+.legend-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+
+  .legend-detail-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: var(--app-text-xs);
+    line-height: 14px;
+    color: var(--td-text-color-secondary);
+  }
+
+  .legend-detail-value {
+    color: var(--td-text-color-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .legend-detail-hint {
+    font-size: var(--app-text-xs);
+    line-height: 16px;
+    color: var(--td-text-color-placeholder);
+  }
+
+  :deep(.t-slider) {
+    width: 100%;
+  }
+
+  :deep(.t-slider__container) {
+    margin-bottom: 24px;
+  }
+
+  :deep(.t-slider__mark-text) {
+    font-size: var(--app-text-xs);
+    color: var(--td-text-color-secondary);
+  }
+}
+
 .legend-action {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   line-height: 14px;
   color: var(--td-text-color-secondary);
   cursor: pointer;
   user-select: none;
-  transition: all 0.15s;
+  transition: all var(--app-motion-fast);
 
   &:hover {
     color: var(--td-brand-color);
+
     .legend-action-icon {
       color: var(--td-brand-color);
     }
@@ -4563,6 +6926,7 @@ onUnmounted(() => {
 
   &.active {
     color: var(--td-brand-color);
+
     .legend-action-icon {
       color: var(--td-brand-color);
     }
@@ -4570,7 +6934,7 @@ onUnmounted(() => {
 }
 
 .wiki-graph-truncation-hint {
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   line-height: 14px;
   color: var(--td-text-color-placeholder);
   user-select: none;
@@ -4581,7 +6945,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-width: 240px;
+  max-width: 100%;
   padding-top: 8px;
   border-top: 1px dashed var(--td-component-stroke);
   user-select: none;
@@ -4590,12 +6954,12 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: var(--app-text-xs);
     line-height: 14px;
     color: var(--td-text-color-placeholder);
 
     .t-icon {
-      font-size: 12px;
+      font-size: var(--app-text-sm);
     }
   }
 
@@ -4604,7 +6968,7 @@ onUnmounted(() => {
   }
 
   .status-card-primary {
-    font-size: 12px;
+    font-size: var(--app-text-sm);
     line-height: 16px;
     color: var(--td-text-color-primary);
     overflow: hidden;
@@ -4613,14 +6977,15 @@ onUnmounted(() => {
   }
 
   .status-card-secondary {
-    font-size: 11px;
+    font-size: var(--app-text-xs);
     line-height: 14px;
     color: var(--td-text-color-secondary);
+    overflow-wrap: anywhere;
   }
 }
 
 .wiki-drawer-neighbor-hint {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   line-height: 16px;
   color: var(--td-text-color-secondary);
   user-select: none;
@@ -4633,20 +6998,27 @@ onUnmounted(() => {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   line-height: 1;
   color: var(--td-text-color-placeholder);
-  transition: color 0.15s;
+  transition: color var(--app-motion-fast);
 
   .t-icon {
-    font-size: 13px;
+    font-size: var(--app-text-md);
     line-height: 1;
   }
 }
 
 @keyframes node-active-pulse {
-  0% { transform: scale(1); opacity: 0.8; }
-  100% { transform: scale(1.6); opacity: 0; }
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
 }
 
 .node-active-ring {
@@ -4661,9 +7033,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  transition: opacity 0.2s ease;
-  
+  font-size: var(--app-text-3xl);
+  transition: opacity var(--app-motion-base) ease;
+
   &:hover {
     opacity: 0.8;
   }
@@ -4673,7 +7045,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background: var(--td-bg-color-container);
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
   overflow: hidden;
 }
 
@@ -4690,13 +7062,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   font-weight: 500;
-  font-size: 14px;
+  font-size: var(--app-text-base);
   color: var(--td-text-color-primary);
-  
+
   .wiki-issue-popup-icon {
     color: var(--td-brand-color);
     margin-right: 8px;
-    font-size: 16px;
+    font-size: var(--app-text-xl);
   }
 }
 
@@ -4714,10 +7086,10 @@ onUnmounted(() => {
   padding: 16px;
   gap: 12px;
   border: 1px solid var(--td-component-border);
-  border-radius: 6px;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  border-radius: var(--app-radius-sm);
+  transition: box-shadow var(--app-motion-base) ease, border-color var(--app-motion-base) ease;
   background: var(--td-bg-color-container);
-  
+
   &:hover {
     border-color: var(--td-brand-color-light);
   }
@@ -4737,7 +7109,7 @@ onUnmounted(() => {
 }
 
 .wiki-issue-popup-desc {
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-primary);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -4751,10 +7123,12 @@ onUnmounted(() => {
 .wiki-issue-popup-desc::-webkit-scrollbar {
   width: 4px;
 }
+
 .wiki-issue-popup-desc::-webkit-scrollbar-thumb {
   background: var(--td-scrollbar-color);
-  border-radius: 4px;
+  border-radius: var(--app-radius-xs);
 }
+
 .wiki-issue-popup-desc::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -4769,7 +7143,7 @@ onUnmounted(() => {
 }
 
 .wiki-issue-popup-reporter {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-text-color-placeholder);
   flex: 1;
 }
@@ -4777,57 +7151,19 @@ onUnmounted(() => {
 .wiki-issue-popup-actions {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
 .wiki-issue-popup-action {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-brand-color);
   cursor: pointer;
-  transition: opacity 0.2s ease;
-  
+  transition: opacity var(--app-motion-base) ease;
+
   &:hover {
     opacity: 0.8;
   }
 }
 </style>
 
-<style lang="less">
-/* Fix Embedded Chat UI (unscoped because drawer attaches to body) */
-.wiki-fix-drawer {
-  .t-drawer__body {
-    padding: 20px !important;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-  }
-  
-  .chat {
-    max-width: 100% !important;
-    min-width: 100% !important;
-    padding: 0 !important;
-    height: 100% !important;
-    flex: 1 !important;
-    border-radius: 0 !important;
-  }
-  
-  .chat_scroll_box {
-    padding: 0 !important;
-  }
-
-  .chat > .input-container {
-    padding: 16px 0 0 0 !important;
-    box-sizing: border-box;
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
-    overflow-x: hidden;
-  }
-
-  .msg_list {
-    max-width: 100% !important;
-    padding-bottom: 0 !important;
-    margin: 0 !important;
-  }
-}
-</style>
+<style lang="less" src="@/components/css/wiki-graph-drawer.less"></style>

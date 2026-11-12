@@ -25,6 +25,29 @@ export interface DataSource {
   latest_sync_log?: SyncLog
 }
 
+/**
+ * One user-facing failure sample. The backend sends a stable i18n `code`
+ * (+ interpolation `params`) so the UI localises it to the viewer's language;
+ * `message` is a fallback when no i18n key exists (old logs decode into it).
+ */
+export interface SyncItemError {
+  title?: string
+  code?: string
+  params?: Record<string, string>
+  message?: string
+}
+
+export interface SyncResultDetail {
+  total?: number
+  created?: number
+  updated?: number
+  deleted?: number
+  skipped?: number
+  failed?: number
+  /** Per-item failure samples (capped); localised in the sync-log drawer. */
+  errors?: SyncItemError[]
+}
+
 export interface SyncLog {
   id: string
   data_source_id: string
@@ -38,6 +61,7 @@ export interface SyncLog {
   items_skipped: number
   items_failed: number
   error_message: string
+  result?: SyncResultDetail
 }
 
 export interface ConnectorMeta {
@@ -58,6 +82,8 @@ export interface Resource {
   url: string
   parent_id?: string
   has_children?: boolean
+  /** Connector-specific hints, e.g. Confluence Cloud's top-level-container limitation. */
+  metadata?: Record<string, any>
 }
 
 // --- API calls ---
@@ -90,13 +116,24 @@ export function validateConnection(id: string) {
   return post(`/api/v1/datasource/${id}/validate`, {})
 }
 
-// Validate credentials without persisting (for "Test Connection" during creation)
+// Validate credentials without persisting (during creation or credential replacement).
 export function validateCredentials(type: string, credentials: Record<string, any>) {
   return post('/api/v1/datasource/validate-credentials', { type, credentials })
 }
 
-export function listResources(id: string) {
-  return get(`/api/v1/datasource/${id}/resources`, { timeout: 120000 })
+// listResources lists selectable resources for a data source. Pass parentId to
+// lazily load the direct children of a resource (e.g. expanding a Feishu wiki
+// space/node), which avoids traversing the whole tree up front.
+export function listResources(id: string, parentId?: string) {
+  const query = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : ''
+  return get(`/api/v1/datasource/${id}/resources${query}`, { timeout: 120000 })
+}
+
+// resolveResourceAncestors returns the ExternalIDs of every parent that must be
+// expanded to reveal the given (possibly deeply nested) selections in a lazily
+// loaded picker. Used when editing a data source to restore an existing selection.
+export function resolveResourceAncestors(id: string, resourceIds: string[]) {
+  return post(`/api/v1/datasource/${id}/resource-ancestors`, { resource_ids: resourceIds }, { timeout: 120000 })
 }
 
 export function triggerSync(id: string) {

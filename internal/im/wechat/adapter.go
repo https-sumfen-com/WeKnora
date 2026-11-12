@@ -24,6 +24,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/im"
 	"github.com/Tencent/WeKnora/internal/logger"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,7 +38,10 @@ const (
 	channelVersion = "weknora-1.0.0"
 )
 
-var ilinkHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var ilinkHTTPClient = secutils.NewSSRFSafeHTTPClient(secutils.SSRFSafeHTTPClientConfig{
+	Timeout:      30 * time.Second,
+	MaxRedirects: 5,
+})
 
 // BuildCDNDownloadURL constructs a CDN download URL from an encrypt_query_param.
 func BuildCDNDownloadURL(encryptQueryParam string) string {
@@ -145,6 +149,9 @@ func (a *Adapter) DownloadFile(ctx context.Context, msg *im.IncomingMessage) (io
 	if msg.FileKey == "" {
 		return nil, "", fmt.Errorf("no file URL in message")
 	}
+	if err := secutils.ValidateURLForSSRF(msg.FileKey); err != nil {
+		return nil, "", fmt.Errorf("file URL rejected by SSRF policy: %w", err)
+	}
 
 	fileName := msg.FileName
 	if fileName == "" {
@@ -177,7 +184,7 @@ func (a *Adapter) DownloadFile(ctx context.Context, msg *im.IncomingMessage) (io
 	}
 
 	// Read and decrypt with AES-128-ECB
-	encryptedData, err := io.ReadAll(resp.Body)
+	encryptedData, err := im.ReadIMAttachmentResponse(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		return nil, "", fmt.Errorf("read encrypted file: %w", err)
@@ -290,7 +297,10 @@ func (a *Adapter) ilinkPost(ctx context.Context, path string, payload interface{
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := im.ReadIMResponse(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read ilink response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("ilink api %s returned status %d: %s", path, resp.StatusCode, string(respBody))

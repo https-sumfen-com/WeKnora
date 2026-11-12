@@ -8,7 +8,23 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/docreader/proto"
+	"google.golang.org/grpc/resolver"
 )
+
+func TestNewClientDoesNotChangeGlobalGRPCResolver(t *testing.T) {
+	previous := resolver.GetDefaultScheme()
+	resolver.SetDefaultScheme("passthrough")
+	t.Cleanup(func() { resolver.SetDefaultScheme(previous) })
+
+	client, err := NewClientWithAuth("127.0.0.1:1", &AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if got := resolver.GetDefaultScheme(); got != "passthrough" {
+		t.Fatalf("DocReader changed global gRPC resolver to %q", got)
+	}
+}
 
 func init() {
 	log.SetOutput(os.Stdout)
@@ -16,12 +32,26 @@ func init() {
 	log.Println("INFO: Initializing DocReader client tests")
 }
 
-func TestReadURL(t *testing.T) {
+func requireLiveDocReaderClient(t *testing.T) *Client {
+	t.Helper()
+
 	client, err := NewClient("localhost:50051")
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() { client.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := client.ListEngines(ctx, &proto.ListEnginesRequest{}); err != nil {
+		t.Skipf("DocReader gRPC server not available at localhost:50051: %v", err)
+	}
+
+	return client
+}
+
+func TestReadURL(t *testing.T) {
+	client := requireLiveDocReaderClient(t)
 	client.SetDebug(true)
 
 	startTime := time.Now()
@@ -47,11 +77,7 @@ func TestReadURL(t *testing.T) {
 }
 
 func TestReadFile(t *testing.T) {
-	client, err := NewClient("localhost:50051")
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-	defer client.Close()
+	client := requireLiveDocReaderClient(t)
 	client.SetDebug(true)
 
 	fileContent, err := os.ReadFile("../testdata/test.md")

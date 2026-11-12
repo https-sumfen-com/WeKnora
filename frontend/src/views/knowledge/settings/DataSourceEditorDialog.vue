@@ -9,13 +9,16 @@ import {
   validateConnection,
   validateCredentials,
   listResources,
+  resolveResourceAncestors,
   deleteDataSource,
   putDataSourceCredentials,
   deleteDataSourceCredentials,
   type DataSource,
   type Resource,
 } from '@/api/datasource'
+import SettingDrawer from '@/components/settings/SettingDrawer.vue'
 import DataSourceTypeIcon from './DataSourceTypeIcon.vue'
+import { getDatasourceIconUrl } from './datasourceIcons'
 
 const props = defineProps<{
   kbId: string
@@ -68,17 +71,123 @@ function refreshCredentialsStatus() {
 // Single-click remove with toast feedback. Mirrors the CredentialResource
 // component's UX: the secret is irrecoverable client-side either way, so a
 // modal confirm just adds friction. The danger-themed button is the deterrent.
-async function removeCredentials() {
+const pendingRemoveCredentials = ref(false)
+const removingCredentials = ref(false)
+
+function requestRemoveCredentials() {
+  pendingRemoveCredentials.value = true
+}
+
+function cancelPendingRemoveCredentials() {
+  pendingRemoveCredentials.value = false
+}
+
+async function confirmRemoveCredentials() {
   if (!props.dataSource?.id) return
+  removingCredentials.value = true
   try {
     await deleteDataSourceCredentials(props.dataSource.id)
     credentialsConfigured.value = false
     replaceCredentialsMode.value = false
+    pendingRemoveCredentials.value = false
     form.value.config.credentials = {}
     MessagePlugin.success(t('credential.removedToast'))
   } catch (e: any) {
     MessagePlugin.error(e?.message || t('credential.removeFailed'))
+  } finally {
+    removingCredentials.value = false
   }
+}
+
+function cancelReplaceCredentials() {
+  replaceCredentialsMode.value = false
+  pendingRemoveCredentials.value = false
+  form.value.config.credentials = {}
+  rssAuthHeaders.value = []
+  testResult.value = credentialsConfigured.value ? 'success' : ''
+  testErrorMsg.value = ''
+}
+
+interface CustomHeaderItem {
+  key: string
+  value: string
+}
+
+const rssAuthHeaders = ref<CustomHeaderItem[]>([])
+
+function serializeAuthHeaders(items: CustomHeaderItem[]): string {
+  return items
+    .filter(h => h.key.trim())
+    .map(h => `${h.key.trim()}: ${h.value}`)
+    .join('\n')
+}
+
+function syncRssAuthHeadersToCredentials() {
+  if (form.value.type !== 'rss') return
+  const serialized = serializeAuthHeaders(rssAuthHeaders.value)
+  if (serialized) {
+    form.value.config.credentials.auth_headers = serialized
+  } else {
+    delete form.value.config.credentials.auth_headers
+  }
+}
+
+// Feed URLs may still live in credentials on older rows (not returned by the
+// API). The backend copies them into settings on read; fall back to the
+// selected feed resource IDs when settings are still empty.
+function hydrateRssFeedUrlsFromConfig(config: { settings?: Record<string, any>; resource_ids?: string[] }) {
+  const settings = config.settings || {}
+  if (String(settings.feed_urls || '').trim()) {
+    return { ...settings }
+  }
+  const ids = config.resource_ids || []
+  if (ids.length === 0) {
+    return { ...settings }
+  }
+  return { ...settings, feed_urls: ids.join('\n') }
+}
+
+function addRssAuthHeader() {
+  rssAuthHeaders.value.push({ key: '', value: '' })
+}
+
+function removeRssAuthHeader(idx: number) {
+  rssAuthHeaders.value.splice(idx, 1)
+}
+
+function needsConnectionTest(): boolean {
+  return !(isEdit.value && credentialsConfigured.value && !replaceCredentialsMode.value)
+}
+
+function hydrateConfluenceCredentialsFromSettings() {
+  if (form.value.type !== 'confluence') return
+  const settings = form.value.config.settings || {}
+  const creds = form.value.config.credentials || {}
+  form.value.config.credentials = {
+    ...creds,
+    edition: creds.edition || settings.edition || 'server',
+    base_url: creds.base_url || settings.base_url || '',
+    username: creds.username || settings.username || '',
+  }
+}
+
+function syncConfluencePublicFieldsToSettings() {
+  if (form.value.type !== 'confluence') return
+  const creds = form.value.config.credentials || {}
+  form.value.config.settings = {
+    ...(form.value.config.settings || {}),
+    ...(creds.edition ? { edition: creds.edition } : {}),
+    ...(creds.base_url ? { base_url: creds.base_url } : {}),
+    ...(creds.username ? { username: creds.username } : {}),
+  }
+}
+
+function enterReplaceCredentials() {
+  pendingRemoveCredentials.value = false
+  replaceCredentialsMode.value = true
+  hydrateConfluenceCredentialsFromSettings()
+  testResult.value = ''
+  testErrorMsg.value = ''
 }
 
 // Form data
@@ -96,11 +205,223 @@ const form = ref({
   sync_deletions: true,
 })
 
+// Yuque folder layout. The key lives in the raw settings bag, and a data source
+// created before this control existed carries no folder_mode at all — the
+// getter therefore reports the connector's own default (flat) rather than
+// rendering the select blank. Writing back is a no-op until the user picks
+// something, so opening an existing source can never change its behaviour.
+const yuqueFolderMode = computed({
+  get: () => (form.value.config.settings?.folder_mode === 'toc' ? 'toc' : 'none'),
+  set: (mode: string) => {
+    form.value.config.settings = { ...form.value.config.settings, folder_mode: mode }
+  },
+})
+
+// toc_only is an admission filter, and the connector only reads the table of
+// contents when folder_mode is 'toc' — under the flat layout the flag has no
+// effect at all, which is why the control is disabled there.
+const yuqueTOCOnly = computed({
+  get: () => form.value.config.settings?.toc_only === true,
+  set: (on: boolean) => {
+    form.value.config.settings = { ...form.value.config.settings, toc_only: on }
+  },
+})
+
+// DingTalk ingestion of uploaded Office/PDF files. Like the Yuque switches the
+// key lives in the raw settings bag, and a data source created before this
+// control existed carries no key at all — the getter therefore reports the
+// connector default (off) instead of rendering the checkbox blank, and nothing
+// is written back until the user toggles it, so merely opening an existing
+// source never changes what it syncs.
+const dingtalkIncludeUploadedFiles = computed({
+  get: () => form.value.config.settings?.include_uploaded_files === true,
+  set: (on: boolean) => {
+    form.value.config.settings = { ...form.value.config.settings, include_uploaded_files: on }
+  },
+})
+
 // Step 2: Resources
 const resources = ref<Resource[]>([])
 const loadingResources = ref(false)
 const selectedResourceIds = ref<string[]>([])
 const expandedResourceIds = ref(new Set<string>())
+// Lazy loading: parents whose children have already been fetched, and parents
+// currently being fetched. Used to load hierarchical sources (e.g. Feishu wiki)
+// one level at a time instead of traversing the whole tree up front (#1672).
+const loadedChildrenIds = ref(new Set<string>())
+const loadingChildrenIds = ref(new Set<string>())
+// True when the initial listing already returned the whole tree (connectors like
+// Notion populate parent_id on the first call). In that case expanding a node
+// never needs an extra request.
+const treeFullyLoaded = ref(false)
+
+// Drive (云盘) root input: the Drive connectors have no "list spaces" API, so
+// the user must supply a root folder_token. We collect it here, write it into
+// form.config.resource_ids as the single root, then loadResources lists its
+// children. See 飞书云盘数据源设计.md §5.2 / ADR-0004.
+const driveFolderToken = ref('')
+// 必填校验的内联错误文案：非空时输入框显示 error 状态 + 下方 tips,
+// 替代全局 MessagePlugin,与表单字段的就地校验风格一致。
+const driveFolderTokenError = ref('')
+const driveRootLoaded = ref(false)
+const isDriveConnector = (type: string) => type === 'feishu_drive' || type === 'lark_drive'
+const isGitLabConnector = (type: string) => type === 'gitlab'
+// Feishu/Lark wiki + Drive connectors share the docx parse-mode setting.
+const isFeishuFamilyConnector = (type: string) =>
+  type === 'feishu' || type === 'lark' || type === 'feishu_drive' || type === 'lark_drive'
+// An unset legacy setting can inherit export from the server. Display that
+// state without materializing a client-side default on unrelated edits.
+const feishuParseMode = computed({
+  get: () => form.value.config.settings.parse_mode || '',
+  set: (mode: string) => {
+    const settings = { ...form.value.config.settings }
+    if (mode) settings.parse_mode = mode
+    else delete settings.parse_mode
+    form.value.config.settings = settings
+  },
+})
+// Seafile resource IDs are "<repo_id>:<path>"; one data source syncs one
+// library, so the picker refuses a selection that spans two libraries.
+const isSeafileConnector = (type: string) => type === 'seafile'
+const seafileLibraryOf = (id: string) => id.split(':')[0]
+// Seafile IDs encode the hierarchy, so a saved selection whose node has
+// vanished from the tree can still be recognised as living under `parent`.
+function seafileWithin(id: string, parent: string): boolean {
+  const [repo, path] = [seafileLibraryOf(id), id.slice(id.indexOf(':') + 1)]
+  const parentPath = parent.slice(parent.indexOf(':') + 1)
+  return repo === seafileLibraryOf(parent) &&
+    (parentPath === '/' || path === parentPath || path.startsWith(parentPath + '/'))
+}
+
+interface GitLabProjectInput { project_id: string; ref: string; pathsText: string }
+const gitlabProjects = ref<GitLabProjectInput[]>([])
+function syncGitLabProjectsToSettings() {
+  if (!isGitLabConnector(form.value.type)) return
+  form.value.config.settings.projects = gitlabProjects.value
+    .filter(project => project.project_id.trim())
+    .map(project => ({
+      project_id: project.project_id.trim(), ref: project.ref.trim(),
+      paths: project.pathsText.split(/[\n,]/).map(path => path.trim()).filter(Boolean),
+    }))
+}
+function addGitLabProject() { gitlabProjects.value.push({ project_id: '', ref: '', pathsText: '' }) }
+function removeGitLabProject(index: number) { gitlabProjects.value.splice(index, 1); syncGitLabProjectsToSettings() }
+
+// extractDriveFolderToken accepts either a bare folder_token or a Drive folder
+// URL (https://xxx.feishu.cn/drive/folder/<token> or the Lark equivalent
+// https://xxx.larksuite.com/drive/folder/<token>) and returns the token.
+// Matching is path-based, host-agnostic. Trims surrounding whitespace.
+// Returns "" when nothing usable is found.
+function extractDriveFolderToken(input: string): string {
+  const raw = (input || '').trim()
+  if (!raw) return ''
+  // Bare token: no scheme, no slash - use as-is.
+  if (!raw.includes('://') && !raw.includes('/')) return raw
+  // URL form: extract the segment after /drive/folder/.
+  const match = raw.match(/\/drive\/folder\/([^/?#]+)/)
+  if (match && match[1]) return match[1]
+  // Fallback: last path segment of a URL, or the raw string.
+  try {
+    const u = new URL(raw)
+    const segs = u.pathname.split('/').filter(Boolean)
+    return segs[segs.length - 1] || raw
+  } catch {
+    return raw
+  }
+}
+
+// loadDriveRoot writes the user-supplied folder_token (or the token extracted
+// from a pasted URL) as the root resource_id, then lists the root's children
+// so the lazy-load tree can populate. On failure it classifies the error so the
+// user gets an actionable hint (e.g. share the folder with the app) instead of
+// a raw Feishu error body.
+async function loadDriveRoot() {
+  const token = extractDriveFolderToken(driveFolderToken.value)
+  if (!token) {
+    driveFolderTokenError.value = t('datasource.drive.folderTokenRequired')
+    return
+  }
+  driveFolderTokenError.value = ''
+  // Normalize the input so the user sees the extracted token, not the full URL.
+  driveFolderToken.value = token
+  form.value.config.resource_ids = [token]
+  driveRootLoaded.value = false
+  loadingResources.value = true
+  try {
+    // The Drive root lists through the very same single draft as the generic
+    // picker, obtained through the same guard: an answer without an id is a
+    // reported failure instead of a listing against an empty id, and two quick
+    // Enter presses share one create instead of leaving a second paused row
+    // behind. Drive additionally needs the new folder_token stored before it
+    // lists (the listing reads the token from the row), so it flushes the form
+    // even in edit mode — which the generic picker deliberately does not do,
+    // leaving the existing row untouched until submit.
+    const dsId = await ensureTempDataSource(true)
+    if (!dsId) return
+
+    const res = await listResources(dsId)
+    resources.value = res?.data || res || []
+    if (resources.value.length > 0) {
+      // Mirror loadResources' tree initialization: index parents that already
+      // arrived with children and auto-expand them.
+      const parentsWithChildren = new Set<string>()
+      for (const r of resources.value) {
+        if (r.parent_id) parentsWithChildren.add(r.parent_id)
+      }
+      loadedChildrenIds.value = parentsWithChildren
+      loadingChildrenIds.value = new Set<string>()
+      treeFullyLoaded.value = parentsWithChildren.size > 0
+      expandedResourceIds.value = new Set(
+        resources.value
+          .filter(r => !r.parent_id && r.has_children && parentsWithChildren.has(r.external_id))
+          .map(r => r.external_id),
+      )
+      driveRootLoaded.value = true
+      // In edit mode, reveal pre-existing selections that live below the
+      // (not-yet-expanded) tree so they are visible and checked - mirrors
+      // loadResources' behavior for non-Drive connectors.
+      if (isEdit.value && !treeFullyLoaded.value) {
+        const loaded = new Set(resources.value.map(r => r.external_id))
+        const hidden = selectedResourceIds.value.filter(id => !loaded.has(id))
+        if (hidden.length > 0) void revealExistingSelections(hidden)
+      }
+    }
+  } catch (e: any) {
+    MessagePlugin.error(classifyDriveLoadError(e))
+  } finally {
+    // A skipped load returns from the try block, so the spinner is cleared here
+    // rather than after the block.
+    loadingResources.value = false
+  }
+}
+
+// classifyDriveLoadError turns a raw Drive list error into an actionable i18n
+// message. The Feishu list API returns 403 with code=1061004 when the app has
+// not been shared the target folder; without this the user sees "forbidden"
+// and has no idea what to do.
+function classifyDriveLoadError(e: any): string {
+  const raw = String(e?.message || e?.error || '')
+  const lower = raw.toLowerCase()
+  // 403 / forbidden / 1061004 -> the app lacks access to this specific folder;
+  // the user must share it with the app's group in Feishu Drive.
+  if (
+    lower.includes('status=403') ||
+    lower.includes('forbidden') ||
+    lower.includes('"code":1061004') ||
+    lower.includes('code=1061004')
+  ) {
+    return t('datasource.drive.loadForbiddenHint')
+  }
+  // 401 / auth -> app credentials wrong or app lacks the drive scopes.
+  if (lower.includes('status=401') || lower.includes('auth') || lower.includes('1061005')) {
+    return t('datasource.drive.loadAuthHint')
+  }
+  // Invalid / not-found folder_token.
+  if (lower.includes('1061003') || lower.includes('not found')) {
+    return t('datasource.drive.loadNotFoundHint')
+  }
+  return raw || t('datasource.resourceLoadFailed')
+}
 
 // Shared children/parent indexes — used by tree rendering and selection logic
 const childrenMap = computed(() => {
@@ -153,19 +474,79 @@ const checkStates = computed(() => {
 
 function toggleExpand(id: string) {
   const next = new Set(expandedResourceIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
+  if (next.has(id)) {
+    next.delete(id)
+    expandedResourceIds.value = next
+    return
+  }
+  next.add(id)
   expandedResourceIds.value = next
+  void ensureChildrenLoaded(id)
+}
+
+// ensureChildrenLoaded fetches the direct children of a node on demand. It is a
+// no-op when the connector already delivered the whole tree in one call (e.g.
+// Notion) or when this node's children have already been fetched.
+async function ensureChildrenLoaded(id: string) {
+  if (!tempDsId.value) return
+  if (loadedChildrenIds.value.has(id) || loadingChildrenIds.value.has(id)) return
+  if (treeFullyLoaded.value) {
+    loadedChildrenIds.value = new Set(loadedChildrenIds.value).add(id)
+    return
+  }
+
+  loadingChildrenIds.value = new Set(loadingChildrenIds.value).add(id)
+  try {
+    const res = await listResources(tempDsId.value, id)
+    const children: Resource[] = res?.data || res || []
+    if (children.length > 0) {
+      const existing = new Set(resources.value.map(r => r.external_id))
+      const merged = resources.value.slice()
+      for (const c of children) {
+        if (!existing.has(c.external_id)) merged.push(c)
+      }
+      resources.value = merged
+    } else {
+      // Connectors may conservatively advertise HasChildren to avoid an N+1
+      // probe. Once lazy loading proves this is a leaf, collapse it and retain
+      // that fact so another expand cannot trigger another empty request.
+      resources.value = resources.value.map(r => r.external_id === id
+        ? { ...r, has_children: false }
+        : r)
+      const expanded = new Set(expandedResourceIds.value)
+      expanded.delete(id)
+      expandedResourceIds.value = expanded
+    }
+    loadedChildrenIds.value = new Set(loadedChildrenIds.value).add(id)
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || e?.error || t('datasource.resourceLoadFailed'))
+    // Collapse again so the user can retry the expand.
+    const next = new Set(expandedResourceIds.value)
+    next.delete(id)
+    expandedResourceIds.value = next
+  } finally {
+    const s = new Set(loadingChildrenIds.value)
+    s.delete(id)
+    loadingChildrenIds.value = s
+  }
 }
 
 const visibleTree = computed(() => {
   const roots = resources.value.filter(r => !r.parent_id)
-  const result: { resource: Resource; depth: number }[] = []
+  const result: { resource: Resource; depth: number; noticeAfter?: boolean }[] = []
   function walk(items: Resource[], depth: number) {
     for (const r of items) {
       result.push({ resource: r, depth })
       if (r.has_children && expandedResourceIds.value.has(r.external_id)) {
         walk(childrenMap.value.get(r.external_id) || [], depth + 1)
+      }
+      // Keep this visible after an empty root listing is recognized as a leaf.
+      if (
+        r.metadata?.hierarchy_limitation === 'cloud_top_level_containers' &&
+        (expandedResourceIds.value.has(r.external_id) ||
+          (!r.has_children && loadedChildrenIds.value.has(r.external_id)))
+      ) {
+        result.push({ resource: r, depth: depth + 1, noticeAfter: true })
       }
     }
   }
@@ -202,7 +583,16 @@ interface ConnectorDef {
   permissionDocUrl: string
   permissionPageUrl: string
   requiredPermissions: string[]
-  fields: { key: string; labelKey: string; placeholder: string; secret?: boolean; optional?: boolean; hintKey?: string }[]
+  fields: {
+    key: string
+    labelKey: string
+    placeholder: string
+    secret?: boolean
+    optional?: boolean
+    hintKey?: string
+    multiline?: boolean
+    fieldType?: 'custom_headers'
+  }[]
 }
 
 const connectorDefs = computed<ConnectorDef[]>(() => [
@@ -221,6 +611,66 @@ const connectorDefs = computed<ConnectorDef[]>(() => [
     fields: [
       { key: 'app_id', labelKey: 'datasource.field.appId', placeholder: 'cli_xxxx' },
       { key: 'app_secret', labelKey: 'datasource.field.appSecret', placeholder: '', secret: true },
+      { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://open.feishu.cn', optional: true, hintKey: 'datasource.field.baseUrlHint' },
+    ],
+  },
+  {
+    // Lark is Feishu's international cloud. Same wiki/docx/drive APIs and the
+    // same scope identifiers, but a separate console, tenant and app — an app
+    // created on open.feishu.cn cannot read a Lark wiki.
+    type: 'lark',
+    available: true,
+    docUrl: 'https://open.larksuite.com/app',
+    permissionDocUrl: 'https://open.larksuite.com/document/server-docs/docs/wiki-v2/wiki-overview',
+    permissionPageUrl: 'https://open.larksuite.com/app',
+    requiredPermissions: [
+      'wiki:wiki:readonly',
+      'drive:drive:readonly',
+      'drive:export:readonly',
+      'docx:document:readonly',
+    ],
+    fields: [
+      { key: 'app_id', labelKey: 'datasource.field.appId', placeholder: 'cli_xxxx' },
+      { key: 'app_secret', labelKey: 'datasource.field.appSecret', placeholder: '', secret: true },
+      { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://open.feishu.cn', optional: true, hintKey: 'datasource.field.baseUrlHint' },
+    ],
+  },
+  {
+    // Feishu Drive (云盘) mode: sync documents/files under a user-supplied Drive
+    // folder_token. Same auth as the wiki connector but no wiki:wiki:readonly
+    // scope - Drive only needs drive + export + docx.
+    type: 'feishu_drive',
+    available: true,
+    docUrl: 'https://open.feishu.cn/app',
+    permissionDocUrl: 'https://open.feishu.cn/document/server-docs/docs/drive-v1/file/list',
+    permissionPageUrl: 'https://open.feishu.cn/app',
+    requiredPermissions: [
+      'drive:drive:readonly',
+      'drive:export:readonly',
+      'docx:document:readonly',
+    ],
+    fields: [
+      { key: 'app_id', labelKey: 'datasource.field.appId', placeholder: 'cli_xxxx' },
+      { key: 'app_secret', labelKey: 'datasource.field.appSecret', placeholder: '', secret: true },
+      { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://open.feishu.cn', optional: true, hintKey: 'datasource.field.baseUrlHint' },
+    ],
+  },
+  {
+    // Lark Drive: international counterpart of feishu_drive.
+    type: 'lark_drive',
+    available: true,
+    docUrl: 'https://open.larksuite.com/app',
+    permissionDocUrl: 'https://open.larksuite.com/document/server-docs/docs/drive-v1/file/list',
+    permissionPageUrl: 'https://open.larksuite.com/app',
+    requiredPermissions: [
+      'drive:drive:readonly',
+      'drive:export:readonly',
+      'docx:document:readonly',
+    ],
+    fields: [
+      { key: 'app_id', labelKey: 'datasource.field.appId', placeholder: 'cli_xxxx' },
+      { key: 'app_secret', labelKey: 'datasource.field.appSecret', placeholder: '', secret: true },
+      { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://open.larksuite.com', optional: true, hintKey: 'datasource.field.baseUrlHint' },
     ],
   },
   {
@@ -232,6 +682,21 @@ const connectorDefs = computed<ConnectorDef[]>(() => [
     requiredPermissions: [],
     fields: [
       { key: 'api_key', labelKey: 'datasource.field.integrationToken', placeholder: 'ntn_xxxx', secret: true },
+    ],
+  },
+  {
+    type: 'confluence',
+    available: true,
+    docUrl: 'https://developer.atlassian.com/cloud/confluence/rest/',
+    permissionDocUrl: 'https://developer.atlassian.com/cloud/confluence/rest/',
+    permissionPageUrl: 'https://id.atlassian.com/manage-profile/security/api-tokens',
+    requiredPermissions: [],
+    fields: [
+      { key: 'base_url', labelKey: 'datasource.field.confluenceBaseUrl', placeholder: 'https://confluence.example.com or https://team.atlassian.net/wiki' },
+      { key: 'username', labelKey: 'datasource.field.confluenceUsername', placeholder: 'name or email' },
+      { key: 'token', labelKey: 'datasource.field.confluencePat', placeholder: 'Server/DC PAT', secret: true, optional: true, hintKey: 'datasource.field.confluencePatHint' },
+      { key: 'password', labelKey: 'datasource.field.confluencePassword', placeholder: 'Server/DC password', secret: true },
+      { key: 'api_token', labelKey: 'datasource.field.confluenceApiToken', placeholder: 'Cloud API token', secret: true },
     ],
   },
   {
@@ -249,21 +714,141 @@ const connectorDefs = computed<ConnectorDef[]>(() => [
       { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://www.yuque.com', optional: true, hintKey: 'datasource.field.baseUrlHint' },
     ],
   },
+  {
+    type: 'dingtalk',
+    available: true,
+    docUrl: 'https://open.dingtalk.com/document/development/knowledge-base-overview',
+    permissionDocUrl: 'https://open.dingtalk.com/document/development/get-knowledge-base-list',
+    permissionPageUrl: 'https://open-dev.dingtalk.com/',
+    requiredPermissions: [
+      'Wiki.Workspace.Read',
+      'Wiki.Node.Read',
+      'Storage.File.Read',
+    ],
+    fields: [
+      { key: 'client_id', labelKey: 'datasource.field.clientId', placeholder: 'dingxxxxxxxx' },
+      { key: 'client_secret', labelKey: 'datasource.field.clientSecret', placeholder: '', secret: true },
+      { key: 'operator_id', labelKey: 'datasource.field.operatorId', placeholder: '', hintKey: 'datasource.field.operatorIdHint' },
+    ],
+  },
+  {
+    // Tencent IMA (ima.qq.com). Uses the OpenAPI at /openapi/wiki/v1 with two
+    // static headers (ima-openapi-clientid + ima-openapi-apikey); no OAuth.
+    type: 'ima',
+    available: true,
+    docUrl: 'https://ima.qq.com/agent-interface',
+    permissionDocUrl: 'https://ima.qq.com/agent-interface',
+    permissionPageUrl: 'https://ima.qq.com/agent-interface',
+    requiredPermissions: [],
+    fields: [
+      { key: 'client_id', labelKey: 'datasource.field.imaClientId', placeholder: '', secret: true },
+      { key: 'api_key', labelKey: 'datasource.field.imaApiKey', placeholder: '', secret: true },
+      { key: 'base_url', labelKey: 'datasource.field.baseUrl', placeholder: 'https://ima.qq.com', optional: true, hintKey: 'datasource.field.baseUrlHint' },
+    ],
+  },
+  {
+    type: 'rss',
+    available: true,
+    docUrl: '',
+    permissionDocUrl: '',
+    permissionPageUrl: '',
+    requiredPermissions: [],
+    fields: [
+      { key: 'auth_headers', labelKey: 'datasource.field.authHeaders', placeholder: '', optional: true, hintKey: 'datasource.field.authHeadersHint', fieldType: 'custom_headers' },
+    ],
+  },
+  {
+    type: 'gitlab', available: true, docUrl: '', permissionDocUrl: '', permissionPageUrl: '', requiredPermissions: [],
+    fields: [
+      { key: 'base_url', labelKey: 'datasource.gitlab.baseUrl', placeholder: 'https://gitlab.example.com' },
+      { key: 'access_token', labelKey: 'datasource.gitlab.accessToken', placeholder: '', secret: true },
+    ],
+  },
+  {
+    type: 'seafile', available: true, docUrl: 'https://help.seafile.com/',
+    permissionDocUrl: '', permissionPageUrl: '', requiredPermissions: [],
+    fields: [
+      { key: 'base_url', labelKey: 'datasource.seafile.baseUrl', placeholder: 'https://seafile.example.com' },
+      { key: 'api_token', labelKey: 'datasource.seafile.apiToken', placeholder: '', secret: true, hintKey: 'datasource.seafile.apiTokenHint' },
+    ],
+  },
+  {
+    type: 'nextcloud', available: true,
+    docUrl: 'https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webdav.html',
+    permissionDocUrl: '', permissionPageUrl: '', requiredPermissions: [],
+    fields: [
+      { key: 'base_url', labelKey: 'datasource.nextcloud.baseUrl', placeholder: 'https://nextcloud.example.com', hintKey: 'datasource.nextcloud.baseUrlHint' },
+      { key: 'username', labelKey: 'datasource.nextcloud.username', placeholder: 'alice' },
+      { key: 'app_password', labelKey: 'datasource.nextcloud.appPassword', placeholder: '', secret: true, hintKey: 'datasource.nextcloud.appPasswordHint' },
+    ],
+  },
 ])
 
 
 const currentDef = computed(() => connectorDefs.value.find(d => d.type === form.value.type))
 
-// --- Dialog lifecycle ---
-watch(visible, (v) => {
-  if (!v) return
+const displayedCredentialFields = computed(() => {
+  const fields = currentDef.value?.fields || []
+  if (form.value.type !== "confluence") return fields
+
+  return fields.filter((field) => {
+    if (field.key === "password" || field.key === "token") return form.value.config.credentials.edition !== "cloud"
+    if (field.key === "api_token") return form.value.config.credentials.edition === "cloud"
+    return true
+  }).map((field) => {
+    const hasPAT = form.value.config.credentials.edition !== "cloud" &&
+      !!String(form.value.config.credentials.token || "").trim()
+    if (field.key === "username" || field.key === "password") {
+      return { ...field, optional: hasPAT }
+    }
+    return field
+  })
+})
+
+// --- Drawer lifecycle ---
+
+// The draft the picker lists through is per-session state: one open drawer, one
+// draft. `drawerSession` counts opens and closes; a create that was sent in an
+// earlier session is recognized by the mismatch and cleans its own row up (see
+// ensureTempDataSource), instead of writing its id into a drawer that may by
+// then be closed — or reopened with a different form.
+let drawerSession = 0
+let tempDsPromise: Promise<string> | null = null
+
+watch(visible, async (v) => {
+  // Both edges start a new session: opening begins one, closing ends it.
+  drawerSession++
+  // A create from the session that was just left is not something a session
+  // starting now may join, so the shared slot is emptied on both edges.
+  tempDsPromise = null
+  if (!v) {
+    if (!isEdit.value && tempDsId.value) {
+      try {
+        await deleteDataSource(tempDsId.value)
+      } catch {
+        // Ignore cleanup errors
+      }
+      tempDsId.value = ''
+    }
+    return
+  }
   step.value = isEdit.value ? 1 : 0
   testResult.value = ''
   testErrorMsg.value = ''
   tempDsId.value = ''
   prereqExpanded.value = false
+  pendingRemoveCredentials.value = false
   resources.value = []
   selectedResourceIds.value = []
+  expandedResourceIds.value = new Set()
+  loadedChildrenIds.value = new Set()
+  loadingChildrenIds.value = new Set()
+  treeFullyLoaded.value = false
+  driveFolderToken.value = ''
+  driveFolderTokenError.value = ''
+  driveRootLoaded.value = false
+  rssAuthHeaders.value = []
+  gitlabProjects.value = []
 
   if (isEdit.value && props.dataSource) {
     // Reset edit/replace toggle every open so an aborted replace doesn't
@@ -272,13 +857,17 @@ watch(visible, (v) => {
     replaceCredentialsMode.value = false
     credentialsConfigured.value = false
     refreshCredentialsStatus()
+    testResult.value = credentialsConfigured.value ? 'success' : ''
+    const editConfig = props.dataSource.config || {}
     form.value = {
       name: props.dataSource.name,
       type: props.dataSource.type,
       config: {
         credentials: {},
-        resource_ids: props.dataSource.config?.resource_ids || [],
-        settings: props.dataSource.config?.settings || {},
+        resource_ids: editConfig.resource_ids || [],
+        settings: props.dataSource.type === 'rss'
+          ? hydrateRssFeedUrlsFromConfig(editConfig)
+          : { ...(editConfig.settings || {}) },
       },
       sync_schedule: props.dataSource.sync_schedule,
       sync_mode: props.dataSource.sync_mode,
@@ -286,6 +875,25 @@ watch(visible, (v) => {
       sync_deletions: props.dataSource.sync_deletions,
     }
     selectedResourceIds.value = form.value.config?.resource_ids || []
+    if (isGitLabConnector(form.value.type)) {
+      const savedProjects = Array.isArray(form.value.config.settings.projects) ? form.value.config.settings.projects : []
+      gitlabProjects.value = savedProjects.map((project: any) => ({
+        project_id: String(project.project_id || ''), ref: String(project.ref || ''),
+        pathsText: Array.isArray(project.paths) ? project.paths.join('\n') : '',
+      }))
+    }
+    // Pre-fill the Drive root folder_token from the saved resource_ids so the
+    // user sees what they previously entered. driveRootLoaded stays false: the
+    // tree has not been listed yet, and clicking "load" triggers listResources
+    // + revealExistingSelections so pre-existing selections are revealed.
+    if (isDriveConnector(form.value.type)) {
+      const rids = form.value.config?.resource_ids || []
+      if (rids.length > 0) {
+        // resource_id is "folderToken" or "folderToken:fileToken"; the root is
+        // the first segment.
+        driveFolderToken.value = rids[0].split(':')[0]
+      }
+    }
     tempDsId.value = props.dataSource.id
   } else {
     replaceCredentialsMode.value = false
@@ -302,19 +910,74 @@ watch(visible, (v) => {
   }
 })
 
+watch(
+  () => form.value.config.credentials,
+  () => {
+    if (needsConnectionTest()) {
+      testResult.value = ''
+      testErrorMsg.value = ''
+    }
+  },
+  { deep: true },
+)
+
+watch(
+  rssAuthHeaders,
+  () => {
+    syncRssAuthHeadersToCredentials()
+    if (needsConnectionTest()) {
+      testResult.value = ''
+      testErrorMsg.value = ''
+    }
+  },
+  { deep: true },
+)
+
+watch(
+  () => form.value.config.settings.feed_urls,
+  () => {
+    if (needsConnectionTest()) {
+      testResult.value = ''
+      testErrorMsg.value = ''
+    }
+  },
+)
+
 function selectType(def: ConnectorDef) {
   if (!def.available) return
   form.value.type = def.type
   form.value.name = t(`datasource.connector.${def.type}`)
+  form.value.config.credentials = def.type === "confluence" ? { edition: "server" } : {}
+  if (isFeishuFamilyConnector(def.type)) {
+    form.value.config.settings.parse_mode = form.value.config.settings.parse_mode || 'blocks'
+  } else {
+    // Backtracking from a Feishu/Lark type must not leak parse_mode into
+    // other connectors' settings.
+    delete form.value.config.settings.parse_mode
+  }
+  if (def.type === 'confluence') {
+    form.value.config.settings = { ...form.value.config.settings, edition: 'server' }
+  }
+  // A new Yuque source opts into the book's folder hierarchy. Only on create:
+  // an existing source keeps what it was built with, so the "folder layout is
+  // owned by the connector" caveat never applies to sources that predate it.
+  if (def.type === 'yuque' && !isEdit.value) {
+    form.value.config.settings = { ...form.value.config.settings, folder_mode: 'toc' }
+  }
+  if (isGitLabConnector(def.type)) addGitLabProject()
+  rssAuthHeaders.value = []
   step.value = 1
 }
 
-// --- Test connection (stateless, no DB write) ---
+// --- Test connection ---
 async function testConnection() {
+  syncRssAuthHeadersToCredentials()
+  syncConfluencePublicFieldsToSettings()
+  if (!validateRssFeedUrls()) return
   if (!isEdit.value || !credentialsConfigured.value || replaceCredentialsMode.value) {
-    const fields = currentDef.value?.fields || []
+    const fields = displayedCredentialFields.value
     for (const f of fields) {
-      if (f.optional) continue
+      if (f.optional || f.fieldType === 'custom_headers') continue
       if (!form.value.config.credentials[f.key]) {
         MessagePlugin.warning(`${t(f.labelKey)} ${t('datasource.isRequired')}`)
         return
@@ -326,14 +989,22 @@ async function testConnection() {
   testResult.value = ''
   testErrorMsg.value = ''
   try {
-    if (isEdit.value && tempDsId.value) {
+    // The main update endpoint ignores credentials. Only use the saved
+    // connection when keeping its credentials; test replacements directly
+    // without persisting them until the user saves the data source.
+    if (isEdit.value && tempDsId.value && !needsConnectionTest()) {
       await updateDataSource(tempDsId.value, {
         ...form.value,
         knowledge_base_id: props.kbId,
       } as any)
       await validateConnection(tempDsId.value)
     } else {
-      await validateCredentials(form.value.type, form.value.config.credentials)
+      const creds = { ...form.value.config.credentials }
+      if (form.value.type === 'rss') {
+        // validate-credentials is credentials-only; feed URLs live in settings.
+        creds.feed_urls = form.value.config.settings.feed_urls
+      }
+      await validateCredentials(form.value.type, creds)
     }
     testResult.value = 'success'
     MessagePlugin.success(t('datasource.testSuccess'))
@@ -346,30 +1017,169 @@ async function testConnection() {
 }
 
 // --- Load resources ---
-async function loadResources() {
-  loadingResources.value = true
-  try {
-    if (!tempDsId.value) {
+
+// canCreateTempDataSource reports whether the create endpoint could accept a
+// request built from the form as it stands. The endpoint rejects a request
+// without a knowledge base (ErrKnowledgeBaseNotFound) and one whose type is not
+// a registered connector (ErrConnectorNotFound) before the connector is ever
+// reached, so a request missing either is certain to fail and must not be sent.
+// The one thing left that the endpoint checks — the credentials a connector
+// validates against the remote service — can only be answered by making the
+// call, so it is deliberately not pre-empted here.
+function canCreateTempDataSource(): boolean {
+  return (props.kbId || '').trim() !== '' && String(form.value.type || '').trim() !== ''
+}
+
+// ensureTempDataSource returns the data source the picker lists through,
+// creating the paused draft on first use (a data source must exist before the
+// resource endpoint can be called) and keeping it in step with the form while
+// the dialog is still a draft.
+//
+// This is not a side-effect-free lookup: with a draft already in hand it PUTs
+// the current form to it (create mode), which is what keeps the row equal to
+// the form the user sees. `persist` extends that flush to edit mode, where the
+// row is otherwise left alone until submit — the Drive root loader needs it,
+// because the listing it is about to make reads the folder token from the row.
+//
+// A single in-flight creation is shared, so two callers cannot create two rows
+// for one dialog. The shared attempt is scoped to the drawer session that
+// started it (see the visible watcher above): if the drawer was closed or
+// reopened while the create was in flight, the row it produced is deleted and
+// no id is handed back, so a late answer can neither be adopted by a new
+// session nor be left behind as an orphan.
+async function ensureTempDataSource(persist = false): Promise<string> {
+  if (tempDsId.value) {
+    if (persist || !isEdit.value) {
+      await updateDataSource(tempDsId.value, {
+        ...form.value,
+        knowledge_base_id: props.kbId,
+      } as any)
+    }
+    return tempDsId.value
+  }
+  // A form that cannot produce a data source yet has nothing to list through,
+  // so the create is skipped rather than sent: no request, no error, and — this
+  // is the point of returning early — no cached promise, so a later attempt
+  // with a real type creates the draft normally.
+  if (!canCreateTempDataSource()) {
+    // The drawer cannot reach this state through its own UI (a connector type
+    // is always picked before step 2, and the parent only renders the dialog
+    // once it has a knowledge base), so there is no form field the user could
+    // be pointed at. A console line is what makes a "I pressed load and nothing
+    // happened" report diagnosable.
+    console.warn(
+      '[DataSourceEditorDialog] skipped creating a temporary data source: ' +
+      `connector type ${JSON.stringify(form.value.type)} or knowledge base id ${JSON.stringify(props.kbId)} is empty`,
+    )
+    return ''
+  }
+  if (!tempDsPromise) {
+    const ownSession = drawerSession
+    let pending: Promise<string>
+    pending = (async () => {
       const res = await createDataSource({
         ...form.value,
         knowledge_base_id: props.kbId,
         status: 'paused',
       } as any)
       const created = res?.data || res
-      tempDsId.value = created.id
-    } else if (!isEdit.value) {
-      await updateDataSource(tempDsId.value, {
-        ...form.value,
-        knowledge_base_id: props.kbId,
-      } as any)
-    }
+      const createdId = typeof created?.id === 'string' ? created.id.trim() : ''
+      if (drawerSession !== ownSession) {
+        // The drawer was closed (or closed and reopened) while the create was
+        // in flight. Nobody will ever list through — or clean up — this row, so
+        // it is removed here, and '' tells the stale caller to stop rather than
+        // report an error about a drawer the user already dismissed.
+        if (createdId) {
+          try {
+            await deleteDataSource(createdId)
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+        return ''
+      }
+      if (!createdId) {
+        // A create that answered without an id cannot be listed through, and
+        // /datasource//resources is certain to fail. Failing here instead keeps
+        // tempDsId unset, so the next attempt can create a usable draft.
+        throw new Error(t('datasource.saveFailed'))
+      }
+      tempDsId.value = createdId
+      return createdId
+    })().finally(() => {
+      // A settled attempt is never cached — a failed create must stay
+      // retryable — but it must not clear a create a later session started.
+      if (tempDsPromise === pending) tempDsPromise = null
+    })
+    tempDsPromise = pending
+  }
+  return tempDsPromise
+}
 
-    const res = await listResources(tempDsId.value)
+async function loadResources() {
+  loadingResources.value = true
+  try {
+    syncConfluencePublicFieldsToSettings()
+    // No id means the form cannot be created yet (a blank connector type, or a
+    // missing knowledge base): the tree simply does not load, and nothing is
+    // reported — the request that would have produced that error is not sent.
+    const dsId = await ensureTempDataSource()
+    if (!dsId) return
+
+    const res = await listResources(dsId)
     resources.value = res?.data || res || []
+    // Any parent that already arrived with children (connectors returning the
+    // full tree, e.g. Notion) needs no further lazy fetch.
+    const parentsWithChildren = new Set<string>()
+    for (const r of resources.value) {
+      if (r.parent_id) parentsWithChildren.add(r.parent_id)
+    }
+    loadedChildrenIds.value = parentsWithChildren
+    loadingChildrenIds.value = new Set<string>()
+    // If any resource already has a parent, the connector returned the whole tree
+    // up front, so per-node lazy fetching is unnecessary.
+    treeFullyLoaded.value = parentsWithChildren.size > 0
+    // Auto-expand top-level nodes whose children are already loaded; lazy nodes
+    // (children not yet fetched) stay collapsed until the user expands them.
+    expandedResourceIds.value = new Set(
+      resources.value
+        .filter(r => !r.parent_id && r.has_children && parentsWithChildren.has(r.external_id))
+        .map(r => r.external_id),
+    )
+    // When editing a lazily-loaded source, reveal pre-existing selections that
+    // live below the (not-yet-loaded) tree so they are visible and checked.
+    if (isEdit.value && !treeFullyLoaded.value) {
+      const loaded = new Set(resources.value.map(r => r.external_id))
+      const hidden = selectedResourceIds.value.filter(id => !loaded.has(id))
+      if (hidden.length > 0) void revealExistingSelections(hidden)
+    }
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || e?.error || t('datasource.resourceLoadFailed'))
+  } finally {
+    // A skipped load returns from the try block, so the spinner is cleared here
+    // rather than after the block.
+    loadingResources.value = false
+  }
+}
+
+// revealExistingSelections asks the backend which ancestors must be expanded to
+// surface the current (possibly deeply nested) selection, then loads each level
+// so the saved selection becomes visible and correctly checked in the tree.
+async function revealExistingSelections(hiddenIds: string[]) {
+  if (!tempDsId.value || hiddenIds.length === 0) return
+  try {
+    const res = await resolveResourceAncestors(tempDsId.value, hiddenIds)
+    const ancestors: string[] = res?.data?.ancestors || res?.ancestors || []
+    if (ancestors.length === 0) return
+    const expanded = new Set(expandedResourceIds.value)
+    for (const id of ancestors) expanded.add(id)
+    expandedResourceIds.value = expanded
+    // Load each ancestor level (children include the next ancestor / the
+    // selection itself); calls are independent and dedup on merge.
+    await Promise.all(ancestors.map(id => ensureChildrenLoaded(id)))
   } catch (e: any) {
     MessagePlugin.error(e?.message || e?.error || t('datasource.resourceLoadFailed'))
   }
-  loadingResources.value = false
 }
 
 function getDescendantIds(id: string): string[] {
@@ -434,22 +1244,45 @@ function uncheckResource(id: string, cover: Set<string>) {
 
 function toggleResource(id: string) {
   const cover = new Set(selectedResourceIds.value)
+  const seafile = isSeafileConnector(form.value.type)
   if ((checkStates.value.get(id) || 'unchecked') === 'unchecked') {
     checkResource(id, cover)
   } else {
     uncheckResource(id, cover)
+    // Unchecking also drops saved path selections below this node that
+    // the tree no longer lists; otherwise they could never be cleared.
+    if (seafile || form.value.type === 'nextcloud') {
+      for (const sel of [...cover]) {
+        if (seafile ? seafileWithin(sel, id) : id === '/' || sel === id || sel.startsWith(id + '/')) cover.delete(sel)
+      }
+    }
+  }
+  if (seafile && new Set([...cover].map(seafileLibraryOf)).size > 1) {
+    MessagePlugin.warning(t('datasource.seafile.singleLibraryOnly'))
+    return
   }
   selectedResourceIds.value = [...cover]
 }
 
+function validateRssFeedUrls(): boolean {
+  if (form.value.type !== 'rss') return true
+  if (!String(form.value.config.settings.feed_urls || '').trim()) {
+    MessagePlugin.warning(`${t('datasource.field.feedUrls')} ${t('datasource.isRequired')}`)
+    return false
+  }
+  return true
+}
+
 function validateStep1Fields(): boolean {
+  syncRssAuthHeadersToCredentials()
+  if (!validateRssFeedUrls()) return false
   if (isEdit.value && credentialsConfigured.value && !replaceCredentialsMode.value) {
     return true
   }
 
-  const fields = currentDef.value?.fields || []
+  const fields = displayedCredentialFields.value
   for (const f of fields) {
-    if (f.optional) continue
+    if (f.optional || f.fieldType === 'custom_headers') continue
     if (!form.value.config.credentials[f.key]) {
       MessagePlugin.warning(`${t(f.labelKey)} ${t('datasource.isRequired')}`)
       return false
@@ -458,16 +1291,52 @@ function validateStep1Fields(): boolean {
   return true
 }
 
-function nextStep() {
+async function nextStep() {
   if (step.value === 1) {
     if (!validateStep1Fields()) return
-    if (testResult.value !== 'success') {
-      MessagePlugin.warning(t('datasource.pleaseTestFirst'))
+    if (needsConnectionTest() && testResult.value !== 'success') {
+      await testConnection()
+      if ((testResult.value as string) !== 'success') return
+    }
+  }
+  if (step.value === 2 && isDriveConnector(form.value.type)) {
+    // folder_token 是 Drive 连接器的必填项：为空就地标错并留在本步,
+    // 不允许带着空 token 进入同步策略。
+    if (!driveFolderToken.value.trim()) {
+      driveFolderTokenError.value = t('datasource.drive.folderTokenRequired')
+      return
+    }
+    driveFolderTokenError.value = ''
+  }
+  if (step.value === 2 && isGitLabConnector(form.value.type)) {
+    syncGitLabProjectsToSettings()
+    if (!gitlabProjects.value.some(project => project.project_id.trim())) {
+      MessagePlugin.warning(t('datasource.gitlab.projectRequired'))
       return
     }
   }
+  // Seafile has no "whole account" scope: the backend rejects an empty selection.
+  if (step.value === 2 && isSeafileConnector(form.value.type) && selectedResourceIds.value.length === 0) {
+    MessagePlugin.warning(t('datasource.seafile.selectionRequired'))
+    return
+  }
+  if (step.value === 2 && form.value.type === 'nextcloud' && selectedResourceIds.value.length === 0) {
+    MessagePlugin.warning(t('datasource.nextcloud.selectionRequired'))
+    return
+  }
   step.value++
   if (step.value === 2) {
+    // Drive connectors need a user-supplied folder_token before listing.
+    // In edit mode with a saved folder_token, auto-load so the saved tree
+    // (and any pre-existing selections) are revealed without an extra click.
+    // In create mode (no folder_token yet), just show the placeholder.
+    if (isDriveConnector(form.value.type)) {
+      if (!driveRootLoaded.value && driveFolderToken.value.trim()) {
+        void loadDriveRoot()
+      }
+      return
+    }
+    if (isGitLabConnector(form.value.type)) return
     loadResources()
   }
 }
@@ -486,6 +1355,8 @@ function prevStep() {
 // commitCredentialsIfNeeded). Sending an empty map keeps the backend
 // validator happy.
 function buildConfigPayload(): Record<string, unknown> {
+  syncGitLabProjectsToSettings()
+  syncConfluencePublicFieldsToSettings()
   return {
     credentials: isEdit.value ? {} : { ...form.value.config.credentials },
     resource_ids: form.value.config.resource_ids,
@@ -498,6 +1369,8 @@ function buildConfigPayload(): Record<string, unknown> {
 // the whole submit on failure so we don't leave the row partially saved.
 async function commitCredentialsIfNeeded(dsId: string): Promise<boolean> {
   if (!isEdit.value || !replaceCredentialsMode.value) return true
+  syncRssAuthHeadersToCredentials()
+  syncConfluencePublicFieldsToSettings()
   const filled = Object.entries(form.value.config.credentials).filter(
     ([, v]) => typeof v === 'string' ? v !== '' : v != null,
   )
@@ -507,6 +1380,7 @@ async function commitCredentialsIfNeeded(dsId: string): Promise<boolean> {
     credentialsConfigured.value = true
     replaceCredentialsMode.value = false
     form.value.config.credentials = {}
+    rssAuthHeaders.value = []
     return true
   } catch (e: any) {
     MessagePlugin.error(e?.message || e?.error || t('credential.saveFailed'))
@@ -549,7 +1423,7 @@ async function handleSubmit() {
     }
 
     if (isEdit.value) {
-      MessagePlugin.success(t('datasource.updateSuccess'))
+      MessagePlugin.warning(t('datasource.updateSuccessSyncHint'))
     } else {
       try {
         await triggerSync(dataSourceId)
@@ -560,6 +1434,10 @@ async function handleSubmit() {
     }
 
     emit('saved')
+    // Clear before close — otherwise the visible watcher treats the just-saved
+    // row as an abandoned temp draft and DELETEs it (loadResources creates the
+    // row early at step 2 with tempDsId).
+    tempDsId.value = ''
     visible.value = false
   } catch (e: any) {
     MessagePlugin.error(e?.message || e?.error || t('datasource.saveFailed'))
@@ -567,28 +1445,77 @@ async function handleSubmit() {
   submitting.value = false
 }
 
-// --- Cleanup on dialog close ---
-async function handleClose() {
-  if (!isEdit.value && tempDsId.value) {
-    try {
-      await deleteDataSource(tempDsId.value)
-    } catch {
-      // Ignore cleanup errors
-    }
-    tempDsId.value = ''
-  }
+function handleClose() {
   visible.value = false
+}
+
+async function handleDrawerConfirm() {
+  if (step.value === 1 || step.value === 2) {
+    await nextStep()
+  } else if (step.value === 3) {
+    handleSubmit()
+  }
+}
+
+const selectedResourceCount = computed(() => {
+  let count = 0
+  for (const state of checkStates.value.values()) {
+    if (state === 'checked') count++
+  }
+  return count
+})
+
+const hasExpandableNodes = computed(() => resources.value.some(r => r.has_children))
+
+function resourceIconName(r: Resource): string {
+  // Seafile libraries expand like folders but are the top-level unit a data
+  // source binds to, so they keep the root icon.
+  if (r.type === 'library') return 'root-list'
+  if (r.has_children) return 'folder'
+  switch (r.type) {
+    case 'wiki_space':
+      return 'root-list'
+    case 'book':
+      return 'book'
+    case 'doc_category':
+      return 'folder-open'
+    default:
+      return 'file'
+  }
+}
+
+function expandAllNodes() {
+  const expandable = resources.value.filter(r => r.has_children)
+  expandedResourceIds.value = new Set(expandable.map(r => r.external_id))
+  // Lazily load children of any expanded node that hasn't been fetched yet.
+  for (const r of expandable) {
+    void ensureChildrenLoaded(r.external_id)
+  }
+}
+
+function collapseAllNodes() {
+  expandedResourceIds.value = new Set()
 }
 
 const resourceTypeLabelMap: Record<string, string> = {
   wiki_space: 'datasource.resourceType.wikiSpace',
   doc_category: 'datasource.resourceType.docCategory',
   book: 'datasource.resourceType.book',
+  library: 'datasource.resourceType.library',
 }
 
 function resourceTypeLabel(type: string): string {
   const key = resourceTypeLabelMap[type]
-  return key ? t(key) : type
+  if (key) return t(key)
+  return ''
+}
+
+function shouldShowResourceType(type: string): boolean {
+  return !!resourceTypeLabelMap[type]
+}
+
+function resourceRowState(id: string): CheckState {
+  return checkStates.value.get(id) || 'unchecked'
 }
 
 const stepTitles = computed(() => [
@@ -597,185 +1524,540 @@ const stepTitles = computed(() => [
   t('datasource.step.resources'),
   t('datasource.step.strategy'),
 ])
+
+const drawerTitle = computed(() =>
+  isEdit.value ? t('datasource.editTitle') : t('datasource.createTitle'),
+)
+
+const drawerDescription = computed(() => stepTitles.value[step.value] ?? '')
+
+const drawerConfirmText = computed(() => {
+  if (step.value === 3) {
+    return isEdit.value ? t('datasource.save') : t('datasource.createAndSync')
+  }
+  if (step.value >= 1) return t('datasource.next')
+  return t('common.save')
+})
 </script>
 
 <template>
-  <t-dialog v-model:visible="visible" :header="isEdit ? t('datasource.editTitle') : t('datasource.createTitle')"
-    :footer="false" width="640px" destroy-on-close :on-close="handleClose">
+  <SettingDrawer
+    v-model:visible="visible"
+    :title="drawerTitle"
+    :description="drawerDescription"
+    :class="[form.type ? `datasource-editor-drawer datasource-editor-drawer--${form.type}` : 'datasource-editor-drawer', { 'ds-fixed-step': step === 2 && !isGitLabConnector(form.type) }]"
+    :hide-footer="step === 0"
+    :confirm-text="drawerConfirmText"
+    :confirm-loading="submitting || (step === 1 && testing)"
+    storage-key="setting-drawer:width:datasource-editor"
+    width="640px"
+    @confirm="handleDrawerConfirm"
+    @cancel="handleClose"
+  >
+    <template v-if="form.type && getDatasourceIconUrl(form.type)" #headerIcon>
+      <img
+        :src="getDatasourceIconUrl(form.type)"
+        :alt="form.type"
+        class="datasource-header-icon__img"
+      >
+    </template>
+
+    <template v-if="step === 1" #footer-left>
+      <t-button v-if="!isEdit" variant="outline" @click="step = 0">
+        {{ t('datasource.back') }}
+      </t-button>
+      <t-button variant="outline" :loading="testing" @click="testConnection">
+        <template #icon>
+          <t-icon
+            v-if="!testing && testResult === 'success'"
+            name="check-circle-filled"
+            class="status-icon available"
+          />
+          <t-icon
+            v-else-if="!testing && testResult === 'error'"
+            name="close-circle-filled"
+            class="status-icon unavailable"
+          />
+        </template>
+        {{ testing ? t('model.editor.testing') : t('datasource.testConnection') }}
+      </t-button>
+      <span
+        v-if="testResult"
+        :class="['footer-test-message', testResult === 'success' ? 'success' : 'error']"
+        :title="testResult === 'error' ? testErrorMsg : t('datasource.connected')"
+      >
+        {{
+          testResult === 'success'
+            ? t('datasource.connected')
+            : (testErrorMsg || t('datasource.connectionFailed'))
+        }}
+      </span>
+    </template>
+
+    <template v-else-if="step === 2 || step === 3" #footer-left>
+      <t-button variant="outline" @click="prevStep">
+        {{ t('datasource.back') }}
+      </t-button>
+    </template>
+
     <!-- Step indicator -->
     <div class="ds-steps">
-      <div v-for="(title, i) in stepTitles" :key="i" :class="['ds-step', { active: step === i, done: step > i }]">
-        <span class="ds-step-num">{{ step > i ? '&#10003;' : i + 1 }}</span>
+      <div
+        v-for="(title, i) in stepTitles"
+        :key="i"
+        :class="['ds-step', { active: step === i, done: step > i }]"
+      >
+        <span class="ds-step-num">
+          <t-icon v-if="step > i" name="check" class="ds-step-check" />
+          <template v-else>{{ i + 1 }}</template>
+        </span>
         <span class="ds-step-title">{{ title }}</span>
       </div>
     </div>
 
     <!-- Step 0: Select connector type -->
-    <div v-if="step === 0" class="ds-step-content">
+    <section v-if="step === 0" class="setting-drawer__section">
+      <h4 class="setting-drawer__section-title">{{ t('datasource.step.selectType') }}</h4>
       <div class="ds-type-grid">
-        <div v-for="def in connectorDefs" :key="def.type" :class="['ds-type-card', { disabled: !def.available }]"
-          @click="selectType(def)">
+        <button
+          v-for="def in connectorDefs"
+          :key="def.type"
+          type="button"
+          :class="['ds-type-card', { disabled: !def.available }]"
+          :disabled="!def.available"
+          @click="selectType(def)"
+        >
           <div class="ds-type-header">
             <DataSourceTypeIcon :type="def.type" :size="20" />
             <span class="ds-type-name">{{ t(`datasource.connector.${def.type}`) }}</span>
             <span v-if="!def.available" class="ds-type-soon">{{ t('datasource.comingSoon') }}</span>
           </div>
           <div class="ds-type-desc">{{ t(`datasource.connectorDesc.${def.type}`) }}</div>
-        </div>
+        </button>
       </div>
-    </div>
+    </section>
 
     <!-- Step 1: Credentials -->
-    <div v-if="step === 1" class="ds-step-content">
-      <!-- Compact collapsible prereq hint -->
-      <div v-if="currentDef && currentDef.requiredPermissions.length > 0" class="ds-prereq-bar"
-        @click="prereqExpanded = !prereqExpanded">
-        <t-icon name="help-circle" size="14px" />
-        <span>{{ t(`datasource.prereqBarText_${form.type}`, t('datasource.prereqBarText')) }}</span>
-        <t-icon :name="prereqExpanded ? 'chevron-up' : 'chevron-down'" size="14px" class="ds-prereq-arrow" />
+    <template v-if="step === 1">
+      <div
+        v-if="currentDef && currentDef.requiredPermissions.length > 0"
+        class="ds-setup-guide ds-setup-guide--standalone"
+      >
+        <button
+          type="button"
+          class="ds-setup-guide__toggle"
+          :aria-expanded="prereqExpanded"
+          @click="prereqExpanded = !prereqExpanded"
+        >
+          <t-icon name="info-circle-filled" size="15px" class="ds-setup-guide__icon" />
+          <span class="ds-setup-guide__summary">
+            {{ t(`datasource.prereqBarText_${form.type}`, t('datasource.prereqBarText')) }}
+          </span>
+          <t-icon
+            :name="prereqExpanded ? 'chevron-up' : 'chevron-down'"
+            size="14px"
+            class="ds-setup-guide__chevron"
+          />
+        </button>
+        <div v-if="prereqExpanded" class="ds-setup-guide__body">
+          <ol class="ds-setup-steps">
+            <li class="ds-setup-step">
+              <span class="ds-setup-step__title">{{ t(`datasource.prereqStep1Brief_${form.type}`,
+                t('datasource.prereqBotBrief')) }}</span>
+              <span class="ds-setup-step__desc">{{ t(`datasource.prereqStep1Desc_${form.type}`,
+                t('datasource.prereqBotDesc')) }}</span>
+            </li>
+            <li class="ds-setup-step">
+              <span class="ds-setup-step__title">{{ t(`datasource.prereqStep2Brief_${form.type}`,
+                t('datasource.prereqPermBrief')) }}</span>
+              <span class="ds-setup-step__desc">
+                <template v-if="!t(`datasource.prereqStep2Desc_${form.type}`)">
+                  <code
+                    v-for="perm in currentDef.requiredPermissions"
+                    :key="perm"
+                    class="ds-perm-tag"
+                  >{{ perm }}</code>
+                </template>
+                <template v-else>{{ t(`datasource.prereqStep2Desc_${form.type}`) }}</template>
+              </span>
+            </li>
+            <li class="ds-setup-step">
+              <span class="ds-setup-step__title">{{ t(`datasource.prereqStep3Brief_${form.type}`,
+                t('datasource.prereqMemberBrief')) }}</span>
+              <span class="ds-setup-step__desc">{{ t(`datasource.prereqStep3Desc_${form.type}`,
+                t('datasource.prereqMemberDesc')) }}</span>
+            </li>
+          </ol>
+          <a
+            v-if="currentDef.permissionPageUrl"
+            :href="currentDef.permissionPageUrl"
+            target="_blank"
+            rel="noopener"
+            class="doc-link ds-setup-guide__link"
+          >
+            {{ t(`datasource.prereqOpenConsole_${form.type}`, t('datasource.prereqOpenConsole')) }}
+            <t-icon name="link" class="link-icon" />
+          </a>
+        </div>
       </div>
-      <div v-if="prereqExpanded && currentDef" class="ds-prereq-detail">
-        <div class="ds-prereq-item">
-          <span class="ds-prereq-num">1</span>
-          <div>
-            <div class="ds-prereq-item-title">{{ t(`datasource.prereqStep1Brief_${form.type}`,
-              t('datasource.prereqBotBrief')) }}</div>
-            <div class="ds-prereq-item-desc">{{ t(`datasource.prereqStep1Desc_${form.type}`,
-              t('datasource.prereqBotDesc')) }}</div>
+
+      <section class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.sectionBasic') }}</h4>
+
+        <div v-if="currentDef?.docUrl" class="inline-alert">
+          <t-icon name="info-circle-filled" class="inline-alert__icon" />
+          <span class="inline-alert__text">{{ t('datasource.docHint') }}</span>
+          <a
+            :href="currentDef.docUrl"
+            target="_blank"
+            rel="noopener"
+            class="inline-alert__action doc-link"
+          >
+            {{ t('datasource.openDoc') }}
+            <t-icon name="link" class="link-icon" />
+          </a>
+        </div>
+
+        <div class="form-item">
+          <label class="form-label required">{{ t('datasource.nameLabel') }}</label>
+          <t-input v-model="form.name" :placeholder="t('datasource.namePlaceholder')" />
+        </div>
+      </section>
+
+      <section v-if="form.type === 'rss'" class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.field.feedUrls') }}</h4>
+        <div class="form-item">
+          <label class="form-label required">{{ t('datasource.field.feedUrls') }}</label>
+          <t-textarea
+            v-model="form.config.settings.feed_urls"
+            placeholder="https://example.com/feed.xml"
+            :autosize="{ minRows: 2, maxRows: 6 }"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="form-desc">{{ t('datasource.field.feedUrlsHint') }}</p>
+        </div>
+      </section>
+
+      <section class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.credentialsLabel') }}</h4>
+
+        <div v-if="isEdit && credentialsConfigured && !replaceCredentialsMode" class="form-item">
+          <div
+            class="credential-faux-input"
+            :class="{ 'is-confirm-remove': pendingRemoveCredentials }"
+            :title="pendingRemoveCredentials ? '' : t('credential.configured')"
+          >
+            <template v-if="pendingRemoveCredentials">
+              <t-icon name="error-circle-filled" class="credential-status-icon warn" />
+              <span class="credential-faux-text danger">{{ t('credential.confirmRemovePrompt') }}</span>
+              <div class="credential-actions">
+                <t-button size="small" variant="text" @click="cancelPendingRemoveCredentials">
+                  {{ t('common.cancel') }}
+                </t-button>
+                <span class="action-divider" />
+                <t-button
+                  size="small"
+                  variant="text"
+                  theme="danger"
+                  :loading="removingCredentials"
+                  @click="confirmRemoveCredentials"
+                >
+                  {{ t('credential.confirmRemove') }}
+                </t-button>
+              </div>
+            </template>
+            <template v-else>
+              <t-icon name="check-circle-filled" class="credential-status-icon success" />
+              <span class="credential-faux-text">{{ t('credential.configured') }}</span>
+              <div class="credential-actions">
+                <t-button size="small" variant="text" @click="enterReplaceCredentials">
+                  {{ t('credential.update') }}
+                </t-button>
+                <span class="action-divider" />
+                <t-button size="small" variant="text" theme="danger" @click="requestRemoveCredentials">
+                  {{ t('credential.remove') }}
+                </t-button>
+              </div>
+            </template>
           </div>
         </div>
-        <div class="ds-prereq-item">
-          <span class="ds-prereq-num">2</span>
-          <div>
-            <div class="ds-prereq-item-title">{{ t(`datasource.prereqStep2Brief_${form.type}`,
-              t('datasource.prereqPermBrief')) }}</div>
-            <div class="ds-prereq-item-desc">
-              <template v-if="!t(`datasource.prereqStep2Desc_${form.type}`)">
-                <code v-for="perm in currentDef.requiredPermissions" :key="perm" class="ds-perm-tag">{{ perm }}</code>
-              </template>
-              <template v-else>{{ t(`datasource.prereqStep2Desc_${form.type}`) }}</template>
+
+        <div
+          v-else-if="isEdit && !credentialsConfigured && !replaceCredentialsMode"
+          class="form-item"
+        >
+          <div
+            class="credential-faux-input is-empty"
+            @click="enterReplaceCredentials"
+          >
+            <t-icon name="lock-on" class="credential-status-icon muted" />
+            <span class="credential-faux-text muted">{{ t('credential.unconfigured') }}</span>
+            <div class="credential-actions">
+              <t-button size="small" variant="text" theme="primary" @click.stop="enterReplaceCredentials">
+                {{ t('credential.configure') }}
+              </t-button>
             </div>
           </div>
         </div>
-        <div class="ds-prereq-item">
-          <span class="ds-prereq-num">3</span>
-          <div>
-            <div class="ds-prereq-item-title">{{ t(`datasource.prereqStep3Brief_${form.type}`,
-              t('datasource.prereqMemberBrief')) }}</div>
-            <div class="ds-prereq-item-desc">{{ t(`datasource.prereqStep3Desc_${form.type}`,
-              t('datasource.prereqMemberDesc'))
-              }}</div>
+
+        <template v-else-if="credentialsInputVisible">
+          <div v-if="form.type === 'confluence'" class="form-item">
+            <label class="form-label">{{ t('datasource.field.confluenceEdition') }}</label>
+            <t-select v-model="form.config.credentials.edition">
+              <t-option value="server" :label="t('datasource.field.confluenceEditionServer')" />
+              <t-option value="cloud" :label="t('datasource.field.confluenceEditionCloud')" />
+            </t-select>
           </div>
-        </div>
-        <a :href="currentDef.permissionPageUrl" target="_blank" rel="noopener" class="doc-link ds-prereq-link">
-          {{ t(`datasource.prereqOpenConsole_${form.type}`, t('datasource.prereqOpenConsole')) }}
-          <t-icon name="link" class="link-icon" />
-        </a>
-      </div>
+          <div
+            v-for="field in displayedCredentialFields"
+            :key="field.key"
+            class="form-item"
+          >
+            <template v-if="field.fieldType === 'custom_headers'">
+              <div class="custom-headers-header">
+                <label class="form-label" style="margin-bottom: 0;">{{ t(field.labelKey) }}</label>
+                <t-button variant="text" size="small" theme="primary" @click="addRssAuthHeader">
+                  <template #icon><t-icon name="add" /></template>
+                  {{ t('model.editor.customHeadersAdd') }}
+                </t-button>
+              </div>
+              <p v-if="field.hintKey" class="form-desc custom-headers-desc">{{ t(field.hintKey) }}</p>
+              <div v-if="rssAuthHeaders.length > 0" class="custom-headers-list">
+                <div v-for="(item, idx) in rssAuthHeaders" :key="idx" class="custom-header-row">
+                  <t-input
+                    v-model="item.key"
+                    :placeholder="t('model.editor.customHeadersKeyPlaceholder')"
+                    class="custom-header-key"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <t-input
+                    v-model="item.value"
+                    :placeholder="t('model.editor.customHeadersValuePlaceholder')"
+                    class="custom-header-value"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <t-button
+                    variant="text"
+                    shape="square"
+                    size="small"
+                    class="custom-header-remove"
+                    :aria-label="t('common.delete')"
+                    @click="removeRssAuthHeader(idx)"
+                  >
+                    <t-icon name="close" />
+                  </t-button>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+              <label class="form-label" :class="{ required: !field.optional }">
+                {{ t(field.labelKey) }}
+              </label>
+              <t-textarea
+                v-if="field.multiline"
+                v-model="form.config.credentials[field.key]"
+                :placeholder="field.placeholder || t('credential.inputPlaceholder')"
+                :autosize="{ minRows: 2, maxRows: 6 }"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <t-input
+                v-else
+                v-model="form.config.credentials[field.key]"
+                :placeholder="field.placeholder || t('credential.inputPlaceholder')"
+                :type="field.secret ? 'password' : 'text'"
+                autocomplete="off"
+                spellcheck="false"
+              >
+                <template v-if="field.secret" #prefix-icon><t-icon name="lock-on" /></template>
+              </t-input>
+              <p v-if="field.hintKey" class="form-desc">{{ t(field.hintKey) }}</p>
+            </template>
+          </div>
+          <div v-if="isEdit && replaceCredentialsMode" class="credential-edit-actions">
+            <t-button size="small" variant="text" @click="cancelReplaceCredentials">
+              {{ t('common.cancel') }}
+            </t-button>
+          </div>
+        </template>
+      </section>
+    </template>
 
+    <section v-if="step === 1 && form.type === 'nextcloud'" class="setting-drawer__section">
       <div class="form-item">
-        <label class="form-label">{{ t('datasource.nameLabel') }}</label>
-        <t-input v-model="form.name" :placeholder="t('datasource.namePlaceholder')" />
+        <label class="form-label">{{ t('datasource.nextcloud.includeExtensions') }}</label>
+        <t-input v-model="form.config.settings.include_extensions" placeholder=".pdf, .md" />
       </div>
-
-      <div v-if="currentDef?.docUrl" class="ds-doc-link">
-        <t-icon name="info-circle" size="14px" />
-        <span>{{ t('datasource.docHint') }}</span>
-        <a :href="currentDef.docUrl" target="_blank" rel="noopener" class="doc-link">
-          {{ currentDef.docUrl }}
-          <t-icon name="link" class="link-icon" />
-        </a>
+      <div class="form-item">
+        <label class="form-label">{{ t('datasource.nextcloud.excludeExtensions') }}</label>
+        <t-input v-model="form.config.settings.exclude_extensions" placeholder=".html" />
       </div>
-
-      <!--
-        Credentials card (edit mode). DataSource credentials are a
-        per-connector atomic set (OAuth pair, GitHub PAT + username, etc.),
-        so unlike MCP/Model/WebSearch the credential subresource exposes
-        only one logical field. The UI here mirrors <CredentialResource>'s
-        three-state behavior (configured / unconfigured / editing) but with
-        the connector-specific form embedded inline when editing.
-      -->
-      <div v-if="isEdit && credentialsConfigured && !replaceCredentialsMode" class="form-item credential-card">
-        <div class="credential-card-row">
-          <span class="credential-badge">
-            <t-icon name="check-circle-filled" size="14px" />
-            {{ t('credential.configured') }}
-          </span>
-          <t-button variant="text" theme="primary" @click="replaceCredentialsMode = true">
-            {{ t('credential.update') }}
-          </t-button>
-          <t-button variant="text" theme="danger" @click="removeCredentials">
-            {{ t('credential.remove') }}
-          </t-button>
-        </div>
-      </div>
-
-      <template v-if="credentialsInputVisible">
-        <div v-for="field in currentDef?.fields || []" :key="field.key" class="form-item">
-          <label class="form-label">
-            {{ t(field.labelKey) }}
-            <span v-if="!field.optional" class="required-mark">*</span>
-          </label>
-          <t-input v-model="form.config.credentials[field.key]" :placeholder="field.placeholder"
-            :type="field.secret ? 'password' : 'text'" />
-          <div v-if="field.hintKey" class="form-hint">{{ t(field.hintKey) }}</div>
-        </div>
-
-        <div v-if="isEdit && replaceCredentialsMode" class="form-item">
-          <t-button variant="text" @click="replaceCredentialsMode = false; form.config.credentials = {}">
-            {{ t('common.cancel') }}
-          </t-button>
-        </div>
-      </template>
-
-      <div class="form-actions">
-        <t-button variant="outline" :loading="testing" @click="testConnection">
-          {{ t('datasource.testConnection') }}
-        </t-button>
-        <span v-if="testResult === 'success'" class="test-ok">
-          <t-icon name="check-circle-filled" size="14px" />
-          {{ t('datasource.connected') }}
-        </span>
-      </div>
-      <div v-if="testResult === 'error'" class="test-error-box">
-        <t-icon name="error-circle-filled" size="16px" />
-        <div class="test-error-content">
-          <span class="test-error-title">{{ t('datasource.connectionFailed') }}</span>
-          <span v-if="testErrorMsg" class="test-error-detail">{{ testErrorMsg }}</span>
-        </div>
-      </div>
-
-      <div class="ds-dialog-footer">
-        <t-button variant="outline" @click="step = 0" v-if="!isEdit">{{ t('datasource.back') }}</t-button>
-        <t-button theme="primary" @click="nextStep">{{ t('datasource.next') }}</t-button>
-      </div>
-    </div>
+      <p class="form-desc">{{ t('datasource.nextcloud.extensionsHint') }}</p>
+    </section>
 
     <!-- Step 2: Select resources -->
-    <div v-if="step === 2" class="ds-step-content">
-      <p class="form-tip">{{ t('datasource.resourceHint') }}</p>
-      <div v-if="loadingResources" style="text-align:center;padding:20px"><t-loading /></div>
-      <div v-else-if="resources.length > 0" class="ds-resource-list">
-        <div v-for="{ resource: r, depth } in visibleTree" :key="r.external_id"
-          :class="['ds-resource-row', { selected: checkStates.get(r.external_id) === 'checked' }]"
-          :style="{ paddingLeft: `${12 + depth * 24}px` }" @click="toggleResource(r.external_id)">
-          <span v-if="r.has_children" class="ds-expand-btn" @click.stop="toggleExpand(r.external_id)">
-            <t-icon :name="expandedResourceIds.has(r.external_id) ? 'chevron-down' : 'chevron-right'" size="16px" />
-          </span>
-          <span v-else class="ds-expand-placeholder" />
-          <t-checkbox :checked="checkStates.get(r.external_id) === 'checked'"
-            :indeterminate="checkStates.get(r.external_id) === 'indeterminate'" @click.stop
-            @change="toggleResource(r.external_id)" />
-          <div class="ds-resource-info">
-            <div class="ds-resource-name">{{ r.name || t('datasource.untitled') }}</div>
-            <div class="ds-resource-meta">
-              <span class="ds-resource-type">{{ resourceTypeLabel(r.type) }}</span>
-              <span v-if="r.description" class="ds-resource-desc">{{ r.description }}</span>
+    <section v-if="step === 2" class="setting-drawer__section ds-resource-section">
+      <template v-if="isGitLabConnector(form.type)">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.gitlab.projects') }}</h4>
+        <p class="ds-resource-hint">{{ t('datasource.gitlab.projectsHint') }}</p>
+        <div class="gitlab-project-list">
+          <div v-for="(project, index) in gitlabProjects" :key="index" class="gitlab-project-row">
+            <div class="gitlab-project-row__header">
+              <strong>{{ t('datasource.gitlab.project') }} {{ index + 1 }}</strong>
+              <t-button variant="text" size="small" theme="danger" @click="removeGitLabProject(index)"><t-icon name="delete" /></t-button>
             </div>
+            <label class="form-label required">{{ t('datasource.gitlab.projectId') }}</label>
+            <t-input v-model="project.project_id" :placeholder="t('datasource.gitlab.projectIdPlaceholder')" />
+            <label class="form-label">{{ t('datasource.gitlab.ref') }}</label>
+            <t-input v-model="project.ref" :placeholder="t('datasource.gitlab.refPlaceholder')" />
+            <label class="form-label">{{ t('datasource.gitlab.paths') }}</label>
+            <t-textarea v-model="project.pathsText" :placeholder="t('datasource.gitlab.pathsPlaceholder')" :autosize="{ minRows: 2, maxRows: 5 }" />
           </div>
+          <t-button variant="outline" @click="addGitLabProject"><template #icon><t-icon name="add" /></template>{{ t('datasource.gitlab.addProject') }}</t-button>
+        </div>
+      </template>
+      <template v-else>
+      <h4 class="setting-drawer__section-title">{{ t('datasource.step.resources') }}</h4>
+      <p class="ds-resource-hint">{{ t('datasource.resourceHint') }}</p>
+
+      <!-- Drive (云盘) root input: shown alongside the tree (not as a switch).
+           The user supplies a folder_token (or a Drive folder URL) and clicks
+           "load"; the tree below stays as a placeholder until load succeeds.
+           Other connectors skip this and go straight to the tree. -->
+      <div v-if="isDriveConnector(form.type)" class="drive-folder-input">
+        <label class="drive-folder-input__label required">
+          {{ t('datasource.drive.folderTokenLabel') }}
+          <t-tooltip :content="t('datasource.drive.rootNotSupportedHint')" placement="top">
+            <t-icon name="help-circle" class="drive-folder-input__help" />
+          </t-tooltip>
+        </label>
+        <div class="drive-folder-input__row">
+          <t-input
+            v-model="driveFolderToken"
+            :placeholder="t('datasource.drive.folderTokenPlaceholder')"
+            :status="driveFolderTokenError ? 'error' : 'default'"
+            :tips="driveFolderTokenError ? driveFolderTokenError : t('datasource.drive.shareHint')"
+            clearable
+            @enter="loadDriveRoot"
+            @input="driveFolderTokenError = ''"
+          />
+          <t-button theme="primary" :loading="loadingResources" @click="loadDriveRoot">
+            {{ t('datasource.drive.load') }}
+          </t-button>
         </div>
       </div>
-      <!-- Empty state: concise guide -->
+
+      <!-- Drive placeholder before the first load: the tree cannot render until
+           a folder_token is supplied and loaded. Non-Drive connectors never hit
+           this branch. -->
+      <div
+        v-if="isDriveConnector(form.type) && !driveRootLoaded && !loadingResources"
+        class="ds-resource-empty ds-drive-placeholder"
+      >
+        <p class="ds-empty-title">{{ t('datasource.drive.placeholderTitle') }}</p>
+        <p class="ds-empty-desc">{{ t('datasource.drive.placeholderDesc') }}</p>
+      </div>
+
+      <div v-else-if="loadingResources" class="ds-loading-center"><t-loading /></div>
+      <div v-else-if="resources.length > 0" class="resource-picker">
+        <div class="resource-picker__toolbar">
+          <span class="resource-picker__count">
+            {{ t('knowledgeBase.selectedCount', { count: selectedResourceCount }) }}
+          </span>
+          <div v-if="hasExpandableNodes" class="resource-picker__actions">
+            <button type="button" class="resource-picker__action" @click="expandAllNodes">
+              {{ t('knowledgeStages.expandBranch') }}
+            </button>
+            <span class="resource-picker__action-sep" aria-hidden="true">·</span>
+            <button type="button" class="resource-picker__action" @click="collapseAllNodes">
+              {{ t('knowledgeStages.collapseBranch') }}
+            </button>
+          </div>
+        </div>
+        <div class="resource-picker__list" role="tree">
+          <template
+            v-for="{ resource: r, depth, noticeAfter } in visibleTree"
+            :key="noticeAfter ? `${r.external_id}__notice` : r.external_id"
+          >
+          <div
+            v-if="!noticeAfter"
+            class="resource-picker__row"
+            :class="{
+              'is-checked': resourceRowState(r.external_id) === 'checked',
+              'is-indeterminate': resourceRowState(r.external_id) === 'indeterminate',
+            }"
+            :style="{ '--depth': depth }"
+            role="treeitem"
+            :aria-expanded="r.has_children ? expandedResourceIds.has(r.external_id) : undefined"
+            @click="toggleResource(r.external_id)"
+          >
+            <button
+              v-if="r.has_children"
+              type="button"
+              class="resource-picker__expand"
+              :aria-label="expandedResourceIds.has(r.external_id)
+                ? t('knowledgeStages.collapseBranch')
+                : t('knowledgeStages.expandBranch')"
+              @click.stop="toggleExpand(r.external_id)"
+            >
+              <t-loading v-if="loadingChildrenIds.has(r.external_id)" size="12px" />
+              <t-icon
+                v-else
+                :name="expandedResourceIds.has(r.external_id) ? 'chevron-down' : 'chevron-right'"
+                size="12px"
+              />
+            </button>
+            <span v-else class="resource-picker__expand-spacer" aria-hidden="true" />
+            <span
+              class="resource-picker__check"
+              :class="{
+                'is-checked': resourceRowState(r.external_id) === 'checked',
+                'is-indeterminate': resourceRowState(r.external_id) === 'indeterminate',
+              }"
+              aria-hidden="true"
+            >
+              <svg
+                v-if="resourceRowState(r.external_id) === 'checked'"
+                width="10"
+                height="10"
+                viewBox="0 0 12 12"
+                fill="none"
+              >
+                <path
+                  d="M10 3L4.5 8.5L2 6"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+            <span class="resource-picker__icon" aria-hidden="true">
+              <t-icon :name="resourceIconName(r)" size="16px" />
+            </span>
+            <span class="resource-picker__label">
+              <span class="resource-picker__name" :title="r.name || t('datasource.untitled')">
+                {{ r.name || t('datasource.untitled') }}
+              </span>
+              <span
+                v-if="shouldShowResourceType(r.type)"
+                class="resource-picker__type"
+              >{{ resourceTypeLabel(r.type) }}</span>
+            </span>
+          </div>
+          <p
+            v-else
+            class="resource-picker__notice"
+            :style="{ '--depth': depth }"
+          >
+            {{ t('datasource.confluence.cloudFolderLimitation') }}
+          </p>
+          </template>
+        </div>
+      </div>
       <div v-else class="ds-resource-empty">
         <t-icon name="info-circle" size="32px" style="color: var(--td-warning-color); margin-bottom: 8px;" />
         <p class="ds-empty-title">{{ t('datasource.noResources') }}</p>
@@ -795,98 +2077,234 @@ const stepTitles = computed(() => [
           </div>
         </div>
         <div class="ds-empty-actions">
-          <t-button variant="outline" size="small" @click="loadResources">
+          <button type="button" class="ds-empty-retry" @click="loadResources">
             {{ t('datasource.retryLoadResources') }}
-          </t-button>
-          <a v-if="currentDef?.permissionDocUrl" :href="currentDef.permissionDocUrl" target="_blank" rel="noopener"
-            class="doc-link">
+          </button>
+          <a
+            v-if="currentDef?.permissionDocUrl"
+            :href="currentDef.permissionDocUrl"
+            target="_blank"
+            rel="noopener"
+            class="doc-link"
+          >
             {{ t('datasource.permissionDocLink') }}
             <t-icon name="link" class="link-icon" />
           </a>
         </div>
       </div>
-
-      <div class="ds-dialog-footer">
-        <t-button variant="outline" @click="prevStep">{{ t('datasource.back') }}</t-button>
-        <t-button theme="primary" @click="nextStep">{{ t('datasource.next') }}</t-button>
-      </div>
-    </div>
+      </template>
+    </section>
 
     <!-- Step 3: Sync strategy -->
-    <div v-if="step === 3" class="ds-step-content">
-      <div class="form-item">
-        <label class="form-label">{{ t('datasource.syncScheduleLabel') }}</label>
+    <template v-if="step === 3">
+      <section class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.syncScheduleLabel') }}</h4>
         <t-select v-model="form.sync_schedule">
           <t-option v-for="p in schedulePresets" :key="p.value" :value="p.value" :label="p.label" />
         </t-select>
-      </div>
+      </section>
 
-      <div class="form-item">
-        <label class="form-label">{{ t('datasource.syncModeLabel') }}</label>
-        <t-radio-group v-model="form.sync_mode">
-          <t-radio-button value="incremental">{{ t('datasource.syncMode.incremental') }}</t-radio-button>
-          <t-radio-button value="full">{{ t('datasource.syncMode.full') }}</t-radio-button>
-        </t-radio-group>
-      </div>
+      <section class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.syncModeLabel') }}</h4>
+        <div class="form-item form-item--flat">
+          <div class="option-group" role="radiogroup" :aria-label="t('datasource.syncModeLabel')">
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': form.sync_mode === 'incremental' }"
+              role="radio"
+              :aria-checked="form.sync_mode === 'incremental'"
+              @click="form.sync_mode = 'incremental'"
+            >
+              {{ t('datasource.syncMode.incremental') }}
+            </button>
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': form.sync_mode === 'full' }"
+              role="radio"
+              :aria-checked="form.sync_mode === 'full'"
+              @click="form.sync_mode = 'full'"
+            >
+              {{ t('datasource.syncMode.full') }}
+            </button>
+          </div>
+        </div>
 
-      <div class="form-item">
-        <label class="form-label">{{ t('datasource.conflictLabel') }}</label>
-        <t-radio-group v-model="form.conflict_strategy">
-          <t-radio-button value="overwrite">{{ t('datasource.conflict.overwrite') }}</t-radio-button>
-          <t-radio-button value="skip">{{ t('datasource.conflict.skip') }}</t-radio-button>
-        </t-radio-group>
-      </div>
+        <div class="form-item form-item--flat">
+          <label class="form-label">{{ t('datasource.conflictLabel') }}</label>
+          <div class="option-group" role="radiogroup" :aria-label="t('datasource.conflictLabel')">
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': form.conflict_strategy === 'overwrite' }"
+              role="radio"
+              :aria-checked="form.conflict_strategy === 'overwrite'"
+              @click="form.conflict_strategy = 'overwrite'"
+            >
+              {{ t('datasource.conflict.overwrite') }}
+            </button>
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': form.conflict_strategy === 'skip' }"
+              role="radio"
+              :aria-checked="form.conflict_strategy === 'skip'"
+              @click="form.conflict_strategy = 'skip'"
+            >
+              {{ t('datasource.conflict.skip') }}
+            </button>
+          </div>
+        </div>
 
-      <div class="form-item">
-        <t-checkbox v-model="form.sync_deletions">{{ t('datasource.syncDeletions') }}</t-checkbox>
-      </div>
+        <div v-if="isFeishuFamilyConnector(form.type)" class="form-item form-item--flat">
+          <label class="form-label">{{ t('datasource.parseModeLabel') }}</label>
+          <div class="option-group" role="radiogroup" :aria-label="t('datasource.parseModeLabel')">
+            <button
+              v-if="isEdit"
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': feishuParseMode === '' }"
+              role="radio"
+              :aria-checked="feishuParseMode === ''"
+              @click="feishuParseMode = ''"
+            >
+              {{ t('datasource.parseMode.inherit') }}
+            </button>
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': feishuParseMode === 'blocks' }"
+              role="radio"
+              :aria-checked="feishuParseMode === 'blocks'"
+              @click="feishuParseMode = 'blocks'"
+            >
+              {{ t('datasource.parseMode.blocks') }}
+            </button>
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': feishuParseMode === 'export' }"
+              role="radio"
+              :aria-checked="feishuParseMode === 'export'"
+              @click="feishuParseMode = 'export'"
+            >
+              {{ t('datasource.parseMode.export') }}
+            </button>
+          </div>
+          <p class="form-desc">{{ t('datasource.parseModeHint') }}</p>
+        </div>
 
-      <div class="ds-dialog-footer">
-        <t-button variant="outline" @click="prevStep">{{ t('datasource.back') }}</t-button>
-        <t-button theme="primary" :loading="submitting" @click="handleSubmit">
-          {{ isEdit ? t('datasource.save') : t('datasource.createAndSync') }}
-        </t-button>
-      </div>
-    </div>
-  </t-dialog>
+        <div class="form-item form-item--flat">
+          <t-checkbox v-model="form.sync_deletions">{{ t('datasource.syncDeletions') }}</t-checkbox>
+        </div>
+      </section>
+
+      <!-- DingTalk only: which extra node types the connector may ingest. -->
+      <section v-if="form.type === 'dingtalk'" class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.dingtalkIngestLabel') }}</h4>
+        <div class="form-item form-item--flat">
+          <t-checkbox v-model="dingtalkIncludeUploadedFiles">
+            {{ t('datasource.dingtalkIncludeUploadedFiles') }}
+          </t-checkbox>
+        </div>
+        <p class="form-desc">{{ t('datasource.dingtalkIncludeUploadedFilesHint') }}</p>
+      </section>
+
+      <!-- Yuque only: how synced documents are laid out, and what may be admitted. -->
+      <section v-if="form.type === 'yuque'" class="setting-drawer__section">
+        <h4 class="setting-drawer__section-title">{{ t('datasource.yuqueFolderModeLabel') }}</h4>
+        <div class="form-item form-item--flat">
+          <div
+            class="option-group"
+            role="radiogroup"
+            :aria-label="t('datasource.yuqueFolderModeLabel')"
+          >
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': yuqueFolderMode === 'toc' }"
+              role="radio"
+              :aria-checked="yuqueFolderMode === 'toc'"
+              @click="yuqueFolderMode = 'toc'"
+            >
+              {{ t('datasource.yuqueFolderModeToc') }}
+            </button>
+            <button
+              type="button"
+              class="option-pill"
+              :class="{ 'is-active': yuqueFolderMode === 'none' }"
+              role="radio"
+              :aria-checked="yuqueFolderMode === 'none'"
+              @click="yuqueFolderMode = 'none'"
+            >
+              {{ t('datasource.yuqueFolderModeNone') }}
+            </button>
+          </div>
+        </div>
+        <p class="form-desc">{{ t('datasource.yuqueFolderModeHint') }}</p>
+
+        <div class="form-item form-item--flat">
+          <t-checkbox v-model="yuqueTOCOnly" :disabled="yuqueFolderMode !== 'toc'">
+            {{ t('datasource.yuqueTOCOnly') }}
+          </t-checkbox>
+        </div>
+        <p class="form-desc">{{ t('datasource.yuqueTOCOnlyHint') }}</p>
+      </section>
+    </template>
+  </SettingDrawer>
 </template>
 
-<style scoped>
+<style scoped lang="less">
+@import './datasource-surface.less';
 .ds-steps {
   display: flex;
-  gap: 4px;
-  margin-bottom: 24px;
-  border-bottom: 1px solid var(--td-border-level-2-color);
-  padding-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--td-component-stroke);
+  padding-bottom: 14px;
 }
 
 .ds-step {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 1;
-  font-size: 13px;
+  min-width: 0;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-placeholder);
+}
+
+.ds-step-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-step.active {
   color: var(--td-brand-color);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .ds-step.done {
-  color: var(--td-success-color);
+  color: var(--td-text-color-secondary);
+  font-weight: 500;
 }
 
 .ds-step-num {
+  flex-shrink: 0;
   width: 22px;
   height: 22px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  border: 1px solid currentColor;
+  font-size: var(--app-text-sm);
+  font-weight: 600;
+  border: 1px solid var(--td-component-stroke);
+  color: var(--td-text-color-placeholder);
+  background: transparent;
 }
 
 .ds-step.active .ds-step-num {
@@ -896,33 +2314,34 @@ const stepTitles = computed(() => [
 }
 
 .ds-step.done .ds-step-num {
-  background: var(--td-success-color);
-  color: #fff;
-  border-color: var(--td-success-color);
+  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+  color: var(--td-brand-color);
+  border-color: transparent;
 }
 
-.ds-step-content {
-  min-height: 200px;
+.ds-step-check {
+  font-size: var(--app-text-base);
+}
+
+.ds-loading-center {
+  text-align: center;
+  padding: 24px;
 }
 
 /* --- Step 0: type cards --- */
 .ds-type-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
 }
 
 .ds-type-card {
-  border: 1px solid var(--td-border-level-2-color);
-  border-radius: 8px;
+  .ds-surface-card--interactive();
   padding: 14px;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.ds-type-card:hover:not(.disabled) {
-  border-color: var(--td-brand-color);
-  background: var(--td-brand-color-light);
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
 
 .ds-type-card.disabled {
@@ -938,12 +2357,12 @@ const stepTitles = computed(() => [
 }
 
 .ds-type-name {
-  font-size: 13px;
+  font-size: var(--app-text-md);
   font-weight: 600;
 }
 
 .ds-type-soon {
-  font-size: 10px;
+  font-size: var(--app-text-2xs);
   color: var(--td-text-color-placeholder);
   background: var(--td-bg-color-component);
   padding: 1px 6px;
@@ -951,289 +2370,582 @@ const stepTitles = computed(() => [
 }
 
 .ds-type-desc {
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-secondary);
   line-height: 1.5;
 }
 
-/* --- Step 1: collapsible prereq --- */
-.ds-prereq-bar {
+/* --- Step 1: setup guide + credentials (align with ModelEditor / CredentialResource) --- */
+.inline-alert {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  margin-bottom: 16px;
-  border-radius: 6px;
-  background: var(--td-warning-color-1);
-  color: var(--td-warning-color);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s;
+  gap: 8px;
+  font-size: var(--app-text-md);
+  line-height: 1.5;
+  color: var(--td-text-color-secondary);
+  flex-wrap: wrap;
 }
 
-.ds-prereq-bar:hover {
-  background: var(--td-warning-color-2);
-}
-
-.ds-prereq-arrow {
-  margin-left: auto;
-}
-
-.ds-prereq-detail {
-  border: 1px solid var(--td-border-level-2-color);
-  border-radius: 8px;
-  padding: 14px;
-  margin-bottom: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ds-prereq-item {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.ds-prereq-num {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--td-brand-color);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.inline-alert__icon {
+  font-size: var(--app-text-lg);
   flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.ds-prereq-item-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--td-text-color-primary);
-  line-height: 20px;
-}
-
-.ds-prereq-item-desc {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  margin-top: 2px;
-  line-height: 1.5;
-}
-
-.ds-perm-tag {
-  font-size: 11px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--td-bg-color-component);
-  color: var(--td-text-color-secondary);
-  font-family: var(--app-font-family-mono);
-  margin-right: 4px;
-}
-
-.ds-prereq-link {
-  font-size: 12px;
-  padding-left: 30px;
-}
-
-/* --- Step 1: doc link & form --- */
-.ds-doc-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  background: var(--td-bg-color-component);
-  padding: 8px 12px;
-  border-radius: 6px;
-  margin-bottom: 16px;
-}
-
-.ds-doc-link .doc-link {
-  word-break: break-all;
-}
-
-.form-item {
-  margin-bottom: 16px;
-}
-
-.form-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 6px;
-  color: var(--td-text-color-primary);
-}
-
-.required-mark {
-  color: var(--td-error-color);
-  margin-left: 2px;
-}
-
-/* Destructive-action checkbox — red label, matches the other 3 dialogs. */
-.clear-credential :deep(.t-checkbox__label) {
-  color: var(--td-error-color);
-  font-size: 13px;
-}
-
-.form-tip {
-  font-size: 12px;
   color: var(--td-text-color-placeholder);
-  margin: 4px 0 12px;
 }
 
-.form-hint {
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-  margin-top: 6px;
-  line-height: 1.5;
-}
-
-.form-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.test-ok {
-  color: var(--td-success-color);
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.test-error-box {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: var(--td-error-color-1);
-  color: var(--td-error-color);
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.test-error-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.inline-alert__text {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.test-error-title {
+.inline-alert__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--app-text-md);
   font-weight: 500;
+  color: var(--td-brand-color);
+  white-space: nowrap;
+  transition: color var(--app-motion-fast) ease;
 }
 
-.test-error-detail {
-  font-size: 12px;
-  color: var(--td-error-color);
-  opacity: 0.8;
-  word-break: break-word;
+.inline-alert__action:hover {
+  color: var(--td-brand-color-active);
 }
 
-.ds-dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--td-border-level-2-color);
-}
-
-/* --- Step 2: resource list --- */
-.ds-resource-list {
-  max-height: 400px;
-  overflow-y: auto;
+.ds-setup-guide {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.ds-expand-btn {
+.ds-setup-guide--standalone {
+  margin-bottom: 4px;
+}
+
+.ds-setup-guide__toggle {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  cursor: pointer;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--app-text-md);
+  line-height: 1.5;
   color: var(--td-text-color-secondary);
-  flex-shrink: 0;
-  transition: background 0.15s;
-}
-
-.ds-expand-btn:hover {
-  background: var(--td-bg-color-component-hover);
-}
-
-.ds-expand-placeholder {
-  width: 20px;
-  flex-shrink: 0;
-}
-
-.ds-resource-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  text-align: left;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color var(--app-motion-instant) ease;
 }
 
-.ds-resource-row:hover {
-  background: var(--td-bg-color-container-hover);
+.ds-setup-guide__toggle:hover,
+.ds-setup-guide__toggle:focus-visible {
+  color: var(--td-text-color-primary);
+  outline: none;
 }
 
-.ds-resource-row.selected {
-  border-color: var(--td-brand-color);
-  background: none;
+.ds-setup-guide__icon {
+  flex-shrink: 0;
+  color: var(--td-text-color-placeholder);
 }
 
-.ds-resource-info {
+.ds-setup-guide__summary {
   flex: 1;
   min-width: 0;
 }
 
-.ds-resource-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--td-text-color-primary);
-  line-height: 1.4;
+.ds-setup-guide__chevron {
+  flex-shrink: 0;
+  color: var(--td-text-color-placeholder);
 }
 
-.ds-resource-meta {
+.ds-setup-guide__body {
+  padding: 0 0 0 23px;
+}
+
+.ds-setup-steps {
+  margin: 10px 0 0;
+  padding: 0 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ds-setup-step {
+  font-size: var(--app-text-md);
+  line-height: 1.5;
+  color: var(--td-text-color-primary);
+}
+
+.ds-setup-step__title {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.ds-setup-step__desc {
+  display: block;
+  color: var(--td-text-color-secondary);
+}
+
+.ds-perm-tag {
+  display: inline-block;
+  font-size: var(--app-text-xs);
+  padding: 1px 5px;
+  margin: 2px 4px 2px 0;
+  border-radius: 3px;
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-secondary);
+  font-family: var(--app-font-family-mono, ui-monospace, monospace);
+}
+
+.ds-setup-guide__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: var(--app-text-md);
+}
+
+.credential-faux-input {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  height: 32px;
+  padding: 0 4px 0 12px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-border);
+  border-radius: var(--app-radius-sm);
+  font-size: var(--app-text-md);
+  transition: border-color var(--app-motion-fast) ease, background-color var(--app-motion-fast) ease;
 }
 
-.ds-resource-type {
-  font-size: 11px;
-  padding: 0 5px;
-  border-radius: 3px;
-  background: var(--td-bg-color-component);
-  color: var(--td-text-color-placeholder);
-  line-height: 18px;
+.credential-faux-input:hover {
+  border-color: var(--td-brand-color-hover);
 }
 
-.ds-resource-desc {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
+.credential-faux-input.is-empty {
+  cursor: pointer;
+}
+
+.credential-faux-input.is-empty:hover {
+  background: var(--td-bg-color-container-hover);
+}
+
+.credential-faux-input.is-confirm-remove {
+  background: var(--td-error-color-light);
+  border-color: var(--td-error-color-focus);
+}
+
+.credential-faux-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--td-text-color-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.credential-faux-text.muted {
+  color: var(--td-text-color-placeholder);
+}
+
+.credential-faux-text.danger {
+  color: var(--td-error-color);
+  font-weight: 500;
+}
+
+.credential-status-icon {
+  flex-shrink: 0;
+  font-size: var(--app-text-xl);
+}
+
+.credential-status-icon.success {
+  color: var(--td-success-color);
+}
+
+.credential-status-icon.muted {
+  color: var(--td-text-color-placeholder);
+}
+
+.credential-status-icon.warn {
+  color: var(--td-error-color);
+}
+
+.credential-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.credential-actions :deep(.t-button--variant-text) {
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--app-text-sm);
+  border-radius: var(--app-radius-xs);
+}
+
+.action-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--td-component-stroke);
+  margin: 0 2px;
+}
+
+.credential-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.credential-edit-actions :deep(.t-button) {
+  height: 28px;
+  padding: 0 12px;
+  font-size: var(--app-text-sm);
+}
+
+.form-item {
+  margin-bottom: 0;
+}
+
+.form-item--flat {
+  margin-bottom: 0;
+}
+
+.form-item--flat :deep(.t-checkbox__label) {
+  font-size: var(--app-text-sm);
+  line-height: 1.5;
+  color: var(--td-text-color-secondary);
+}
+
+.form-label {
+  display: block;
+  font-size: var(--app-text-md);
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--td-text-color-primary);
+  line-height: 1.4;
+
+  &.required::before {
+    content: '*';
+    color: var(--td-error-color);
+    margin-right: 4px;
+    font-weight: 500;
+    line-height: 1;
+  }
+}
+
+.form-desc {
+  margin: 4px 0 0;
+  font-size: var(--app-text-sm);
+  line-height: 1.5;
+  color: var(--td-text-color-placeholder);
+}
+
+.status-icon {
+  font-size: var(--app-text-xl);
+  flex-shrink: 0;
+}
+
+.status-icon.available {
+  color: var(--td-brand-color);
+}
+
+.status-icon.unavailable {
+  color: var(--td-error-color);
+}
+
+.footer-test-message {
+  font-size: var(--app-text-sm);
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer-test-message.success {
+  color: var(--td-brand-color-active);
+}
+
+.footer-test-message.error {
+  color: var(--td-error-color);
+}
+
+/* --- Step 2: resource picker (compact flat tree, matches KB selector) --- */
+.ds-resource-section {
+  gap: 10px !important;
+}
+
+.ds-resource-hint {
+  margin: -8px 0 0;
+  font-size: var(--app-text-sm);
+  line-height: 1.5;
+  color: var(--td-text-color-placeholder);
+}
+
+/* Drive (云盘) root folder_token input - shown before the lazy-load tree. */
+.drive-folder-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--td-border-level-1-color);
+  border-radius: var(--app-radius-sm);
+  background: var(--td-bg-color-container);
+}
+
+.drive-folder-input__label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--app-text-md);
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+
+  /* 与 .form-label.required 一致的红星必填标记 */
+  &.required::before {
+    content: '*';
+    color: var(--td-error-color);
+    font-weight: 500;
+    line-height: 1;
+  }
+}
+
+.drive-folder-input__help {
+  font-size: var(--app-text-lg);
+  color: var(--td-text-color-placeholder);
+  cursor: help;
+
+  &:hover {
+    color: var(--td-text-color-secondary);
+  }
+}
+
+.drive-folder-input__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 20px
+}
+
+/* Drive tree placeholder: shown before the first successful load. */
+.ds-drive-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 120px;
+  padding: 24px 12px;
+  border: 1px dashed var(--td-border-level-2-color);
+  border-radius: var(--app-radius-sm);
+  background: var(--td-bg-color-page);
+  text-align: center;
+}
+
+.ds-drive-placeholder .ds-empty-title {
+  margin: 0;
+  font-size: var(--app-text-md);
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+}
+
+.ds-drive-placeholder .ds-empty-desc {
+  margin: 0;
+  font-size: var(--app-text-sm);
+  line-height: 1.5;
+  color: var(--td-text-color-placeholder);
+}
+
+.resource-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.resource-picker__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+}
+
+.resource-picker__count {
+  font-size: var(--app-text-sm);
+  color: var(--td-text-color-secondary);
+}
+
+.resource-picker__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.resource-picker__action {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--app-text-sm);
+  color: var(--td-text-color-placeholder);
+  cursor: pointer;
+  transition: color var(--app-motion-instant) ease;
+}
+
+.resource-picker__action:hover,
+.resource-picker__action:focus-visible {
+  color: var(--td-text-color-secondary);
+  outline: none;
+}
+
+.resource-picker__action-sep {
+  color: var(--td-text-color-disabled);
+  font-size: var(--app-text-sm);
+  user-select: none;
+}
+
+.resource-picker__list {
+  .ds-inset-panel();
+  min-height: 360px;
+  max-height: min(calc(100vh - 260px), 600px);
+  overflow-y: auto;
+  padding: 4px 6px;
+  overscroll-behavior: contain;
+}
+
+.resource-picker__row {
+  --depth: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px 16px 16px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 34px;
+  margin-bottom: 2px;
+  padding: 5px 8px 5px calc(8px + var(--depth) * 14px);
+  border-radius: var(--app-radius-sm);
+  cursor: pointer;
+  transition: background var(--app-motion-instant) ease;
+}
+
+.resource-picker__row:last-child {
+  margin-bottom: 0;
+}
+
+.resource-picker__row:hover,
+.resource-picker__row.is-checked,
+.resource-picker__row.is-indeterminate {
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+.resource-picker__expand,
+.resource-picker__expand-spacer {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.resource-picker__expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--app-radius-xs);
+  background: transparent;
+  color: var(--td-text-color-placeholder);
+  cursor: pointer;
+  transition: background var(--app-motion-instant) ease, color var(--app-motion-instant) ease;
+}
+
+.resource-picker__expand:hover,
+.resource-picker__expand:focus-visible {
+  background: color-mix(in srgb, var(--td-text-color-placeholder) 12%, transparent);
+  color: var(--td-text-color-secondary);
+  outline: none;
+}
+
+.resource-picker__check {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1.5px solid var(--td-component-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  transition: background var(--app-motion-instant) ease, border-color var(--app-motion-instant) ease;
+}
+
+.resource-picker__check.is-checked,
+.resource-picker__check.is-indeterminate {
+  background: var(--td-brand-color);
+  border-color: var(--td-brand-color);
+}
+
+.resource-picker__check.is-indeterminate::after {
+  content: '';
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: #fff;
+}
+
+.resource-picker__icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--td-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.resource-picker__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.resource-picker__name {
+  min-width: 0;
+  font-size: var(--app-text-md);
+  line-height: 1.4;
+  color: var(--td-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resource-picker__type {
+  flex-shrink: 0;
+  font-size: var(--app-text-2xs);
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--app-radius-xs);
+  color: var(--td-text-color-placeholder);
+  background: color-mix(in srgb, var(--td-text-color-placeholder) 8%, transparent);
+}
+
+.resource-picker__notice {
+  --depth: 0;
+  margin: 0 0 2px;
+  padding: 4px 8px 4px calc(8px + var(--depth) * 14px);
+  font-size: var(--app-text-xs);
+  line-height: 1.5;
+  color: var(--td-text-color-placeholder);
+}
+
+.resource-picker__notice:last-child {
+  margin-bottom: 0;
 }
 
 /* --- Step 2: empty state --- */
@@ -1243,14 +2955,14 @@ const stepTitles = computed(() => [
 }
 
 .ds-empty-title {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   font-weight: 600;
   color: var(--td-text-color-primary);
   margin: 0 0 4px;
 }
 
 .ds-empty-desc {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-text-color-secondary);
   margin: 0 0 16px;
 }
@@ -1268,7 +2980,7 @@ const stepTitles = computed(() => [
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-primary);
   line-height: 1.5;
 }
@@ -1277,9 +2989,10 @@ const stepTitles = computed(() => [
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--td-brand-color-light);
-  color: var(--td-brand-color);
-  font-size: 11px;
+  border: 1px solid var(--td-component-stroke);
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+  font-size: var(--app-text-xs);
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -1293,5 +3006,198 @@ const stepTitles = computed(() => [
   align-items: center;
   justify-content: center;
   gap: 16px;
+}
+
+.custom-headers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.custom-headers-desc {
+  margin: 0 0 10px 0;
+  font-size: var(--app-text-sm);
+  line-height: 1.5;
+  color: var(--td-text-color-placeholder);
+}
+
+.custom-headers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.custom-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .custom-header-key {
+    flex: 0 0 38%;
+  }
+
+  .custom-header-value {
+    flex: 1;
+  }
+
+  .custom-header-remove {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: var(--td-text-color-placeholder);
+    border-radius: var(--app-radius-sm);
+    transition: all 0.18s ease;
+
+    &:hover {
+      background: var(--td-error-color-light);
+      color: var(--td-error-color);
+    }
+  }
+}
+
+.ds-empty-retry {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--app-text-md);
+  font-weight: 500;
+  color: var(--td-brand-color);
+  cursor: pointer;
+  transition: color var(--app-motion-instant) ease;
+}
+
+.ds-empty-retry:hover,
+.ds-empty-retry:focus-visible {
+  color: var(--td-brand-color-active);
+  outline: none;
+}
+
+/* --- Step 3: sync strategy option pills --- */
+.option-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: var(--td-bg-color-secondarycontainer);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: var(--app-radius-md);
+  width: fit-content;
+  max-width: 100%;
+}
+
+.option-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--app-text-sm);
+  line-height: 1.3;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--app-motion-fast) ease, color var(--app-motion-fast) ease, border-color var(--app-motion-fast) ease;
+}
+
+.option-pill:hover {
+  color: var(--td-text-color-primary);
+}
+
+.option-pill:focus-visible {
+  outline: 2px solid var(--td-brand-color);
+  outline-offset: 1px;
+}
+
+.option-pill.is-active {
+  background: var(--td-bg-color-container);
+  border-color: var(--td-component-stroke);
+  color: var(--td-text-color-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.gitlab-project-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.gitlab-project-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: var(--app-radius-sm);
+  background: var(--td-bg-color-container);
+}
+
+.gitlab-project-row__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+</style>
+
+<!--
+  Drawer header logo — same white badge as the data-source list cards.
+-->
+<style lang="less">
+.datasource-editor-drawer .setting-drawer__header-icon:has(.datasource-header-icon__img) {
+  background: var(--td-bg-color-container);
+  box-shadow: inset 0 0 0 1px var(--td-component-stroke);
+}
+
+.datasource-header-icon__img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+/* Step 2「选择范围」:整步不滚动 —— token 输入区固定,下方资源区域
+   (占位 / 加载 / 空态 / 目录树)撑满抽屉剩余高度,树列表内部滚动。 */
+.ds-fixed-step {
+  .t-drawer__body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .setting-drawer__body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .ds-resource-section {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .resource-picker,
+  .ds-drive-placeholder,
+  .ds-loading-center,
+  .ds-resource-empty {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .ds-loading-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .resource-picker__list {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
 }
 </style>

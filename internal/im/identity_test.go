@@ -9,7 +9,9 @@ import (
 
 func TestWithIMIdentity(t *testing.T) {
 	const tenantID uint64 = 42
-	ctx := withIMIdentity(context.Background(), tenantID)
+	msg := &IncomingMessage{Platform: PlatformFeishu, UserID: "open-id-1"}
+	channel := &IMChannel{ID: "channel-1", TenantID: tenantID, Locale: "ja-JP"}
+	ctx := withIMIdentity(context.Background(), channel, msg)
 
 	gotTenant, ok := types.TenantIDFromContext(ctx)
 	if !ok || gotTenant != tenantID {
@@ -34,5 +36,44 @@ func TestWithIMIdentity(t *testing.T) {
 	// it Organization-shared KBs are silently skipped on the IM path.
 	if role := types.TenantRoleFromContext(ctx); role != types.TenantRoleViewer {
 		t.Fatalf("TenantRole = %v, want %v", role, types.TenantRoleViewer)
+	}
+
+	principal, ok := types.PrincipalFromContext(ctx)
+	if !ok {
+		t.Fatalf("Principal missing")
+	}
+	if principal.Type != types.PrincipalIMUser || principal.ID != "42:channel-1:feishu:open-id-1" {
+		t.Fatalf("Principal = %#v, want im_user for the external IM user", principal)
+	}
+
+	if !types.IsMCPOAuthNonInteractive(ctx) {
+		t.Fatal("IM context should mark MCP OAuth as non-interactive")
+	}
+	if got, ok := types.LanguageFromContext(ctx); !ok || got != "ja-JP" {
+		t.Fatalf("Language = %q, want %q", got, "ja-JP")
+	}
+}
+
+func TestWithIMIdentityUsesDeploymentDefaultWithoutChannelLocale(t *testing.T) {
+	t.Setenv("WEKNORA_LANGUAGE", "ko-KR")
+	ctx := context.WithValue(context.Background(), types.LanguageContextKey, "en-US")
+	ctx = withIMIdentity(ctx, &IMChannel{ID: "channel-1", TenantID: 42}, nil)
+
+	if got, ok := types.LanguageFromContext(ctx); !ok || got != "ko-KR" {
+		t.Fatalf("Language = %q, want deployment default %q", got, "ko-KR")
+	}
+}
+
+func TestWithIMIdentityAppliesChannelLocaleAcrossTransports(t *testing.T) {
+	for _, mode := range []string{"webhook", "websocket", "longpoll"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.WithValue(context.Background(), types.LanguageContextKey, "en-US")
+			channel := &IMChannel{ID: "channel-1", TenantID: 42, Mode: mode, Locale: "ru-RU"}
+			ctx = withIMIdentity(ctx, channel, nil)
+
+			if got, ok := types.LanguageFromContext(ctx); !ok || got != "ru-RU" {
+				t.Fatalf("Language = %q, want channel locale %q", got, "ru-RU")
+			}
+		})
 	}
 }

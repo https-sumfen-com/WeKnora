@@ -2,13 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
 
+	apperrors "github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/asr"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
-	"github.com/Tencent/WeKnora/internal/models/provider"
+	"github.com/Tencent/WeKnora/internal/models/providers"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
 	"github.com/Tencent/WeKnora/internal/models/vlm"
@@ -23,6 +28,8 @@ var ErrModelNotFound = errors.New("model not found")
 // modelService implements the model service interface
 type modelService struct {
 	repo          interfaces.ModelRepository
+	kbRepo        interfaces.KnowledgeBaseRepository
+	agentRepo     interfaces.CustomAgentRepository
 	ollamaService *ollama.OllamaService
 	pooler        embedding.EmbedderPooler
 	tenantService interfaces.TenantService
@@ -30,12 +37,16 @@ type modelService struct {
 
 // NewModelService creates a new model service instance
 func NewModelService(repo interfaces.ModelRepository,
+	kbRepo interfaces.KnowledgeBaseRepository,
+	agentRepo interfaces.CustomAgentRepository,
 	ollamaService *ollama.OllamaService,
 	pooler embedding.EmbedderPooler,
 	tenantService interfaces.TenantService,
 ) interfaces.ModelService {
 	return &modelService{
 		repo:          repo,
+		kbRepo:        kbRepo,
+		agentRepo:     agentRepo,
 		ollamaService: ollamaService,
 		pooler:        pooler,
 		tenantService: tenantService,
@@ -56,12 +67,12 @@ func (s *modelService) decryptAppSecret(encrypted string) string {
 }
 
 // resolveWeKnoraCloudCredentials 为 WeKnoraCloud 厂商模型补全 AppID/AppSecret。
-// 当模型自身参数中未存储凭证时，自动从租户配置中获取（SaveCredentials 保存的凭证）。
+// 当模型自身参数中未存储凭证时，自动从空间配置中获取（SaveCredentials 保存的凭证）。
 func (s *modelService) resolveWeKnoraCloudCredentials(ctx context.Context, params *types.ModelParameters) (appID, appSecret string) {
 	appID = params.AppID
 	appSecret = s.decryptAppSecret(params.AppSecret)
 
-	if provider.ProviderName(params.Provider) != provider.ProviderWeKnoraCloud {
+	if params.Provider != providers.WeKnoraCloudID {
 		return
 	}
 	if appID != "" && appSecret != "" {
@@ -123,7 +134,87 @@ func (s *modelService) CreateModel(ctx context.Context, model *types.Model) erro
 		return err
 	}
 
-	// Start asynchronous model download
+	s.downloadModelAsync(ctx, model)
+
+	logger.Infof(ctx, "Model creation initiated successfully: %s", model.ID)
+	return nil
+}
+
+// CopyModel clones a tenant-owned model. The stored name stays the upstream
+// model identifier. displayName is the label chosen by the caller. Credentials
+// are copied from the source row because list responses never include them.
+// An active local model is already present, so the copy does not download it
+// again. A local model that is still downloading or failed starts a pull.
+func (s *modelService) CopyModel(ctx context.Context, sourceID, displayName string) (*types.Model, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil, apperrors.NewBadRequestError("model ID cannot be empty")
+	}
+	displayName = strings.TrimSpace(utils.SanitizeForLog(displayName))
+	if displayName == "" {
+		return nil, apperrors.NewBadRequestError("display name is required")
+	}
+	if utf8.RuneCountInString(displayName) > types.ModelDisplayNameMaxLen {
+		return nil, apperrors.NewBadRequestError("display name is too long")
+	}
+
+	tenantID := types.MustTenantIDFromContext(ctx)
+	source, err := s.repo.GetByID(ctx, tenantID, sourceID)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"model_id": sourceID,
+		})
+		return nil, err
+	}
+	if source == nil {
+		return nil, ErrModelNotFound
+	}
+	if source.IsBuiltin {
+		return nil, apperrors.NewBadRequestError("builtin models cannot be copied")
+	}
+
+	params, err := cloneModelParameters(source.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	model := &types.Model{
+		TenantID:    tenantID,
+		Name:        source.Name,
+		DisplayName: displayName,
+		Type:        source.Type,
+		Source:      source.Source,
+		Description: source.Description,
+		Parameters:  params,
+	}
+	logger.Infof(ctx, "Copying model %s as %q", source.ID, displayName)
+
+	// Remote rows, and local rows that already finished downloading, are
+	// configuration copies. Only a local row that is not active needs a pull.
+	if model.Source != types.ModelSourceLocal || source.Status == types.ModelStatusActive {
+		model.Status = types.ModelStatusActive
+		if err := s.repo.Create(ctx, model); err != nil {
+			logger.ErrorWithFields(ctx, err, map[string]interface{}{
+				"model_id":   source.ID,
+				"model_name": model.Name,
+			})
+			return nil, err
+		}
+		return model, nil
+	}
+
+	model.Status = types.ModelStatusDownloading
+	if err := s.repo.Create(ctx, model); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"model_id":   source.ID,
+			"model_name": model.Name,
+		})
+		return nil, err
+	}
+	s.downloadModelAsync(ctx, model)
+	return model, nil
+}
+
+func (s *modelService) downloadModelAsync(ctx context.Context, model *types.Model) {
 	logger.Infof(ctx, "Starting background download for model: %s", model.Name)
 	newCtx := logger.CloneContext(ctx)
 	go func() {
@@ -141,9 +232,18 @@ func (s *modelService) CreateModel(ctx context.Context, model *types.Model) erro
 		logger.Infof(newCtx, "Updating model status to: %s", model.Status)
 		s.repo.Update(newCtx, model)
 	}()
+}
 
-	logger.Infof(ctx, "Model creation initiated successfully: %s", model.ID)
-	return nil
+func cloneModelParameters(params types.ModelParameters) (types.ModelParameters, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return types.ModelParameters{}, err
+	}
+	var cloned types.ModelParameters
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return types.ModelParameters{}, err
+	}
+	return cloned, nil
 }
 
 // GetModelByID retrieves a model by its ID
@@ -209,9 +309,30 @@ func (s *modelService) ListModels(ctx context.Context) ([]*types.Model, error) {
 		})
 		return nil, err
 	}
+	// GetModelByID is left alone: its result is written back by UpdateModel,
+	// and this overlay must never be persisted.
+	if settings := s.workspaceDefaultSettings(ctx, tenantID); settings != nil {
+		settings.ApplyModelDefaults(models)
+	}
 
 	logger.Infof(ctx, "Retrieved %d models successfully", len(models))
 	return models, nil
+}
+
+// workspaceDefaultSettings prefers the tenant the request already loaded and
+// reads it from storage for background contexts that carry only the ID.
+func (s *modelService) workspaceDefaultSettings(ctx context.Context, tenantID uint64) *types.DefaultSettings {
+	if tenant, ok := types.TenantInfoFromContext(ctx); ok && tenant.ID == tenantID {
+		return tenant.DefaultSettings
+	}
+	if s.tenantService == nil {
+		return nil
+	}
+	tenant, err := s.tenantService.GetTenantByID(ctx, tenantID)
+	if err != nil || tenant == nil {
+		return nil
+	}
+	return tenant.DefaultSettings
 }
 
 // UpdateModel updates an existing model in the repository
@@ -219,7 +340,8 @@ func (s *modelService) UpdateModel(ctx context.Context, model *types.Model) erro
 	logger.Info(ctx, "Start updating model")
 	logger.Infof(ctx, "Updating model ID: %s, name: %s", model.ID, model.Name)
 
-	// Check if the model is builtin - builtin models cannot be updated
+	// Built-in models are platform-wide. Tenant administrators may view them,
+	// but only a system administrator may change their shared configuration.
 	tenantID := types.MustTenantIDFromContext(ctx)
 	existingModel, err := s.repo.GetByID(ctx, tenantID, model.ID)
 	if err != nil {
@@ -229,8 +351,15 @@ func (s *modelService) UpdateModel(ctx context.Context, model *types.Model) erro
 		return err
 	}
 	if existingModel != nil && existingModel.IsBuiltin {
-		logger.Warnf(ctx, "Attempted to update builtin model: %s", model.ID)
-		return errors.New("builtin models cannot be updated")
+		if !types.IsSystemAdminFromContext(ctx) {
+			logger.Warnf(ctx, "Non-system-admin attempted to update builtin model: %s", model.ID)
+			return apperrors.NewForbiddenError("only system administrators can update builtin models")
+		}
+		// A UI edit is an explicit runtime override. Clear YAML ownership so
+		// the startup reconciler does not silently replace the saved values.
+		model.TenantID = existingModel.TenantID
+		model.IsBuiltin = true
+		model.ManagedBy = ""
 	}
 
 	// Update model in repository
@@ -263,8 +392,9 @@ func (s *modelService) UpdateModelCredentials(
 	if existing == nil {
 		return nil, ErrModelNotFound
 	}
-	if existing.IsBuiltin {
-		return nil, errors.New("builtin models cannot have credentials modified")
+	if existing.IsBuiltin && !types.IsSystemAdminFromContext(ctx) {
+		return nil, apperrors.NewForbiddenError(
+			"only system administrators can modify builtin model credentials")
 	}
 
 	changed := false
@@ -278,6 +408,10 @@ func (s *modelService) UpdateModelCredentials(
 	}
 	if !changed {
 		return existing, nil
+	}
+	if existing.IsBuiltin {
+		// Credential changes are also runtime overrides of YAML-managed data.
+		existing.ManagedBy = ""
 	}
 	if err := s.repo.Update(ctx, existing); err != nil {
 		return nil, err
@@ -296,8 +430,9 @@ func (s *modelService) ClearModelCredential(ctx context.Context, id, field strin
 	if existing == nil {
 		return ErrModelNotFound
 	}
-	if existing.IsBuiltin {
-		return errors.New("builtin models cannot have credentials modified")
+	if existing.IsBuiltin && !types.IsSystemAdminFromContext(ctx) {
+		return apperrors.NewForbiddenError(
+			"only system administrators can modify builtin model credentials")
 	}
 
 	changed := false
@@ -317,6 +452,9 @@ func (s *modelService) ClearModelCredential(ctx context.Context, id, field strin
 	}
 	if !changed {
 		return nil
+	}
+	if existing.IsBuiltin {
+		existing.ManagedBy = ""
 	}
 	if err := s.repo.Update(ctx, existing); err != nil {
 		return err
@@ -341,9 +479,36 @@ func (s *modelService) DeleteModel(ctx context.Context, id string) error {
 		})
 		return err
 	}
-	if existingModel != nil && existingModel.IsBuiltin {
+	if existingModel == nil {
+		return ErrModelNotFound
+	}
+	if existingModel.IsBuiltin {
 		logger.Warnf(ctx, "Attempted to delete builtin model: %s", id)
-		return errors.New("builtin models cannot be deleted")
+		return apperrors.NewBadRequestError("builtin models cannot be deleted")
+	}
+
+	usage, err := s.getModelUsageDetails(ctx, tenantID, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"model_id": id,
+		})
+		return err
+	}
+	if usage.InUse() {
+		kbCount := usage.KnowledgeBaseTotal
+		if kbCount == 0 {
+			kbCount = int64(len(usage.KnowledgeBases))
+		}
+		agentCount := usage.AgentTotal
+		if agentCount == 0 {
+			agentCount = int64(len(usage.Agents))
+		}
+		memoryInUse := len(usage.LongTermMemory.Bindings) > 0
+		logger.Warnf(ctx, "Model %s is in use: kb=%d agent=%d memory=%t", id, kbCount, agentCount, memoryInUse)
+		return apperrors.NewModelInUseError(
+			formatModelInUseMessage(kbCount, agentCount, memoryInUse),
+			usage,
+		)
 	}
 
 	// Delete model from repository
@@ -358,6 +523,73 @@ func (s *modelService) DeleteModel(ctx context.Context, id string) error {
 
 	logger.Infof(ctx, "Model deleted successfully: %s", id)
 	return nil
+}
+
+func (s *modelService) getModelUsageDetails(
+	ctx context.Context, tenantID uint64, modelID string,
+) (types.ModelUsageDetails, error) {
+	details := types.ModelUsageDetails{
+		KnowledgeBases: make([]types.ModelUsageResource, 0),
+		Agents:         make([]types.ModelUsageResource, 0),
+		LongTermMemory: types.ModelUsageMemory{Bindings: make([]types.ModelUsageBinding, 0)},
+	}
+
+	kbCount, err := s.kbRepo.CountByModelID(ctx, tenantID, modelID)
+	if err != nil {
+		return details, err
+	}
+	details.KnowledgeBaseTotal = kbCount
+	if kbCount > 0 {
+		details.KnowledgeBases, err = s.kbRepo.ListModelUsages(ctx, tenantID, modelID)
+		if err != nil {
+			return details, err
+		}
+		if details.KnowledgeBases == nil {
+			details.KnowledgeBases = make([]types.ModelUsageResource, 0)
+		}
+	}
+
+	agentCount, err := s.agentRepo.CountByModelID(ctx, tenantID, modelID)
+	if err != nil {
+		return details, err
+	}
+	details.AgentTotal = agentCount
+	if agentCount > 0 {
+		details.Agents, err = s.agentRepo.ListModelUsages(ctx, tenantID, modelID)
+		if err != nil {
+			return details, err
+		}
+		if details.Agents == nil {
+			details.Agents = make([]types.ModelUsageResource, 0)
+		}
+	}
+
+	if s.tenantService == nil {
+		return details, nil
+	}
+	tenant, err := s.tenantService.GetTenantByID(ctx, tenantID)
+	if err != nil {
+		return details, err
+	}
+	if tenant == nil || tenant.MemoryConfig == nil {
+		return details, nil
+	}
+
+	// Both memory model pins have to be checked. Deleting either one leaves
+	// the workspace pointing at a model that no longer exists.
+	if strings.TrimSpace(tenant.MemoryConfig.EmbeddingModelID) == modelID {
+		details.LongTermMemory.Bindings = append(
+			details.LongTermMemory.Bindings,
+			types.ModelUsageBindingEmbeddingModel,
+		)
+	}
+	if strings.TrimSpace(tenant.MemoryConfig.ExtractModelID) == modelID {
+		details.LongTermMemory.Bindings = append(
+			details.LongTermMemory.Bindings,
+			types.ModelUsageBindingExtractModel,
+		)
+	}
+	return details, nil
 }
 
 // GetEmbeddingModel retrieves and initializes an embedding model instance
@@ -545,9 +777,6 @@ func (s *modelService) GetVLMModel(ctx context.Context, modelId string) (vlm.VLM
 	return vlmModel, nil
 }
 
-// Note: default model selection logic has been removed; models no longer
-// maintain a per-type default flag at the service layer.
-
 // GetASRModel retrieves and initializes an automatic speech recognition model instance.
 func (s *modelService) GetASRModel(ctx context.Context, modelId string) (asr.ASR, error) {
 	if modelId == "" {
@@ -581,4 +810,22 @@ func (s *modelService) GetASRModel(ctx context.Context, modelId string) (asr.ASR
 	}
 
 	return sttModel, nil
+}
+
+func formatModelInUseMessage(kbCount, agentCount int64, memory bool) string {
+	var parts []string
+	if kbCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d knowledge base(s)", kbCount))
+	}
+	if agentCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d agent(s)", agentCount))
+	}
+	if memory {
+		parts = append(parts, "long-term memory")
+	}
+	joined := strings.Join(parts, " and ")
+	return fmt.Sprintf(
+		"model is used by %s; reconfigure or remove those references before deleting",
+		joined,
+	)
 }

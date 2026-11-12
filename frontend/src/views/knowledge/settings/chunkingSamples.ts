@@ -104,10 +104,10 @@ Agent 引擎执行经典 ReAct 循环：
 
 ## 进一步阅读
 
-- API 文档：\`docs/api/README.md\`
+- API 文档：\`website-docs/04-api/01-api-overview.md\`
 - 配置项清单：\`config/config.yaml\` 与 \`.env.example\`
-- 故障排查：\`docs/QA.md\`
-- 路线图：\`docs/ROADMAP.md\``
+- 故障排查：\`website-docs/01-getting-started/05-troubleshooting.md\`
+- 产品介绍：\`website-docs/01-getting-started/01-introduction.md\``
 
 const FAQ_SAMPLE = `# WeKnora 部署与使用 FAQ
 
@@ -147,8 +147,8 @@ docker pull docker.m.daocloud.io/wechatopenai/weknora-ui:v0.5.0
 ### Q8: 如何启用多模态？
 在知识库的"多模态配置"中开启，并选择一个 VLM 模型（如 GPT-4o、Qwen2.5-VL）。开启后，文档中的图片会被 VLM 描述并参与检索。
 
-### Q9: 怎么把日志改成 JSON 格式？
-设置 \`LOG_FORMAT=json LOG_LEVEL=info\`，便于接入 ELK / Loki 等日志栈。
+### Q9: 如何自定义日志格式？
+设置 \`WEKNORA_LOG_FORMAT="%d %level %msg" LOG_LEVEL=info\`。模板必须包含 \`%msg\`；留空使用默认格式，\`json\` 不是受支持的格式关键字。
 
 ## 检索与召回
 
@@ -176,7 +176,7 @@ docker pull docker.m.daocloud.io/wechatopenai/weknora-ui:v0.5.0
 检查代理网络与 \`OPENAI_BASE_URL\` 配置；本地无外网时切换到 Ollama 或国内大模型。
 
 ### Q14: token 用量在哪里看？
-开启 Langfuse 后，每个会话、每次推理、每个工具调用的 token 消耗都有完整 trace，可按时间、租户、模型聚合。
+开启 Langfuse 后，每个会话、每次推理、每个工具调用的 token 消耗都有完整 trace，可按时间、空间、模型聚合。
 
 ### Q15: 如何接入私有 LLM？
 实现 \`internal/models/chat/provider/Provider\` 接口，注册到 provider 工厂，配置文件中加一条记录即可，约 100-200 行代码。

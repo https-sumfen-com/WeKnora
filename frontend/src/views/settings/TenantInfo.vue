@@ -199,15 +199,51 @@
         </div>
       </aside>
 
+      <aside v-if="showDeleteDangerZone" class="leave-space-panel delete-space-panel"
+        :aria-label="$t('tenant.deleteDangerZone.title')">
+        <div class="leave-space-panel-inner">
+          <div class="leave-space-panel-text">
+            <div class="leave-space-panel-title">{{ $t('tenant.deleteDangerZone.title') }}</div>
+            <p class="leave-space-panel-desc">{{ $t('tenant.deleteDangerZone.desc') }}</p>
+          </div>
+          <div class="leave-space-panel-action">
+            <t-button theme="danger" size="medium" @click="confirmDeleteTenant">
+              {{ $t('tenant.deleteDangerZone.button') }}
+            </t-button>
+          </div>
+        </div>
+      </aside>
+
     </div>
+
+    <t-dialog v-model:visible="deleteTenantVisible" :header="$t('tenant.deleteDangerZone.confirmTitle')"
+      :confirm-btn="{
+        content: $t('tenant.deleteDangerZone.confirm'),
+        theme: 'danger',
+        disabled: deleteConfirmName.trim() !== (tenantInfo?.name || ''),
+        loading: deletingTenant,
+      }" :cancel-btn="$t('common.cancel')" :close-on-overlay-click="!deletingTenant"
+      :close-btn="!deletingTenant" @confirm="deleteCurrentTenant">
+      <div class="delete-tenant-confirm">
+        <p class="delete-tenant-confirm-body">
+          {{ $t('tenant.deleteDangerZone.confirmBody', { name: tenantInfo?.name || '' }) }}
+        </p>
+        <p class="delete-tenant-confirm-hint">
+          {{ $t('tenant.deleteDangerZone.confirmHint', { name: tenantInfo?.name || '' }) }}
+        </p>
+        <t-input v-model="deleteConfirmName" :placeholder="tenantInfo?.name || ''" :disabled="deletingTenant"
+          clearable />
+      </div>
+    </t-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useAssistantDataChange } from '@/utils/assistantDataChange'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { getCurrentUser, type TenantInfo } from '@/api/auth'
-import { updateTenant as updateTenantApi } from '@/api/tenant'
+import { deleteTenant as deleteTenantApi, updateTenant as updateTenantApi } from '@/api/tenant'
 import {
   leaveTenant,
   fetchAllTenantMembers,
@@ -215,9 +251,18 @@ import {
   type TenantRole,
 } from '@/api/tenant/members'
 import { useAuthStore } from '@/stores/auth'
+import { redirectToLogin } from '@/utils/authRefresh'
 import { useI18n } from 'vue-i18n'
+import { useRoleLabel, useHomeTenant } from '@/composables/useRoleLabel'
+import {
+  navigateAfterTenantSwitch,
+  persistLastActiveTenantPreference,
+  stashTenantSwitchToast,
+} from '@/utils/tenantSwitch'
 
 const { t, locale } = useI18n()
+const { formatRole } = useRoleLabel()
+const { homeTenantId } = useHomeTenant()
 const authStore = useAuthStore()
 
 // Reactive state
@@ -225,7 +270,7 @@ const tenantInfo = ref<TenantInfo | null>(null)
 const loading = ref(true)
 const error = ref('')
 
-// 仅 owner 可改租户名（与后端 router.go 中 g.Owner() 守卫一致；
+// 仅 owner 可改空间名（与后端 router.go 中 g.Owner() 守卫一致；
 // 服务端始终是权限的最终裁判，这里只决定 UI 是否露出入口）。
 const canEditTenant = computed(() => authStore.hasRole('owner'))
 
@@ -252,6 +297,12 @@ const showLeaveDangerZone = computed(() => {
   if (!currentTenantRole.value) return false
   if (Number(tenantInfo.value.id) !== activeTenantNumericId.value) return false
   return canLeaveSpace.value
+})
+
+const showDeleteDangerZone = computed(() => {
+  if (loading.value || error.value || !tenantInfo.value) return false
+  if (Number(tenantInfo.value.id) !== activeTenantNumericId.value) return false
+  return authStore.hasRole('owner')
 })
 
 async function evaluateLeaveGate(): Promise<void> {
@@ -299,7 +350,7 @@ function confirmLeaveTenant() {
         if (resp.success) {
           MessagePlugin.success(t('tenantMember.leave.success'))
           authStore.logout()
-          window.location.href = '/login'
+          redirectToLogin()
         } else {
           MessagePlugin.error(resp.message || t('tenantMember.errors.generic'))
         }
@@ -318,6 +369,65 @@ function confirmLeaveTenant() {
   })
 }
 
+function confirmDeleteTenant() {
+  const tid = Number(tenantInfo.value?.id ?? 0)
+  const tenantName = tenantInfo.value?.name || ''
+  if (!tid || !tenantName) return
+  deleteConfirmName.value = ''
+  deleteTenantVisible.value = true
+}
+
+async function deleteCurrentTenant() {
+  const tid = Number(tenantInfo.value?.id ?? 0)
+  const tenantName = tenantInfo.value?.name || ''
+  if (!tid || !tenantName) return
+  if (deleteConfirmName.value.trim() !== tenantName) {
+    MessagePlugin.warning(t('tenant.deleteDangerZone.nameMismatch'))
+    return
+  }
+  try {
+    deletingTenant.value = true
+    const resp = await deleteTenantApi(tid)
+    if (resp.success) {
+      MessagePlugin.success(t('tenant.deleteDangerZone.success'))
+      authStore.setMemberships(
+        (authStore.memberships ?? []).filter((m) => m.tenant_id !== tid),
+      )
+      await authStore.refreshFromAuthMe()
+      const next =
+        authStore.memberships.find((m) => m.tenant_id === homeTenantId.value) ??
+        authStore.memberships[0]
+      if (next) {
+        const switchingToHome =
+          homeTenantId.value !== null && homeTenantId.value === next.tenant_id
+        const name = next.tenant_name?.trim() || `#${next.tenant_id}`
+        authStore.setSelectedTenant(next.tenant_id, name)
+        stashTenantSwitchToast({
+          name,
+          role: formatRole(next.role) || undefined,
+          roleEnum: next.role || undefined,
+        })
+        const persist = persistLastActiveTenantPreference(
+          switchingToHome ? null : next.tenant_id,
+        )
+        await Promise.race([persist, new Promise((r) => setTimeout(r, 400))])
+        navigateAfterTenantSwitch()
+        return
+      }
+      authStore.logout()
+      redirectToLogin()
+    } else {
+      MessagePlugin.error(resp.message || t('tenant.deleteDangerZone.failed'))
+    }
+  } catch (err: any) {
+    MessagePlugin.error(err?.message || t('tenant.deleteDangerZone.failed'))
+  } finally {
+    deletingTenant.value = false
+    deleteConfirmName.value = ''
+    deleteTenantVisible.value = false
+  }
+}
+
 watch(
   [() => tenantInfo.value?.id, () => authStore.currentTenantId, () => authStore.currentTenantRole],
   () => {
@@ -327,11 +437,14 @@ watch(
   },
 )
 
-// 原地编辑租户名称：editing 控制行内只读 / 编辑两种形态切换。
+// 原地编辑空间名称：editing 控制行内只读 / 编辑两种形态切换。
 // 不沿用 dialog 是因为这里只有一个字段，弹窗反而打断了配置浏览节奏。
 const editing = ref(false)
 const editName = ref('')
 const saving = ref(false)
+const deleteConfirmName = ref('')
+const deleteTenantVisible = ref(false)
+const deletingTenant = ref(false)
 const editNameTrimmed = computed(() => editName.value.trim())
 // 保存按钮可点条件：非空、改了内容、不在保存中。
 // 后端 name 字段没有 uniqueIndex 也没有重名校验，所以这里不做"是否已存在"的判断；
@@ -405,7 +518,7 @@ const saveTenantDescription = async () => {
     savingDescription.value = true
     const resp = await updateTenantApi(Number(tenantInfo.value.id), { description: newDesc })
     if (resp.success) {
-      // 本地立即回显，避免等 /auth/me 往返。描述不像名称那样会出现在租户切换器等
+      // 本地立即回显，避免等 /auth/me 往返。描述不像名称那样会出现在空间切换器等
       // 顶部组件里，所以无需同步 authStore.tenant / memberships。
       if (tenantInfo.value) {
         tenantInfo.value = { ...tenantInfo.value, description: newDesc }
@@ -439,14 +552,14 @@ const saveTenantName = async () => {
     const resp = await updateTenantApi(Number(tenantInfo.value.id), { name: newName })
     if (resp.success) {
       // 本地立即回显，避免等 /auth/me 往返；同步刷新登录态里的 tenant
-      // 缓存（若当前激活租户就是 home tenant，顶部租户切换器等地方也跟着更新）。
+      // 缓存（若当前激活空间就是 home tenant，顶部空间切换器等地方也跟着更新）。
       if (tenantInfo.value) {
         tenantInfo.value = { ...tenantInfo.value, name: newName }
       }
       if (authStore.tenant && String(authStore.tenant.id) === String(tenantInfo.value?.id)) {
         authStore.setTenant({ ...authStore.tenant, name: newName })
       }
-      // memberships 里的 tenant_name 是租户切换器读的字段，一并同步避免显示旧名字。
+      // memberships 里的 tenant_name 是空间切换器读的字段，一并同步避免显示旧名字。
       if (authStore.memberships?.length) {
         const next = authStore.memberships.map((m) =>
           String(m.tenant_id) === String(tenantInfo.value?.id)
@@ -558,32 +671,22 @@ const getUsagePercentage = () => {
 }
 
 // Lifecycle
+useAssistantDataChange(() => { void loadInfo() }, { areas: ['workspace'] })
+
 onMounted(() => {
   loadInfo()
 })
 </script>
 
 <style lang="less" scoped>
+@import (reference) '@/components/css/settings-section.less';
+
 .tenant-info {
   width: 100%;
 }
 
 .section-header {
-  margin-bottom: 32px;
-
-  h2 {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--td-text-color-primary);
-    margin: 0 0 8px 0;
-  }
-
-  .section-description {
-    font-size: 14px;
-    color: var(--td-text-color-secondary);
-    margin: 0;
-    line-height: 1.5;
-  }
+  .settings-section-header();
 }
 
 .loading-inline {
@@ -593,7 +696,7 @@ onMounted(() => {
   padding: 40px 0;
   justify-content: center;
   color: var(--td-text-color-secondary);
-  font-size: 14px;
+  font-size: var(--app-text-base);
 }
 
 .error-inline {
@@ -612,15 +715,7 @@ onMounted(() => {
 }
 
 .setting-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 20px 0;
-  border-bottom: 1px solid var(--td-component-stroke);
-
-  &:last-child {
-    border-bottom: none;
-  }
+  .setting-row();
 }
 
 .setting-info {
@@ -634,7 +729,7 @@ onMounted(() => {
   padding-right: 24px;
 
   label {
-    font-size: 15px;
+    font-size: var(--app-text-lg);
     font-weight: 500;
     color: var(--td-text-color-primary);
     display: block;
@@ -642,7 +737,7 @@ onMounted(() => {
   }
 
   .desc {
-    font-size: 13px;
+    font-size: var(--app-text-md);
     color: var(--td-text-color-secondary);
     margin: 0;
     line-height: 1.5;
@@ -650,17 +745,12 @@ onMounted(() => {
 }
 
 .setting-control {
-  /* 反过来：内容列吃掉剩余空间，并允许收缩 + 内部换行，长字符串不会再撑爆行。
-     去掉原先的 min-width:280px 硬约束（短内容也不需要那么宽的展示槽）。 */
+  .setting-control();
   flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
 
   .info-value {
-    font-size: 14px;
+    font-size: var(--app-text-base);
     color: var(--td-text-color-primary);
     text-align: right;
     /* anywhere 比 break-word 激进：连无空格的长串（"WorkspaceDefault..." 这种）
@@ -672,6 +762,8 @@ onMounted(() => {
   .edit-btn {
     flex-shrink: 0;
   }
+  /* 反过来：内容列吃掉剩余空间，并允许收缩 + 内部换行，长字符串不会再撑爆行。
+     去掉原先的 min-width:280px 硬约束（短内容也不需要那么宽的展示槽）。 */
 }
 
 .inline-edit {
@@ -723,6 +815,10 @@ onMounted(() => {
   margin-top: 4px;
 }
 
+.delete-space-panel {
+  margin-top: 12px;
+}
+
 .leave-space-panel-inner {
   display: flex;
   flex-direction: row;
@@ -730,7 +826,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 20px;
   padding: 16px 18px;
-  border-radius: 10px;
+  border-radius: var(--app-radius-lg);
   border: 1px solid var(--td-component-stroke);
   background-color: var(--td-bg-color-secondarycontainer);
   box-sizing: border-box;
@@ -744,7 +840,7 @@ onMounted(() => {
 }
 
 .leave-space-panel-title {
-  font-size: 15px;
+  font-size: var(--app-text-lg);
   font-weight: 500;
   color: var(--td-text-color-primary);
   line-height: 1.4;
@@ -753,7 +849,7 @@ onMounted(() => {
 
 .leave-space-panel-desc {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   line-height: 1.55;
   color: var(--td-text-color-secondary);
 }
@@ -786,11 +882,23 @@ onMounted(() => {
   //   gap: 12px;
 
   .usage-text {
-    font-size: 14px;
+    font-size: var(--app-text-base);
     font-weight: 500;
     color: var(--td-text-color-primary);
     min-width: 50px;
     text-align: right;
   }
+}
+
+.delete-tenant-confirm-body {
+  margin: 0 0 10px;
+  color: var(--td-text-color-primary);
+  line-height: 1.6;
+}
+
+.delete-tenant-confirm-hint {
+  margin: 0 0 12px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.5;
 }
 </style>

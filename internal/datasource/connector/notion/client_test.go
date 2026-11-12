@@ -1,13 +1,30 @@
 package notion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 )
+
+func mustTestClient(t *testing.T, token, baseURL string) *notionClient {
+	t.Helper()
+	t.Setenv("SSRF_WHITELIST", "127.0.0.1,localhost")
+	secutils.ResetSSRFWhitelistForTest()
+
+	client, err := newClient(token, baseURL)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	return client
+}
 
 // fakeNotion builds an httptest.Server that emulates relevant Notion API endpoints.
 func fakeNotion() (*httptest.Server, *Config) {
@@ -233,7 +250,7 @@ func TestClientPing(t *testing.T) {
 	ts, cfg := fakeNotion()
 	defer ts.Close()
 
-	client := newClient(cfg.APIKey, ts.URL)
+	client := mustTestClient(t, cfg.APIKey, ts.URL)
 	if err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping() error: %v", err)
 	}
@@ -243,7 +260,7 @@ func TestClientPing_InvalidToken(t *testing.T) {
 	ts, _ := fakeNotion()
 	defer ts.Close()
 
-	client := newClient("wrong-token", ts.URL)
+	client := mustTestClient(t, "wrong-token", ts.URL)
 	err := client.Ping(context.Background())
 	if err == nil {
 		t.Fatal("expected error for invalid token")
@@ -254,7 +271,7 @@ func TestClientSearchPages(t *testing.T) {
 	ts, cfg := fakeNotion()
 	defer ts.Close()
 
-	client := newClient(cfg.APIKey, ts.URL)
+	client := mustTestClient(t, cfg.APIKey, ts.URL)
 	pages, err := client.SearchPages(context.Background())
 	if err != nil {
 		t.Fatalf("SearchPages() error: %v", err)
@@ -277,7 +294,7 @@ func TestClientGetBlockChildrenAll(t *testing.T) {
 	ts, cfg := fakeNotion()
 	defer ts.Close()
 
-	client := newClient(cfg.APIKey, ts.URL)
+	client := mustTestClient(t, cfg.APIKey, ts.URL)
 	blocks, err := client.GetBlockChildrenAll(context.Background(), "page-1")
 	if err != nil {
 		t.Fatalf("GetBlockChildrenAll() error: %v", err)
@@ -301,7 +318,7 @@ func TestClientGetPage(t *testing.T) {
 	ts, cfg := fakeNotion()
 	defer ts.Close()
 
-	client := newClient(cfg.APIKey, ts.URL)
+	client := mustTestClient(t, cfg.APIKey, ts.URL)
 	page, err := client.GetPage(context.Background(), "page-1")
 	if err != nil {
 		t.Fatalf("GetPage() error: %v", err)
@@ -318,7 +335,7 @@ func TestClientQueryDatabaseAll(t *testing.T) {
 	ts, cfg := fakeNotion()
 	defer ts.Close()
 
-	client := newClient(cfg.APIKey, ts.URL)
+	client := mustTestClient(t, cfg.APIKey, ts.URL)
 	records, err := client.QueryDatabaseAll(context.Background(), "db-1")
 	if err != nil {
 		t.Fatalf("QueryDatabaseAll() error: %v", err)
@@ -333,3 +350,39 @@ func TestClientQueryDatabaseAll(t *testing.T) {
 
 // Ensure time import is used (referenced by fakeNotion indirectly via time.Time in types).
 var _ = time.Now
+
+func TestDownloadFile_RejectsLoopbackURL(t *testing.T) {
+	secutils.ResetSSRFWhitelistForTest()
+	t.Cleanup(secutils.ResetSSRFWhitelistForTest)
+
+	client, err := newClient("test-token", "https://api.notion.com")
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	_, err = client.DownloadFile(context.Background(), "http://127.0.0.1/secret")
+	if err == nil {
+		t.Fatal("expected loopback attachment URL to be rejected")
+	}
+}
+
+func TestDoRequest_RejectsOversizedResponse(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(bytes.Repeat([]byte("a"), 1<<20+1))
+	}))
+	defer server.Close()
+
+	c := mustTestClient(t, "token", server.URL)
+	c.jsonLimit = 1 << 20
+	_, err := c.doRequest(context.Background(), http.MethodGet, "/v1/users/me", nil)
+	if err == nil {
+		t.Fatal("doRequest accepted a response larger than the cap, want error")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("error = %v, want an explicit over-limit error", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("server hit %d times, want 1 (oversized responses must not be retried)", got)
+	}
+}

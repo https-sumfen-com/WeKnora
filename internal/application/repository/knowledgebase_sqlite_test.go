@@ -17,6 +17,8 @@ import (
 // `type:jsonb`, which AutoMigrate does not map cleanly onto SQLite.
 const knowledgeBasesTestDDL = `
 CREATE TABLE IF NOT EXISTS knowledge_bases (
+    profile_config TEXT,
+    generated_profile TEXT,
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -32,11 +34,13 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     extract_config TEXT NULL DEFAULT NULL,
     faq_config TEXT,
     question_generation_config TEXT NULL,
+    auto_tag_config TEXT NULL,
     is_temporary BOOLEAN NOT NULL DEFAULT 0,
     is_pinned INTEGER NOT NULL DEFAULT 0,
     pinned_at DATETIME NULL,
     asr_config TEXT,
     vector_store_id VARCHAR(36),
+    storage_backend_id VARCHAR(36),
     wiki_config TEXT,
     indexing_strategy TEXT,
     creator_id VARCHAR(36),

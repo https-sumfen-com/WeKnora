@@ -24,11 +24,12 @@ const (
 	ErrValidation         ErrorCode = 1010
 
 	// Tenant related error codes (2000-2099)
-	ErrTenantNotFound      ErrorCode = 2000
-	ErrTenantAlreadyExists ErrorCode = 2001
-	ErrTenantInactive      ErrorCode = 2002
-	ErrTenantNameRequired  ErrorCode = 2003
-	ErrTenantInvalidStatus ErrorCode = 2004
+	ErrTenantNotFound         ErrorCode = 2000
+	ErrTenantAlreadyExists    ErrorCode = 2001
+	ErrTenantInactive         ErrorCode = 2002
+	ErrTenantNameRequired     ErrorCode = 2003
+	ErrTenantInvalidStatus    ErrorCode = 2004
+	ErrTenantCreationDisabled ErrorCode = 2005
 
 	// Agent related error codes (2100-2199)
 	ErrAgentMissingThinkingModel ErrorCode = 2100
@@ -42,6 +43,18 @@ const (
 	// but is currently unavailable" without parsing the message text.
 	ErrVectorStoreBindingInvalid ErrorCode = 2200
 	ErrVectorStoreUnavailable    ErrorCode = 2201
+
+	// Model lifecycle errors (2300-2399).
+	// The dedicated code lets clients render structured usage details without
+	// parsing the backwards-compatible English error message.
+	ErrModelInUse ErrorCode = 2300
+
+	// Import prerequisite errors (2400-2499).
+	// The dedicated code lets the datasource sync path distinguish permanent
+	// configuration-mismatch rejections (VLM/ASR not configured for an
+	// image/audio import) from retryable ingest failures without parsing
+	// message text. HTTP semantics are identical to a bad request.
+	ErrImportPrerequisiteMissing ErrorCode = 2400
 
 	// Add more error codes here
 )
@@ -70,6 +83,30 @@ func NewBadRequestError(message string) *AppError {
 	return &AppError{
 		Code:     ErrBadRequest,
 		Message:  message,
+		HTTPCode: http.StatusBadRequest,
+	}
+}
+
+// NewImportPrerequisiteError creates the typed HTTP 400 returned when an
+// import requires a model (VLM for images, ASR for audio) that the target
+// knowledge base has not configured. The message stays user-facing; the code
+// lets the datasource sync path treat the rejection as permanent instead of
+// retrying a task that cannot succeed until the operator configures a model.
+func NewImportPrerequisiteError(message string) *AppError {
+	return &AppError{
+		Code:     ErrImportPrerequisiteMissing,
+		Message:  message,
+		HTTPCode: http.StatusBadRequest,
+	}
+}
+
+// NewModelInUseError creates the typed HTTP 400 returned when active tenant
+// resources still reference a model.
+func NewModelInUseError(message string, details any) *AppError {
+	return &AppError{
+		Code:     ErrModelInUse,
+		Message:  message,
+		Details:  details,
 		HTTPCode: http.StatusBadRequest,
 	}
 }
@@ -161,7 +198,7 @@ func NewValidationError(message string) *AppError {
 func NewTenantNotFoundError() *AppError {
 	return &AppError{
 		Code:     ErrTenantNotFound,
-		Message:  "租户不存在",
+		Message:  "空间不存在",
 		HTTPCode: http.StatusNotFound,
 	}
 }
@@ -170,7 +207,7 @@ func NewTenantNotFoundError() *AppError {
 func NewTenantAlreadyExistsError() *AppError {
 	return &AppError{
 		Code:     ErrTenantAlreadyExists,
-		Message:  "租户已存在",
+		Message:  "空间已存在",
 		HTTPCode: http.StatusConflict,
 	}
 }
@@ -179,7 +216,17 @@ func NewTenantAlreadyExistsError() *AppError {
 func NewTenantInactiveError() *AppError {
 	return &AppError{
 		Code:     ErrTenantInactive,
-		Message:  "租户已停用",
+		Message:  "空间已停用",
+		HTTPCode: http.StatusForbidden,
+	}
+}
+
+// NewTenantCreationDisabledError reports a deployment-policy denial for
+// ordinary self-service tenant creation.
+func NewTenantCreationDisabledError() *AppError {
+	return &AppError{
+		Code:     ErrTenantCreationDisabled,
+		Message:  "self-service workspace creation is disabled; join a workspace by invitation",
 		HTTPCode: http.StatusForbidden,
 	}
 }
@@ -204,7 +251,7 @@ func NewAgentMissingAllowedToolsError() *AppError {
 func NewAgentInvalidMaxIterationsError() *AppError {
 	return &AppError{
 		Code:     ErrAgentInvalidMaxIterations,
-		Message:  "最大迭代次数必须在1-20之间",
+		Message:  "最大迭代次数须为正整数，或 -1 表示不限制",
 		HTTPCode: http.StatusBadRequest,
 	}
 }

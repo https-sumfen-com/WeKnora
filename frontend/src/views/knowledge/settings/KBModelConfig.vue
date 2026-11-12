@@ -25,29 +25,36 @@
         </div>
       </div>
 
-      <!-- Embedding 嵌入模型 (仅 RAG 检索启用时必填) -->
-      <div v-if="ragEnabled !== false" class="setting-row" data-guide="kb-create-embedding">
+      <!-- Embedding 嵌入模型: RAG 检索启用时必填; 纯 Wiki 时可选(用于目录归类相似度) -->
+      <div v-if="ragEnabled !== false || wikiEnabled" class="setting-row" data-guide="kb-create-embedding">
         <div class="setting-info">
-          <label>{{ $t('knowledgeEditor.models.embeddingLabel') }} <span v-if="ragEnabled" class="required">*</span></label>
-          <p class="desc">{{ $t('knowledgeEditor.models.embeddingDesc') }}</p>
-          <t-alert
-            v-if="hasFiles"
-            theme="warning"
-            :message="$t('knowledgeEditor.models.embeddingLocked')"
-            style="margin-top: 8px;"
-          />
+          <label>
+            {{ $t('knowledgeEditor.models.embeddingLabel') }}
+            <span v-if="ragEnabled" class="required">*</span>
+            <span v-else-if="wikiEnabled" class="optional">{{ $t('knowledgeEditor.models.embeddingOptional') }}</span>
+          </label>
+          <p class="desc">
+            {{ (wikiEnabled && ragEnabled === false)
+              ? $t('knowledgeEditor.models.embeddingWikiOptionalDesc')
+              : $t('knowledgeEditor.models.embeddingDesc') }}
+          </p>
         </div>
-        <div class="setting-control">
+        <div class="setting-control setting-control--stacked">
           <ModelSelector
             ref="embeddingSelectorRef"
             model-type="Embedding"
             :selected-model-id="config.embeddingModelId"
             :all-models="allModels"
-            :disabled="hasFiles"
+            :disabled="ragEnabled && hasFiles"
+            :clearable="ragEnabled === false && wikiEnabled"
             @update:selected-model-id="handleEmbeddingChange"
             @add-model="handleAddModel('embedding')"
             :placeholder="$t('knowledgeEditor.models.embeddingPlaceholder')"
           />
+          <p v-if="ragEnabled && hasFiles" class="locked-hint">
+            <t-icon name="lock-on" class="locked-hint-icon" />
+            <span>{{ $t('knowledgeEditor.models.embeddingLocked') }}</span>
+          </p>
         </div>
       </div>
 
@@ -62,6 +69,7 @@
             model-type="KnowledgeQA"
             :selected-model-id="config.wikiSynthesisModelId"
             :all-models="allModels"
+            clearable
             @update:selected-model-id="handleWikiModelChange"
             @add-model="handleAddModel('knowledgeqa')"
             :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
@@ -138,17 +146,17 @@ const handleAddModel = (subSection: string) => {
 }
 
 .section-header {
-  margin-bottom: 32px;
+  margin-bottom: 20px;
 
   h2 {
-    font-size: 20px;
+    font-size: var(--app-text-3xl);
     font-weight: 600;
     color: var(--td-text-color-primary);
-    margin: 0 0 8px 0;
+    margin: 0 0 6px 0;
   }
 
   .section-description {
-    font-size: 14px;
+    font-size: var(--app-text-base);
     color: var(--td-text-color-secondary);
     margin: 0;
     line-height: 1.5;
@@ -165,7 +173,7 @@ const handleAddModel = (subSection: string) => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 20px 0;
+  padding: 16px 0;
   border-bottom: 1px solid var(--td-component-stroke);
 
   &:last-child {
@@ -179,7 +187,7 @@ const handleAddModel = (subSection: string) => {
   padding-right: 24px;
 
   label {
-    font-size: 15px;
+    font-size: var(--app-text-lg);
     font-weight: 500;
     color: var(--td-text-color-primary);
     display: block;
@@ -189,10 +197,17 @@ const handleAddModel = (subSection: string) => {
       color: var(--td-error-color);
       margin-left: 2px;
     }
+
+    .optional {
+      color: var(--td-text-color-placeholder);
+      font-size: var(--app-text-sm);
+      font-weight: 400;
+      margin-left: 4px;
+    }
   }
 
   .desc {
-    font-size: 13px;
+    font-size: var(--app-text-md);
     color: var(--td-text-color-secondary);
     margin: 0;
     line-height: 1.5;
@@ -205,6 +220,29 @@ const handleAddModel = (subSection: string) => {
   display: flex;
   justify-content: flex-end;
   align-items: flex-start;
+
+  &--stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
+.locked-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--app-text-sm);
+  line-height: 18px;
+  color: var(--td-text-color-secondary);
+
+  .locked-hint-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    font-size: var(--app-text-base);
+    color: var(--td-text-color-placeholder);
+  }
 }
 </style>
 

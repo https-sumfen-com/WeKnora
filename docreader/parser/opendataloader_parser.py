@@ -25,6 +25,7 @@ from docreader.config import CONFIG
 from docreader.models.document import Document
 from docreader.parser.base_parser import BaseParser
 from docreader.parser.concurrency import parser_worker_limit
+from docreader.utils.ssrf import is_ssrf_safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,13 @@ _MIN_CHARS_PER_PAGE = 20
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _IMAGE_FILE_NUM_RE = re.compile(r"^imageFile(\d+)\.", re.I)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Health probes never need redirects; refusing them closes redirect SSRF."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _override_str(overrides: Optional[Mapping[str, Any]], key: str, default: str = "") -> str:
@@ -75,11 +83,16 @@ def _ping_hybrid(
 
     base = url.rstrip("/")
     health_url = f"{base}/health"
+    safe, reason = is_ssrf_safe_url(health_url)
+    if not safe:
+        return False, f"OpenDataLoader hybrid URL 被 SSRF 防护拦截: {reason}"
+
+    opener = urllib.request.build_opener(_NoRedirectHandler())
     last_err = ""
     for attempt in range(max(1, retries)):
         try:
             req = urllib.request.Request(health_url, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            with opener.open(req, timeout=timeout_sec) as resp:
                 if 200 <= resp.status < 300:
                     return True, ""
                 last_err = f"hybrid 健康检查 HTTP {resp.status}: {health_url}"
@@ -98,8 +111,15 @@ def _ping_hybrid(
 
 def opendataloader_available(
     overrides: Optional[Mapping[str, Any]] = None,
+    quick: bool = False,
 ) -> Tuple[bool, str]:
-    """Registry / ListEngines availability probe."""
+    """Registry / ListEngines availability probe.
+
+    When ``quick`` is set the hybrid health check uses a single short-timeout
+    attempt with no retries, so it can be used for fast status listing without
+    blocking on long retry/backoff loops. Parsing keeps the patient retry
+    behavior to tolerate a hybrid service that is still starting up.
+    """
     ok, msg = _java_available()
     if not ok:
         return False, msg
@@ -111,6 +131,8 @@ def opendataloader_available(
     if hybrid and hybrid.lower() not in ("off", ""):
         url = _resolve_hybrid_url(overrides)
         if url:
+            if quick:
+                return _ping_hybrid(url, retries=1, timeout_sec=2.0)
             return _ping_hybrid(url, retries=6, retry_delay_sec=5.0, timeout_sec=5.0)
     return True, ""
 
@@ -269,6 +291,11 @@ def _run_convert(
         kwargs["hybrid"] = hybrid
         hybrid_url = _resolve_hybrid_url(overrides)
         if hybrid_url:
+            safe, reason = is_ssrf_safe_url(hybrid_url)
+            if not safe:
+                raise RuntimeError(
+                    f"OpenDataLoader hybrid URL 被 SSRF 防护拦截: {reason}"
+                )
             kwargs["hybrid_url"] = hybrid_url
         hybrid_mode = _override_str(overrides, "odl_hybrid_mode", CONFIG.odl_hybrid_mode)
         if hybrid_mode:

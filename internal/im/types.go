@@ -1,8 +1,10 @@
 package im
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ type IMChannel struct {
 	Enabled         bool           `json:"enabled"     gorm:"not null;default:true"`
 	Mode            string         `json:"mode"        gorm:"type:varchar(20);not null;default:'websocket'"`
 	OutputMode      string         `json:"output_mode"       gorm:"type:varchar(20);not null;default:'stream'"`
+	Locale          string         `json:"locale"            gorm:"type:varchar(16);not null;default:''"`
 	KnowledgeBaseID string         `json:"knowledge_base_id" gorm:"type:varchar(36);default:''"`
 	BotIdentity     string         `json:"bot_identity"      gorm:"type:varchar(255);not null;default:'';uniqueIndex:idx_im_channels_bot_identity,where:deleted_at IS NULL AND bot_identity != ''"`
 	SessionMode     string         `json:"session_mode"      gorm:"type:varchar(20);not null;default:'user'"`
@@ -35,12 +38,68 @@ func (IMChannel) TableName() string {
 	return "im_channels"
 }
 
+// IMChannelSummary is the HTTP-safe list shape for IM channels. Credentials
+// are never included — use Admin+ Create/Update responses to read back
+// values immediately after a mutation.
+type IMChannelSummary struct {
+	ID                    string    `json:"id"`
+	TenantID              uint64    `json:"tenant_id"`
+	AgentID               string    `json:"agent_id"`
+	Platform              string    `json:"platform"`
+	Name                  string    `json:"name"`
+	Enabled               bool      `json:"enabled"`
+	Mode                  string    `json:"mode"`
+	OutputMode            string    `json:"output_mode"`
+	Locale                string    `json:"locale"`
+	KnowledgeBaseID       string    `json:"knowledge_base_id"`
+	BotIdentity           string    `json:"bot_identity"`
+	SessionMode           string    `json:"session_mode"`
+	CredentialsConfigured bool      `json:"credentials_configured"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// SummarizeIMChannel converts a stored channel into its list response shape.
+func SummarizeIMChannel(ch IMChannel) IMChannelSummary {
+	return IMChannelSummary{
+		ID:                    ch.ID,
+		TenantID:              ch.TenantID,
+		AgentID:               ch.AgentID,
+		Platform:              ch.Platform,
+		Name:                  ch.Name,
+		Enabled:               ch.Enabled,
+		Mode:                  ch.Mode,
+		OutputMode:            ch.OutputMode,
+		Locale:                ch.Locale,
+		KnowledgeBaseID:       ch.KnowledgeBaseID,
+		BotIdentity:           ch.BotIdentity,
+		SessionMode:           ch.SessionMode,
+		CredentialsConfigured: imCredentialsConfigured(ch.Credentials),
+		CreatedAt:             ch.CreatedAt,
+		UpdatedAt:             ch.UpdatedAt,
+	}
+}
+
+// SummarizeIMChannels converts stored channels into list response shapes.
+func SummarizeIMChannels(channels []IMChannel) []IMChannelSummary {
+	out := make([]IMChannelSummary, 0, len(channels))
+	for _, ch := range channels {
+		out = append(out, SummarizeIMChannel(ch))
+	}
+	return out
+}
+
+func imCredentialsConfigured(cred types.JSON) bool {
+	s := strings.TrimSpace(string(cred))
+	return s != "" && s != "{}"
+}
+
 func (ch *IMChannel) BeforeCreate(tx *gorm.DB) error {
 	if ch.ID == "" {
 		ch.ID = uuid.New().String()
 	}
 	if ch.Mode == "" {
-		if ch.Platform == "mattermost" {
+		if ch.Platform == "mattermost" || ch.Platform == "yunzhijia" {
 			ch.Mode = "webhook"
 		} else {
 			ch.Mode = "websocket"
@@ -53,6 +112,9 @@ func (ch *IMChannel) BeforeCreate(tx *gorm.DB) error {
 		ch.SessionMode = string(SessionModeUser)
 	}
 	if err := ch.validateSessionMode(); err != nil {
+		return err
+	}
+	if err := ch.normalizeAndValidateLocale(); err != nil {
 		return err
 	}
 	ch.BotIdentity = ch.computeBotIdentity()
@@ -68,8 +130,24 @@ func (ch *IMChannel) BeforeSave(tx *gorm.DB) error {
 	if err := ch.validateSessionMode(); err != nil {
 		return err
 	}
+	if err := ch.normalizeAndValidateLocale(); err != nil {
+		return err
+	}
 	ch.BotIdentity = ch.computeBotIdentity()
 	return nil
+}
+
+func (ch *IMChannel) normalizeAndValidateLocale() error {
+	locale := strings.TrimSpace(ch.Locale)
+	if locale == "" {
+		ch.Locale = ""
+		return nil
+	}
+	if normalized := types.NormalizeSupportedLocale(locale); normalized != "" {
+		ch.Locale = normalized
+		return nil
+	}
+	return fmt.Errorf("invalid locale: %s", locale)
 }
 
 // validateSessionMode checks that SessionMode holds a supported value.
@@ -116,9 +194,11 @@ func (ch *IMChannel) computeBotIdentity() string {
 				return "wecom:wh:" + corpID + ":" + agentID
 			}
 		}
-	case "feishu":
+	// Feishu and Lark app_ids live in separate clouds and never collide, so the
+	// platform prefix keeps the same app_id on both from looking like one bot.
+	case "feishu", "lark":
 		if appID := str("app_id"); appID != "" {
-			return "feishu:" + appID
+			return ch.Platform + ":" + appID
 		}
 	case "telegram":
 		if botToken := str("bot_token"); botToken != "" {
@@ -139,6 +219,20 @@ func (ch *IMChannel) computeBotIdentity() string {
 	case "wechat":
 		if botID := str("ilink_bot_id"); botID != "" {
 			return "wechat:" + botID
+		}
+	case "qqbot":
+		if appID := str("app_id"); appID != "" {
+			return "qqbot:" + appID
+		}
+	case "yunzhijia":
+		if sendMsgURL := str("send_msg_url"); sendMsgURL != "" {
+			parsed, err := url.Parse(sendMsgURL)
+			if err != nil {
+				return ""
+			}
+			if token := strings.TrimSpace(parsed.Query().Get("yzjtoken")); token != "" {
+				return fmt.Sprintf("yunzhijia:%x", sha256.Sum256([]byte(token)))
+			}
 		}
 	}
 	return ""

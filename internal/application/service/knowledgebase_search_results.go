@@ -13,6 +13,7 @@ import (
 // processSearchResults handles the processing of search results, optimizing database queries.
 func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 	chunks []*types.IndexWithScore,
+	primaryLimit int,
 	skipEnrichment bool,
 ) ([]*types.SearchResult, error) {
 	if len(chunks) == 0 {
@@ -21,15 +22,42 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 
 	tenantID := types.MustTenantIDFromContext(ctx)
 
-	// Collect all knowledge and chunk IDs, track scores and match info
-	index := s.buildChunkIndex(chunks)
+	chunks = chunks[:min(len(chunks), maxRetrievalPoolSize)]
+	knowledgeIDs := make([]string, 0, len(chunks))
+	seenKnowledge := make(map[string]bool, len(chunks))
+	for _, chunk := range chunks {
+		if !seenKnowledge[chunk.KnowledgeID] {
+			knowledgeIDs = append(knowledgeIDs, chunk.KnowledgeID)
+			seenKnowledge[chunk.KnowledgeID] = true
+		}
+	}
 
 	// Batch fetch knowledge data (include shared KB so cross-tenant retrieval works)
-	logger.Infof(ctx, "Fetching knowledge data for %d IDs", len(index.knowledgeIDs))
-	knowledgeMap, err := s.fetchKnowledgeDataWithShared(ctx, tenantID, index.knowledgeIDs)
+	logger.Infof(ctx, "Fetching knowledge data for %d IDs", len(knowledgeIDs))
+	knowledgeMap, err := s.fetchKnowledgeDataWithShared(ctx, tenantID, knowledgeIDs)
 	if err != nil {
 		return nil, err
 	}
+
+	// Cancellation preserves partial index data for a later retry. Exclude
+	// those hits before they can take a result slot or supply enrichment.
+	selected := make([]*types.IndexWithScore, 0, min(primaryLimit, len(chunks)))
+	selectedKnowledge := make(map[string]*types.Knowledge)
+	for _, chunk := range chunks {
+		knowledge := knowledgeMap[chunk.KnowledgeID]
+		if knowledge == nil || knowledge.ParseStatus == types.ParseStatusCancelled {
+			continue
+		}
+		selected = append(selected, chunk)
+		selectedKnowledge[knowledge.ID] = knowledge
+		if len(selected) == primaryLimit {
+			break
+		}
+	}
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	index := s.buildChunkIndex(selected)
 
 	// Batch fetch chunks (include shared KB chunks)
 	logger.Infof(ctx, "Fetching chunk data for %d IDs", len(index.chunkIDs))
@@ -82,9 +110,12 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 	}
 
 	// Build final search results
-	searchResults := s.assembleSearchResults(ctx, chunks, chunkMap, knowledgeMap, index, skipEnrichment)
+	searchResults := s.assembleSearchResults(ctx, selected, chunkMap, selectedKnowledge, index, skipEnrichment)
 
-	searchutil.EnrichSearchResultsImageInfo(ctx, s.chunkRepo, tenantID, searchResults)
+	// Results can come from org-shared KBs owned by another workspace; the
+	// chunks above were already permission checked, so look up their image
+	// children without the caller-tenant filter (#3342).
+	searchutil.EnrichSearchResultsImageInfoOnly(ctx, s.chunkRepo, searchResults)
 
 	logger.Infof(ctx, "Search results processed, total: %d", len(searchResults))
 	return searchResults, nil
@@ -92,32 +123,29 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 
 // chunkIndex holds pre-computed lookup structures for processing search results.
 type chunkIndex struct {
-	knowledgeIDs    []string
 	chunkIDs        []string
 	scores          map[string]float64
+	vectorScores    map[string]float64
 	matchTypes      map[string]types.MatchType
 	matchedContents map[string]string
 	processedIDs    map[string]bool // tracks all IDs (chunk + enrichment) to avoid duplicates
 }
 
-// buildChunkIndex collects knowledge/chunk IDs and builds score/matchType maps
+// buildChunkIndex collects chunk IDs and builds score/matchType maps
 // from the raw retrieval results.
 func (s *knowledgeBaseService) buildChunkIndex(chunks []*types.IndexWithScore) *chunkIndex {
 	idx := &chunkIndex{
 		scores:          make(map[string]float64, len(chunks)),
+		vectorScores:    make(map[string]float64, len(chunks)),
 		matchTypes:      make(map[string]types.MatchType, len(chunks)),
 		matchedContents: make(map[string]string, len(chunks)),
 		processedIDs:    make(map[string]bool, len(chunks)*2),
 	}
 
-	processedKnowledgeIDs := make(map[string]bool)
 	for _, chunk := range chunks {
-		if !processedKnowledgeIDs[chunk.KnowledgeID] {
-			idx.knowledgeIDs = append(idx.knowledgeIDs, chunk.KnowledgeID)
-			processedKnowledgeIDs[chunk.KnowledgeID] = true
-		}
 		idx.chunkIDs = append(idx.chunkIDs, chunk.ChunkID)
 		idx.scores[chunk.ChunkID] = chunk.Score
+		idx.vectorScores[chunk.ChunkID] = chunk.VectorScore
 		idx.matchTypes[chunk.ChunkID] = chunk.MatchType
 		idx.matchedContents[chunk.ChunkID] = chunk.Content
 	}
@@ -192,10 +220,10 @@ func (s *knowledgeBaseService) collectParentChunkIDs(
 	return ids
 }
 
-// hasImageChunks returns true if any chunk is an image_ocr or image_caption type.
+// hasImageChunks returns true if any chunk is one of the image child types.
 func (s *knowledgeBaseService) hasImageChunks(chunks []*types.Chunk) bool {
 	for _, c := range chunks {
-		if c.ChunkType == types.ChunkTypeImageOCR || c.ChunkType == types.ChunkTypeImageCaption {
+		if types.IsImageChildChunkType(c.ChunkType) {
 			return true
 		}
 	}
@@ -240,7 +268,10 @@ func (s *knowledgeBaseService) assembleSearchResults(
 		if knowledge, ok := knowledgeMap[chunk.KnowledgeID]; ok {
 			matchType := idx.matchTypes[chunk.ID]
 			matchedContent := idx.matchedContents[chunk.ID]
-			searchResults = append(searchResults, s.buildSearchResult(chunk, knowledge, score, matchType, matchedContent))
+			result := s.buildSearchResult(chunk, knowledge, score, matchType, matchedContent)
+			result.VectorScore = idx.vectorScores[chunk.ID]
+			searchutil.CaptureImageEvidence(result)
+			searchResults = append(searchResults, result)
 			addedChunkIDs[chunk.ID] = true
 		} else {
 			logger.Warnf(ctx, "Knowledge not found for chunk: %s, knowledge_id: %s", chunk.ID, chunk.KnowledgeID)
@@ -279,7 +310,32 @@ func (s *knowledgeBaseService) assembleSearchResults(
 		}
 	}
 
+	logSearchResultChunkTypes(ctx, searchResults)
 	return searchResults
+}
+
+// logSearchResultChunkTypes records how many returned hits came from each
+// chunk type. It exists to answer one question with data: how often does the
+// document-level summary chunk actually surface, compared with text chunks?
+// If "summary" stays near zero in production, indexing it can be dropped.
+func logSearchResultChunkTypes(ctx context.Context, results []*types.SearchResult) {
+	if len(results) == 0 {
+		return
+	}
+	counts := make(map[string]int, 4)
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		key := r.ChunkType
+		if key == "" {
+			key = string(types.ChunkTypeText)
+		}
+		counts[key]++
+	}
+	logger.GetLogger(ctx).WithField("chunk_type_counts", counts).
+		WithField("total", len(results)).
+		Infof("search results by chunk type")
 }
 
 // collectRelatedChunkIDs extracts related chunk IDs from a chunk.
@@ -307,36 +363,49 @@ func (s *knowledgeBaseService) buildSearchResult(chunk *types.Chunk,
 	matchedContent string,
 ) *types.SearchResult {
 	return &types.SearchResult{
-		ID:                chunk.ID,
-		Content:           chunk.Content,
-		KnowledgeID:       chunk.KnowledgeID,
-		ChunkIndex:        chunk.ChunkIndex,
-		KnowledgeTitle:    knowledge.Title,
-		StartAt:           chunk.StartAt,
-		EndAt:             chunk.EndAt,
-		Seq:               chunk.ChunkIndex,
-		Score:             score,
-		MatchType:         matchType,
-		Metadata:          knowledge.GetMetadata(),
-		ChunkType:         string(chunk.ChunkType),
-		ParentChunkID:     chunk.ParentChunkID,
-		ImageInfo:         chunk.ImageInfo,
-		KnowledgeFilename:    knowledge.FileName,
-		KnowledgeSource:      knowledge.Source,
-		KnowledgeChannel:     knowledge.Channel,
-		KnowledgeDescription: knowledge.Description,
-		ChunkMetadata:     chunk.Metadata,
-		MatchedContent:    matchedContent,
-		KnowledgeBaseID:   knowledge.KnowledgeBaseID,
+		ID:                      chunk.ID,
+		Content:                 chunk.Content,
+		ContentRevision:         chunk.ContentRevision,
+		KnowledgeID:             chunk.KnowledgeID,
+		ChunkIndex:              chunk.ChunkIndex,
+		KnowledgeTitle:          knowledge.Title,
+		StartAt:                 chunk.StartAt,
+		EndAt:                   chunk.EndAt,
+		Seq:                     chunk.ChunkIndex,
+		Score:                   score,
+		MatchType:               matchType,
+		Metadata:                knowledge.GetMetadata(),
+		ChunkType:               string(chunk.ChunkType),
+		ParentChunkID:           chunk.ParentChunkID,
+		ImageInfo:               chunk.ImageInfo,
+		KnowledgeFilename:       knowledge.FileName,
+		KnowledgeSource:         knowledge.Source,
+		KnowledgeChannel:        knowledge.Channel,
+		KnowledgeDescription:    knowledge.Description,
+		KnowledgeCustomMetadata: knowledge.CustomMetadataText(),
+		ChunkMetadata:           chunk.Metadata,
+		ContextHeader:           chunk.ContextHeader,
+		MatchedContent:          matchedContent,
+		KnowledgeBaseID:         knowledge.KnowledgeBaseID,
+		SourceLocators:          chunk.SourceLocators,
 	}
 }
 
 // isSearchableChunk checks if a chunk type should be included in search results.
 func (s *knowledgeBaseService) isSearchableChunk(chunk *types.Chunk) bool {
+	if chunk == nil || !chunk.IsEnabled {
+		return false
+	}
+	// An edit is persisted before its retrieval artifacts are synchronized.
+	// Do not hydrate stale vector hits while that synchronization is pending or
+	// failed. Empty is accepted for legacy rows created before index_status.
+	if chunk.IndexStatus == "processing" || chunk.IndexStatus == "failed" {
+		return false
+	}
 	return slices.Contains([]types.ChunkType{
 		types.ChunkTypeText, types.ChunkTypeSummary,
 		types.ChunkTypeTableColumn, types.ChunkTypeTableSummary,
 		types.ChunkTypeFAQ,
-		types.ChunkTypeImageOCR, types.ChunkTypeImageCaption,
+		types.ChunkTypeImageOCR, types.ChunkTypeImageCaption, types.ChunkTypeImageVector,
 	}, chunk.ChunkType)
 }

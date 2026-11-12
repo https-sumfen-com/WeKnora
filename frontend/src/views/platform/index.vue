@@ -1,20 +1,23 @@
 <template>
-    <div class="main" ref="dropzone">
+    <div class="main" ref="dropzone" :style="{ '--sidebar-width': `${uiStore.sidebarDisplayWidth}px` }">
         <Menu></Menu>
         <div v-if="isRouterAlive" class="platform-route-outlet">
             <RouterView />
         </div>
+        <!-- WeKnora 助手：停靠时作为布局右栏挤压页面，悬浮时浮在页面上；都不加遮罩，
+             跨页面保留会话，从侧栏、右侧边缘按钮或命令面板唤出（设置里可选） -->
+        <AssistantPanel />
+        <AssistantLauncher />
+        <AssistantPageBridge />
         <div class="upload-mask" v-show="ismask">
-            <input type="file" style="display: none" ref="uploadInput" accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.jpg,.jpeg,.png,.csv,.xls,.xlsx" />
             <UploadMask></UploadMask>
         </div>
         <!-- 全局设置模态框，供所有 platform 子路由使用 -->
         <Settings />
         <!-- 全局命令面板 (⌘K)，随 platform 路由存活 -->
         <GlobalCommandPalette />
-        <!-- 全局右上角"待处理邀请"铃铛。固定定位，z-index 低于抽屉，业务页面
-             右侧抽屉弹出时会自然覆盖；仅在有待处理邀请时渲染。 -->
-        <GlobalInvitationBell />
+        <!-- 知识库文件上传进度浮层：上传队列放在 store 里，切换页面不中断 -->
+        <UploadTasksPanel />
         <!-- 带遮罩层的新手引导：首次进入自动开启，可从用户菜单顶部昵称旁帮助按钮重新打开 -->
         <NewUserGuide />
     </div>
@@ -23,23 +26,27 @@
 import Menu from '@/components/menu.vue'
 import { ref, onMounted, onUnmounted, nextTick, provide, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router'
-import useKnowledgeBase from '@/hooks/useKnowledgeBase'
 import UploadMask from '@/components/upload-mask.vue'
 import Settings from '@/views/settings/Settings.vue'
 import GlobalCommandPalette from '@/components/GlobalCommandPalette.vue'
-import GlobalInvitationBell from '@/components/GlobalInvitationBell.vue'
+import AssistantPanel from '@/components/assistant/AssistantPanel.vue'
+import AssistantLauncher from '@/components/assistant/AssistantLauncher.vue'
+import AssistantPageBridge from '@/components/assistant/AssistantPageBridge.vue'
+import UploadTasksPanel from '@/components/upload-tasks/UploadTasksPanel.vue'
 import NewUserGuide from '@/components/NewUserGuide.vue'
 import { useCommandPaletteStore } from '@/stores/commandPalette'
+import { useChatResourcesStore } from '@/stores/chatResources'
+import { useUIStore } from '@/stores/ui'
 import { getKnowledgeBaseById } from '@/api/knowledge-base/index'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
+import { collectDroppedFiles } from './collectDroppedFiles'
 
-let { requestMethod } = useKnowledgeBase()
 const route = useRoute();
 const router = useRouter();
 const commandPaletteStore = useCommandPaletteStore();
+const uiStore = useUIStore();
 let ismask = ref(false)
-let uploadInput = ref();
 const { t } = useI18n();
 
 const isRouterAlive = ref(true)
@@ -80,29 +87,6 @@ const isChatDropRoute = () => {
     return CHAT_DROP_ROUTE_NAMES.has(String(route.name || ''));
 }
 
-const collectDroppedFiles = async (event: DragEvent): Promise<File[]> => {
-    const dataTransferFiles = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : [];
-    if (dataTransferFiles.length > 0) {
-        return dataTransferFiles;
-    }
-
-    const dataTransferItems = event.dataTransfer?.items ? Array.from(event.dataTransfer.items) : [];
-    if (dataTransferItems.length === 0) {
-        return [];
-    }
-
-    const files = await Promise.all(dataTransferItems.map(item => new Promise<File | null>((resolve) => {
-        const fileEntry = (item as any).webkitGetAsEntry?.();
-        if (fileEntry?.isFile && typeof fileEntry.file === 'function') {
-            fileEntry.file((file: File) => resolve(file), () => resolve(null));
-            return;
-        }
-        resolve(null);
-    })));
-
-    return files.filter((file): file is File => file instanceof File);
-}
-
 // 检查知识库初始化状态
 const checkKnowledgeBaseInitialization = async (): Promise<boolean> => {
     const currentKbId = getCurrentKbId();
@@ -134,9 +118,35 @@ const checkKnowledgeBaseInitialization = async (): Promise<boolean> => {
 }
 
 
+// isFileDrag distinguishes an OS file drag (the only thing the global upload
+// drop zone cares about) from an in-app element drag such as the wiki
+// folder/page drag-and-drop. Element drags carry only "text/*" types, never
+// "Files", so we bail out and let the originating component handle the drop.
+const isFileDrag = (event: DragEvent): boolean => {
+    const types = event.dataTransfer?.types
+    if (!types) return false
+    return Array.from(types).includes('Files')
+}
+
+const shouldHandleGlobalFileDrag = (event: DragEvent): boolean => {
+    if (!isFileDrag(event)) return false;
+    // Keep the browser from opening dropped files, even outside upload pages.
+    event.preventDefault();
+    // Settings and its teleported skill drawers own their uploads. This runs
+    // in document capture, before a local drop handler can stop propagation.
+    const enabled = !uiStore.showSettingsModal && (
+        isChatDropRoute() || (route.name === 'knowledgeBaseDetail' && !!getCurrentKbId())
+    );
+    if (!enabled) {
+        dragCounter = 0;
+        ismask.value = false;
+    }
+    return enabled;
+}
+
 // 全局拖拽事件处理
 const handleGlobalDragEnter = (event: DragEvent) => {
-    event.preventDefault();
+    if (!shouldHandleGlobalFileDrag(event)) return;
     dragCounter++;
     if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'all';
@@ -145,14 +155,14 @@ const handleGlobalDragEnter = (event: DragEvent) => {
 }
 
 const handleGlobalDragOver = (event: DragEvent) => {
-    event.preventDefault();
+    if (!shouldHandleGlobalFileDrag(event)) return;
     if (event.dataTransfer) {
         event.dataTransfer.dropEffect = 'copy';
     }
 }
 
 const handleGlobalDragLeave = (event: DragEvent) => {
-    event.preventDefault();
+    if (!shouldHandleGlobalFileDrag(event)) return;
     dragCounter--;
     if (dragCounter === 0) {
         ismask.value = false;
@@ -160,7 +170,7 @@ const handleGlobalDragLeave = (event: DragEvent) => {
 }
 
 const handleGlobalDrop = async (event: DragEvent) => {
-    event.preventDefault();
+    if (!shouldHandleGlobalFileDrag(event)) return;
     dragCounter = 0;
     ismask.value = false;
 
@@ -183,7 +193,9 @@ const handleGlobalDrop = async (event: DragEvent) => {
         return;
     }
 
-    droppedFiles.forEach(file => requestMethod(file, uploadInput));
+    window.dispatchEvent(new CustomEvent('weknora:knowledge-file-drop', {
+        detail: { kbId: getCurrentKbId(), files: droppedFiles }
+    }));
 }
 
 // 组件挂载时添加全局事件监听器
@@ -202,6 +214,8 @@ onMounted(() => {
     // 支持通过 URL 查询参数打开全局命令面板，例如旧路径
     // /platform/knowledge-search?q=foo 重定向后携带 ?cmdk=foo
     maybeOpenCmdkFromRoute()
+    // 后台预取对话输入栏资源，进入 creatChat / chat 时复用缓存
+    void useChatResourcesStore().prefetchChatInput()
 });
 
 // 监听路由变化，兼容 SPA 内部跳转时的 ?cmdk= 参数

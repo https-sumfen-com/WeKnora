@@ -53,9 +53,8 @@
           </div>
         </div>
 
-        <!-- 自助创建新工作区入口：任意已登录用户可点击，后端会把当前用户
-             写成新租户的 Owner（见 internal/handler/tenant.go CreateTenant）。 -->
-        <div class="tenant-create-action" @click="openCreateDialog">
+        <!-- 自助创建入口与 /auth/me 返回的后端能力保持一致。 -->
+        <div v-if="authStore.canCreateTenant" class="tenant-create-action" @click="openCreateDialog">
           <t-icon name="add" class="tenant-create-icon" />
           <span class="tenant-create-label">{{ $t('tenant.create.action') }}</span>
         </div>
@@ -103,8 +102,8 @@ const loading = ref(false)
 const searchTimer = ref<number | null>(null)
 
 const selectedTenantId = computed(() => authStore.selectedTenantId)
-// home 租户 id 来自 user.tenant_id（注册时分配、永不变）。不要读
-// authStore.tenant.id —— 那是当前激活租户，会随 X-Tenant-ID 切换；用它
+// home 空间 id 来自 user.tenant_id（注册时分配、永不变）。不要读
+// authStore.tenant.id —— 那是当前激活空间，会随 X-Tenant-ID 切换；用它
 // 当 home 会让「切回 home」分支错判，详见 useHomeTenant() 注释。
 const defaultTenantId = computed(() =>
   authStore.user?.tenant_id ? Number(authStore.user.tenant_id) : null,
@@ -116,14 +115,14 @@ const currentTenantId = computed(() => {
 
 const currentTenantName = computed(() => {
   if (!currentTenantId.value) return t('tenant.unknown')
-  // 首先从当前加载的租户列表中查找
+  // 首先从当前加载的空间列表中查找
   const tenant = tenants.value.find(t => t.id === currentTenantId.value)
   if (tenant) return tenant.name
-  // 如果是选中的租户，使用保存的租户名称
+  // 如果是选中的空间，使用保存的空间名称
   if (selectedTenantId.value && authStore.selectedTenantName) {
     return authStore.selectedTenantName
   }
-  // 最后使用默认租户名称
+  // 最后使用默认空间名称
   return authStore.tenant?.name || t('tenant.unknown')
 })
 
@@ -166,7 +165,7 @@ const clearSearch = () => {
 }
 
 const selectTenant = (tenantId: number) => {
-  // 找到选中的租户信息
+  // 找到选中的空间信息
   const selectedTenant = tenants.value.find(t => t.id === tenantId)
 
   // 始终写入 override，让 request.ts 永远附 X-Tenant-ID 覆盖 JWT；不要因为
@@ -175,7 +174,7 @@ const selectTenant = (tenantId: number) => {
   const switchingToHome = tenantId === defaultTenantId.value
   // 切到 home 时，selectedTenant 可能因为分页 / 搜索没把 home 加载进列表，
   // 退而求其次从 memberships 上挑名字。注意不要回退到 authStore.tenant?.name
-  // —— 那是当前激活租户的名字，在 active != home 的会话里就是 peer 的名字。
+  // —— 那是当前激活空间的名字，在 active != home 的会话里就是 peer 的名字。
   const homeNameFallback = switchingToHome
     ? (authStore.memberships ?? []).find((m) => Number(m.tenant_id) === tenantId)?.tenant_name
       || null
@@ -199,7 +198,7 @@ const selectTenant = (tenantId: number) => {
   // Persist "last active tenant" preference (switching to home clears
   // it). Fire-and-forget, but race it against the existing 500ms grace
   // window so most writes finish before the hard reload tears the page
-  // down. 切换租户后跳转到新租户下安全的入口（详见 tenantSwitch.ts 注释）。
+  // down. 切换空间后跳转到新空间下安全的入口（详见 tenantSwitch.ts 注释）。
   const persist = persistLastActiveTenantPreference(switchingToHome ? null : tenantId)
   Promise.race([persist, new Promise((r) => setTimeout(r, 500))])
     .finally(() => navigateAfterTenantSwitch())
@@ -214,7 +213,7 @@ const loadTenants = async (append = false) => {
     let tenantID: number | undefined = undefined
 
     // 如果是纯数字，同时作为 tenant_id 和 keyword 搜索
-    // 这样既能精确匹配租户ID，也能模糊匹配名称中包含数字的租户
+    // 这样既能精确匹配空间ID，也能模糊匹配名称中包含数字的空间
     if (keyword && /^\d+$/.test(keyword)) {
       tenantID = Number(keyword)
     }
@@ -276,11 +275,15 @@ const createDialogVisible = ref(false)
 
 const openCreateDialog = () => {
   closeDropdown()
+  if (!authStore.canCreateTenant) {
+    MessagePlugin.info(t('tenant.create.disabled'))
+    return
+  }
   createDialogVisible.value = true
 }
 
 const onTenantCreated = async (newTenant: TenantInfo) => {
-  // 把新租户合并进当前列表并切过去。和 selectTenant 走同一条链路：
+  // 把新空间合并进当前列表并切过去。和 selectTenant 走同一条链路：
   // setSelectedTenant + navigateAfterTenantSwitch。后端 X-Tenant-ID 中
   // 间件会查 tenant_members 校验，EnsureOwner 已经在后端写好 owner 行。
   tenants.value = [newTenant, ...tenants.value.filter(t => t.id !== newTenant.id)]
@@ -296,7 +299,7 @@ const onTenantCreated = async (newTenant: TenantInfo) => {
 }
 
 onMounted(() => {
-  // 预加载租户列表
+  // 预加载空间列表
   loadTenants()
 })
 
@@ -317,9 +320,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--app-motion-base);
   background: var(--td-bg-color-secondarycontainer);
   border: .5px solid var(--td-component-stroke);
 
@@ -335,7 +338,7 @@ onUnmounted(() => {
 }
 
 .tenant-label {
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-placeholder);
   margin-bottom: 2px;
   font-weight: 500;
@@ -349,7 +352,7 @@ onUnmounted(() => {
 }
 
 .tenant-name {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   font-weight: 600;
   color: var(--td-text-color-primary);
   white-space: nowrap;
@@ -359,7 +362,7 @@ onUnmounted(() => {
 }
 
 .tenant-switch-icon {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   color: var(--td-brand-color);
   flex-shrink: 0;
 }
@@ -380,7 +383,7 @@ onUnmounted(() => {
   right: 0;
   background: var(--td-bg-color-container);
   border: .5px solid var(--td-component-stroke);
-  border-radius: 10px;
+  border-radius: var(--app-radius-lg);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   z-index: 1000;
   overflow: hidden;
@@ -393,7 +396,7 @@ onUnmounted(() => {
 
 .dropdown-title {
   display: block;
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   font-weight: 600;
   color: var(--td-text-color-secondary);
   margin-bottom: 8px;
@@ -405,19 +408,19 @@ onUnmounted(() => {
   gap: 6px;
   padding: 7px 10px;
   background: var(--td-bg-color-secondarycontainer);
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   border: .5px solid transparent;
-  transition: all 0.2s;
+  transition: all var(--app-motion-base);
 
   &:focus-within {
     background: var(--td-bg-color-container);
     border-color: var(--td-brand-color);
-    box-shadow: 0 0 0 2px rgba(7, 192, 95, 0.1);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 10%, transparent);
   }
 }
 
 .search-icon {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   color: var(--td-text-color-placeholder);
   flex-shrink: 0;
 }
@@ -427,7 +430,7 @@ onUnmounted(() => {
   border: none;
   outline: none;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-primary);
   min-width: 0;
 
@@ -437,11 +440,11 @@ onUnmounted(() => {
 }
 
 .clear-icon {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   color: var(--td-text-color-placeholder);
   cursor: pointer;
   flex-shrink: 0;
-  transition: color 0.2s;
+  transition: color var(--app-motion-base);
 
   &:hover {
     color: var(--td-text-color-secondary);
@@ -476,9 +479,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--app-motion-fast);
   margin-bottom: 2px;
 
   &:last-child {
@@ -490,7 +493,7 @@ onUnmounted(() => {
   }
 
   &.selected {
-    background: rgba(7, 192, 95, 0.08);
+    background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
 
     .tenant-item-name {
       color: var(--td-brand-color);
@@ -510,16 +513,16 @@ onUnmounted(() => {
 .tenant-item-avatar {
   width: 32px;
   height: 32px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   background: var(--td-bg-color-secondarycontainer);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   font-weight: 600;
   color: var(--td-text-color-secondary);
   flex-shrink: 0;
-  transition: all 0.2s;
+  transition: all var(--app-motion-base);
 
   &.active {
     background: linear-gradient(135deg, var(--td-brand-color) 0%, var(--td-brand-color-active) 100%);
@@ -536,7 +539,7 @@ onUnmounted(() => {
 }
 
 .tenant-item-name {
-  font-size: 13px;
+  font-size: var(--app-text-md);
   color: var(--td-text-color-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -544,7 +547,7 @@ onUnmounted(() => {
 }
 
 .tenant-item-id {
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-placeholder);
 }
 
@@ -562,7 +565,7 @@ onUnmounted(() => {
   padding: 24px 12px;
   gap: 8px;
   color: var(--td-text-color-placeholder);
-  font-size: 13px;
+  font-size: var(--app-text-md);
 }
 
 .tenant-loading-more {
@@ -578,20 +581,20 @@ onUnmounted(() => {
   padding: 10px 12px;
   margin: 4px 6px 6px;
   border-top: .5px solid var(--td-component-stroke);
-  border-radius: 6px;
+  border-radius: var(--app-radius-sm);
   cursor: pointer;
   color: var(--td-brand-color);
-  font-size: 13px;
+  font-size: var(--app-text-md);
   font-weight: 500;
-  transition: background 0.15s;
+  transition: background var(--app-motion-fast);
 
   &:hover {
-    background: rgba(7, 192, 95, 0.08);
+    background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
   }
 }
 
 .tenant-create-icon {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   flex-shrink: 0;
 }
 
@@ -605,7 +608,7 @@ onUnmounted(() => {
 // 下拉动画
 .dropdown-enter-active,
 .dropdown-leave-active {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all var(--app-motion-base) cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dropdown-enter-from,

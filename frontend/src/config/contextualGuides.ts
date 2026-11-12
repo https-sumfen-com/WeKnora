@@ -1,10 +1,11 @@
 import type { SpotlightGuideStep } from '@/types/spotlightGuide'
 
 export const GLOBAL_USER_GUIDE_KEY = 'weknora:new-user-guide-done:v1'
+export const ASSISTANT_ENTRY_GUIDE_KEY = 'weknora:assistant-entry-guide-done:v0.9.0'
 export const OPEN_NEW_USER_GUIDE_EVENT = 'weknora:open-new-user-guide'
 
 /** 新手引导总开关：默认不显示，如需开启在 .env 中设置 VITE_ENABLE_USER_GUIDE=true */
-export const USER_GUIDE_ENABLED = import.meta.env.VITE_ENABLE_USER_GUIDE === 'true'
+export const USER_GUIDE_ENABLED = import.meta.env?.VITE_ENABLE_USER_GUIDE === 'true'
 
 export function openNewUserGuide() {
   if (!USER_GUIDE_ENABLED) return
@@ -23,9 +24,15 @@ export type ContextualGuideTourId =
   | 'agentList'
   | 'agentCreate'
 
-const focusKbEditorSection = (section: string) => {
+export const focusKbEditorSection = (section: string) => {
   window.dispatchEvent(
     new CustomEvent(KB_EDITOR_FOCUS_SECTION_EVENT, { detail: { section } }),
+  )
+}
+
+export const focusAgentEditorSection = (section: string) => {
+  window.dispatchEvent(
+    new CustomEvent(AGENT_EDITOR_FOCUS_SECTION_EVENT, { detail: { section } }),
   )
 }
 
@@ -148,5 +155,8 @@ export function markContextualGuideDone(tourId: ContextualGuideTourId) {
 
 export function isGlobalUserGuideDone(): boolean {
   if (!USER_GUIDE_ENABLED) return true
+  // Page-specific tours wait until both the original tour and the new entry
+  // introduction finish, so upgrading users never get two spotlight overlays.
   return localStorage.getItem(GLOBAL_USER_GUIDE_KEY) === '1'
+    && localStorage.getItem(ASSISTANT_ENTRY_GUIDE_KEY) === '1'
 }

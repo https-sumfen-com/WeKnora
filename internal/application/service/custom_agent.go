@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/agent/tools"
+	"github.com/Tencent/WeKnora/internal/application/access"
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -23,6 +24,16 @@ var (
 	ErrAgentNameRequired   = errors.New("agent name is required")
 )
 
+const (
+	// suggestionDefaultLimit is the fallback count when neither the caller nor
+	// the agent configuration specifies how many suggestions to return.
+	suggestionDefaultLimit = 6
+	// suggestionMaxLimit caps how many suggestions a single request may ask for.
+	// It bounds the downstream candidate pool (limit*5) so an oversized limit
+	// cannot turn into an unbounded chunk query.
+	suggestionMaxLimit = 30
+)
+
 // customAgentService implements the CustomAgentService interface
 type customAgentService struct {
 	repo           interfaces.CustomAgentRepository
@@ -30,6 +41,9 @@ type customAgentService struct {
 	kbService      interfaces.KnowledgeBaseService
 	kbShareService interfaces.KBShareService
 	wikiPageRepo   interfaces.WikiPageRepository
+	tagRepo        interfaces.KnowledgeTagRepository
+	knowledgeRepo  interfaces.KnowledgeRepository
+	agentShareRepo interfaces.AgentShareRepository
 }
 
 // NewCustomAgentService creates a new custom agent service
@@ -39,6 +53,9 @@ func NewCustomAgentService(
 	kbService interfaces.KnowledgeBaseService,
 	kbShareService interfaces.KBShareService,
 	wikiPageRepo interfaces.WikiPageRepository,
+	tagRepo interfaces.KnowledgeTagRepository,
+	knowledgeRepo interfaces.KnowledgeRepository,
+	agentShareRepo interfaces.AgentShareRepository,
 ) interfaces.CustomAgentService {
 	return &customAgentService{
 		repo:           repo,
@@ -46,6 +63,9 @@ func NewCustomAgentService(
 		kbService:      kbService,
 		kbShareService: kbShareService,
 		wikiPageRepo:   wikiPageRepo,
+		tagRepo:        tagRepo,
+		knowledgeRepo:  knowledgeRepo,
+		agentShareRepo: agentShareRepo,
 	}
 }
 
@@ -81,16 +101,14 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 	agent.CreatedAt = time.Now()
 	agent.UpdatedAt = time.Now()
 
-	// Ensure agent mode is set for user-created agents
-	if agent.Config.AgentMode == "" {
-		agent.Config.AgentMode = types.AgentModeQuickAnswer
-	}
-
 	// Cannot create built-in agents
 	agent.IsBuiltin = false
 
 	// Set defaults
-	agent.EnsureDefaults()
+	agent.EnsureCreationDefaults()
+	if err := agent.Config.QuestionSuggestions.Validate(); err != nil {
+		return nil, err
+	}
 
 	logger.Infof(ctx, "Creating custom agent, ID: %s, tenant ID: %d, name: %s, agent_mode: %s",
 		agent.ID, agent.TenantID, agent.Name, agent.Config.AgentMode)
@@ -125,7 +143,9 @@ func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*type
 		// Try to get from database first (for customized config)
 		agent, err := s.repo.GetAgentByID(ctx, id, tenantID)
 		if err == nil {
-			// Found in database, return with customized config
+			// Found in database, overlay locale-specific name/description/avatar
+			agent.EnsureDefaults()
+			types.ApplyBuiltinAgentLocalization(ctx, agent)
 			return agent, nil
 		}
 		// Not in database, return default built-in agent from registry (i18n-aware)
@@ -146,6 +166,7 @@ func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*type
 		return nil, err
 	}
 
+	agent.EnsureDefaults()
 	return agent, nil
 }
 
@@ -162,6 +183,7 @@ func (s *customAgentService) GetAgentByIDAndTenant(ctx context.Context, id strin
 		}
 		return nil, err
 	}
+	agent.EnsureDefaults()
 	return agent, nil
 }
 
@@ -184,6 +206,7 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 	// Track which built-in agents exist in database
 	builtinInDB := make(map[string]bool)
 	for _, agent := range allAgents {
+		agent.EnsureDefaults()
 		if types.IsBuiltinAgentID(agent.ID) {
 			builtinInDB[agent.ID] = true
 		}
@@ -199,6 +222,7 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 			// Use customized config from database
 			for _, agent := range allAgents {
 				if agent.ID == builtinID {
+					types.ApplyBuiltinAgentLocalization(ctx, agent)
 					result = append(result, agent)
 					break
 				}
@@ -221,8 +245,15 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 	return result, nil
 }
 
-// UpdateAgent updates an agent's information
-func (s *customAgentService) UpdateAgent(ctx context.Context, agent *types.CustomAgent) (*types.CustomAgent, error) {
+// UpdateAgent updates an agent's information.
+//
+// avatar carries the field presence the agent struct cannot: nil means the
+// caller did not send an avatar and the stored one must survive, a pointer to
+// "" is an explicit clear. Assigning agent.Avatar unconditionally made every
+// config-only PUT erase the avatar while still answering 200.
+func (s *customAgentService) UpdateAgent(
+	ctx context.Context, agent *types.CustomAgent, avatar *string,
+) (*types.CustomAgent, error) {
 	if agent.ID == "" {
 		logger.Error(ctx, "Agent ID is empty")
 		return nil, errors.New("agent ID cannot be empty")
@@ -261,12 +292,27 @@ func (s *customAgentService) UpdateAgent(ctx context.Context, agent *types.Custo
 	// Update fields
 	existingAgent.Name = agent.Name
 	existingAgent.Description = agent.Description
-	existingAgent.Avatar = agent.Avatar
+	// An absent avatar keeps the stored one; only a sent value replaces it.
+	if avatar != nil {
+		// Second length check, for non-HTTP callers that never pass through
+		// the handler. Same validator, so the varchar(64) bound does not end
+		// up duplicated as two constants.
+		if err := (&types.CustomAgent{Avatar: *avatar}).ValidateAvatar(); err != nil {
+			return nil, err
+		}
+		existingAgent.Avatar = *avatar
+	}
+	if err := s.checkSharedAgentKBScope(ctx, existingAgent, agent.Config); err != nil {
+		return nil, err
+	}
 	existingAgent.Config = agent.Config
 	existingAgent.UpdatedAt = time.Now()
 
 	// Ensure defaults
 	existingAgent.EnsureDefaults()
+	if err := existingAgent.Config.QuestionSuggestions.Validate(); err != nil {
+		return nil, err
+	}
 
 	logger.Infof(ctx, "Updating custom agent, ID: %s, name: %s", agent.ID, agent.Name)
 
@@ -281,10 +327,40 @@ func (s *customAgentService) UpdateAgent(ctx context.Context, agent *types.Custo
 	return existingAgent, nil
 }
 
+// checkSharedAgentKBScope keeps an edit from widening a shared agent's KB
+// scope beyond what the editor could share: the share was checked when it was
+// made, and receivers see the agent's current scope.
+func (s *customAgentService) checkSharedAgentKBScope(
+	ctx context.Context, existing *types.CustomAgent, config types.CustomAgentConfig,
+) error {
+	if s.agentShareRepo == nil || s.kbService == nil {
+		return nil
+	}
+	shares, err := s.agentShareRepo.ListByAgent(ctx, existing.ID)
+	if err != nil {
+		return err
+	}
+	shared := false
+	for _, share := range shares {
+		if share != nil && share.SourceTenantID == existing.TenantID {
+			shared = true
+			break
+		}
+	}
+	if !shared {
+		return nil
+	}
+	updated := *existing
+	updated.Config = config
+	userID, _ := types.UserIDFromContext(ctx)
+	return checkAgentKBScopeShareable(ctx, s.kbService.GetKnowledgeBasesByIDsOnly, existing, &updated, userID)
+}
+
 // updateBuiltinAgent updates a built-in agent's configuration (but not basic info)
 func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *types.CustomAgent, tenantID uint64) (*types.CustomAgent, error) {
-	// Get the default built-in agent from registry (i18n-aware)
-	defaultAgent := types.GetBuiltinAgentWithContext(ctx, agent.ID, tenantID)
+	// Persist locale-independent display fields (the YAML "default" locale) so
+	// read paths that skip builtin localization see a stable language.
+	defaultAgent := types.GetBuiltinAgent(agent.ID, tenantID)
 	if defaultAgent == nil {
 		return nil, ErrAgentNotFound
 	}
@@ -300,6 +376,9 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 		existingAgent.Config = agent.Config
 		existingAgent.UpdatedAt = time.Now()
 		existingAgent.EnsureDefaults()
+		if err := existingAgent.Config.QuestionSuggestions.Validate(); err != nil {
+			return nil, err
+		}
 
 		logger.Infof(ctx, "Updating built-in agent config, ID: %s", agent.ID)
 
@@ -311,6 +390,7 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 		}
 
 		logger.Infof(ctx, "Built-in agent config updated successfully, ID: %s", agent.ID)
+		types.ApplyBuiltinAgentLocalization(ctx, existingAgent)
 		return existingAgent, nil
 	}
 
@@ -327,6 +407,9 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 		UpdatedAt:   time.Now(),
 	}
 	newAgent.EnsureDefaults()
+	if err := newAgent.Config.QuestionSuggestions.Validate(); err != nil {
+		return nil, err
+	}
 
 	logger.Infof(ctx, "Creating built-in agent config record, ID: %s, tenant ID: %d", agent.ID, tenantID)
 
@@ -339,6 +422,7 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 	}
 
 	logger.Infof(ctx, "Built-in agent config record created successfully, ID: %s", agent.ID)
+	types.ApplyBuiltinAgentLocalization(ctx, newAgent)
 	return newAgent, nil
 }
 
@@ -449,11 +533,51 @@ func (s *customAgentService) GetSuggestedQuestions(
 	agentID string,
 	kbIDs []string,
 	knowledgeIDs []string,
+	tagScopes []types.TagScope,
 	limit int,
 ) ([]types.SuggestedQuestion, error) {
-	if limit <= 0 {
-		limit = 6
+	return s.getSuggestedQuestions(ctx, agentID, kbIDs, knowledgeIDs, tagScopes, limit, true)
+}
+
+func (s *customAgentService) GetKnowledgeSuggestedQuestions(
+	ctx context.Context,
+	agentID string,
+	kbIDs []string,
+	knowledgeIDs []string,
+	tagScopes []types.TagScope,
+	limit int,
+) ([]types.SuggestedQuestion, error) {
+	return s.getSuggestedQuestions(ctx, agentID, kbIDs, knowledgeIDs, tagScopes, limit, false)
+}
+
+func (s *customAgentService) getSuggestedQuestions(
+	ctx context.Context,
+	agentID string,
+	kbIDs []string,
+	knowledgeIDs []string,
+	tagScopes []types.TagScope,
+	limit int,
+	includeCurated bool,
+) ([]types.SuggestedQuestion, error) {
+	// A non-positive limit means "unspecified": fall back to the agent's
+	// configured Starters.Count (below) or the default. An explicit limit is
+	// authoritative and only bounded by the safety cap.
+	limitProvided := limit > 0
+	if !limitProvided {
+		limit = suggestionDefaultLimit
 	}
+	if limit > suggestionMaxLimit {
+		limit = suggestionMaxLimit
+	}
+
+	if err := types.AuthorizeTenantAPIKeyKnowledgeTargets(ctx, kbIDs, knowledgeIDs); err != nil {
+		return nil, err
+	}
+	scopeTagIDs := flattenTagScopeIDs(tagScopes)
+	if err := types.AuthorizeTenantAPIKeyOptionalTagIDs(ctx, scopeTagIDs); err != nil {
+		return nil, err
+	}
+	knowledgeIDs = s.readableSuggestionKnowledgeIDs(ctx, knowledgeIDs)
 
 	// Get tenant ID from context
 	tenantID, ok := types.TenantIDFromContext(ctx)
@@ -467,24 +591,59 @@ func (s *customAgentService) GetSuggestedQuestions(
 		return nil, err
 	}
 
-	var result []types.SuggestedQuestion
+	var curated []types.SuggestedQuestion
+	starterMode := types.SuggestionModeKnowledge
 
-	// 1. Add agent config suggested_prompts first (highest priority)
-	if len(agent.Config.SuggestedPrompts) > 0 {
-		for _, prompt := range agent.Config.SuggestedPrompts {
-			if strings.TrimSpace(prompt) == "" {
-				continue
+	if includeCurated {
+		suggestionConfig := agent.Config.QuestionSuggestions
+		if suggestionConfig == nil || !suggestionConfig.Starters.Enabled {
+			return []types.SuggestedQuestion{}, nil
+		}
+		// Starters.Count is the agent-author default, applied only when the
+		// caller did not request a specific limit. An explicit limit stays
+		// authoritative so ?limit=N actually changes how many are returned.
+		if !limitProvided && suggestionConfig.Starters.Count > 0 {
+			limit = suggestionConfig.Starters.Count
+		}
+		starterMode = suggestionConfig.Starters.Mode
+		// Add curated agent prompts first (highest priority).
+		if suggestionConfig.Starters.Mode == types.SuggestionModeCurated ||
+			suggestionConfig.Starters.Mode == types.SuggestionModeHybrid {
+			for _, prompt := range suggestionConfig.Starters.Items {
+				if strings.TrimSpace(prompt) == "" {
+					continue
+				}
+				curated = append(curated, types.SuggestedQuestion{
+					Question: prompt,
+					Source:   "agent_config",
+				})
 			}
-			result = append(result, types.SuggestedQuestion{
-				Question: prompt,
-				Source:   "agent_config",
+		}
+		if suggestionConfig.Starters.Mode == types.SuggestionModeCurated {
+			return s.truncateQuestions(curated, limit), nil
+		}
+	}
+
+	resolvedTags := resolvedSuggestionTagScopes{}
+	if len(scopeTagIDs) > 0 {
+		var err error
+		resolvedTags, err = s.resolveSuggestionTagScopes(ctx, tagScopes)
+		if err != nil {
+			logger.ErrorWithFields(ctx, err, map[string]interface{}{
+				"agent_id":      agentID,
+				"scope_tag_ids": scopeTagIDs,
 			})
+			return finalizeStarterSuggestions(curated, nil, starterMode, limit), nil
+		}
+		knowledgeIDs = mergeUniqueStrings(knowledgeIDs, resolvedTags.KnowledgeIDs)
+		if len(knowledgeIDs) == 0 && len(resolvedTags.TagIDsByTenant) == 0 {
+			return finalizeStarterSuggestions(curated, nil, starterMode, limit), nil
 		}
 	}
 
 	// 2. Determine knowledge base scope
 	effectiveKBIDs := kbIDs
-	if len(effectiveKBIDs) == 0 && len(knowledgeIDs) == 0 {
+	if len(effectiveKBIDs) == 0 && len(knowledgeIDs) == 0 && len(resolvedTags.TagIDsByTenant) == 0 {
 		// Use agent's KB configuration
 		switch agent.Config.KBSelectionMode {
 		case "all":
@@ -494,45 +653,62 @@ func (s *customAgentService) GetSuggestedQuestions(
 					"agent_id": agentID,
 				})
 				// Return what we have so far (agent_config suggestions)
-				return s.truncateQuestions(result, limit), nil
+				return finalizeStarterSuggestions(curated, nil, starterMode, limit), nil
 			}
 			// Honor the agent's implicit/explicit capability requirements so
 			// e.g. a quick-answer (RAG-only) agent doesn't surface wiki-only
 			// KBs whose wiki pages it could never answer from. Same filter
 			// the @ mention dropdown applies on the frontend.
-			capFilter := tools.DeriveKBFilterForAgent(agent.Config.AgentMode, agent.Config.AllowedTools)
+			mode, allowed := agent.Config.AgentMode, agent.Config.AllowedTools
+			capFilter := tools.DeriveKBFilterForAgent(mode, allowed)
+			accept := func(kb *types.KnowledgeBase) bool {
+				return capFilter.IsEmpty() || tools.KBSatisfiesAgentRequirements(kb.Capabilities(), mode, allowed)
+			}
 			for _, kb := range kbs {
-				if !capFilter.IsEmpty() &&
-					!tools.KBSatisfiesAgentRequirements(kb.Capabilities(), agent.Config.AgentMode, agent.Config.AllowedTools) {
-					continue
+				if accept(kb) {
+					effectiveKBIDs = append(effectiveKBIDs, kb.ID)
 				}
-				effectiveKBIDs = append(effectiveKBIDs, kb.ID)
+			}
+			// Match the chat runtime's "all" scope, which also reaches KBs shared
+			// into the caller's tenant; otherwise a tenant whose only KB is shared
+			// sees no starters until it @mentions that KB explicitly.
+			for _, kb := range s.sharedSuggestionKnowledgeBases(ctx, tenantID, agent) {
+				if accept(kb) {
+					effectiveKBIDs = mergeUniqueStrings(effectiveKBIDs, []string{kb.ID})
+				}
 			}
 		case "selected":
 			effectiveKBIDs = agent.Config.KnowledgeBases
 		case "none":
 			// No KB access, return agent_config suggestions only
-			return s.truncateQuestions(result, limit), nil
+			return finalizeStarterSuggestions(curated, nil, starterMode, limit), nil
 		default:
 			// Default to agent's configured KBs
 			effectiveKBIDs = agent.Config.KnowledgeBases
 		}
 	}
+	// Match the chat retrieval target semantics: a tag scope narrows its parent
+	// KB even when that KB is present in the agent's preselected KB list. Other
+	// explicitly selected KBs remain additive.
+	effectiveKBIDs = excludeSuggestionStrings(effectiveKBIDs, resolvedTags.KnowledgeBaseIDs)
 
-	if len(effectiveKBIDs) == 0 && len(knowledgeIDs) == 0 {
-		return s.truncateQuestions(result, limit), nil
+	filteredKBIDs, err := types.FilterKnowledgeBasesForTenantAPIKeyScope(ctx, kbIDs, effectiveKBIDs)
+	if err != nil {
+		return nil, err
+	}
+	effectiveKBIDs = filteredKBIDs
+
+	if len(effectiveKBIDs) == 0 && len(knowledgeIDs) == 0 && len(resolvedTags.TagIDsByTenant) == 0 {
+		return finalizeStarterSuggestions(curated, nil, starterMode, limit), nil
 	}
 
 	// Deduplicate questions we've already collected
 	seen := make(map[string]bool)
-	for _, q := range result {
+	for _, q := range curated {
 		seen[q.Question] = true
 	}
 
-	remaining := limit - len(result)
-	if remaining <= 0 {
-		return s.truncateQuestions(result, limit), nil
-	}
+	remaining := limit
 
 	// 3. Collect candidate chunks from both FAQ and Document KBs,
 	//    grouped by knowledge_id for diversity.
@@ -554,16 +730,21 @@ func (s *customAgentService) GetSuggestedQuestions(
 	// rows live under that tenant. Without this grouping a caller in tenant A
 	// querying a KB shared from tenant B would hit `tenant_id = A` and get zero
 	// rows back — the symptom is "suggested questions never appear for shared KBs".
-	kbGroups := s.groupKBIDsByEffectiveTenant(ctx, tenantID, queryKBIDs)
+	scopeKBIDs := mergeUniqueStrings(queryKBIDs, resolvedTags.KnowledgeBaseIDs)
+	kbGroups := s.groupKBIDsByEffectiveTenant(ctx, scopeKBIDs)
 	// Always keep the caller's tenant in the iteration so knowledge_ids-only
 	// requests (no kbIDs) still execute one query under the caller's tenant.
-	if len(queryKBIDs) == 0 {
+	if len(scopeKBIDs) == 0 {
 		kbGroups[tenantID] = nil
 	}
 
 	// Collect FAQ recommended chunks
 	for groupTenantID, groupKBIDs := range kbGroups {
-		faqChunks, err := s.chunkRepo.ListRecommendedFAQChunks(ctx, groupTenantID, groupKBIDs, queryKnowledgeIDs, fetchLimit)
+		explicitGroupKBIDs := intersectSuggestionStrings(groupKBIDs, queryKBIDs)
+		groupTagIDs := resolvedTags.TagIDsByTenant[groupTenantID]
+		faqChunks, err := s.chunkRepo.ListRecommendedFAQChunks(
+			ctx, groupTenantID, explicitGroupKBIDs, queryKnowledgeIDs, groupTagIDs, fetchLimit,
+		)
 		if err != nil {
 			logger.ErrorWithFields(ctx, err, map[string]interface{}{
 				"agent_id":  agentID,
@@ -584,13 +765,15 @@ func (s *customAgentService) GetSuggestedQuestions(
 				Question:        meta.StandardQuestion,
 				Source:          "faq",
 				KnowledgeBaseID: chunk.KnowledgeBaseID,
+				KnowledgeID:     chunk.KnowledgeID,
 			})
 		}
 	}
 
 	// Collect Document chunks with generated questions
 	for groupTenantID, groupKBIDs := range kbGroups {
-		docChunks, err := s.chunkRepo.ListRecentDocumentChunksWithQuestions(ctx, groupTenantID, groupKBIDs, queryKnowledgeIDs, fetchLimit)
+		explicitGroupKBIDs := intersectSuggestionStrings(groupKBIDs, queryKBIDs)
+		docChunks, err := s.chunkRepo.ListRecentDocumentChunksWithQuestions(ctx, groupTenantID, explicitGroupKBIDs, queryKnowledgeIDs, fetchLimit)
 		if err != nil {
 			logger.ErrorWithFields(ctx, err, map[string]interface{}{
 				"agent_id":  agentID,
@@ -603,7 +786,11 @@ func (s *customAgentService) GetSuggestedQuestions(
 			if err != nil || meta == nil || len(meta.GeneratedQuestions) == 0 {
 				continue
 			}
-			q := meta.GeneratedQuestions[0].Question
+			questions := meta.GetQuestionStrings()
+			if len(questions) == 0 {
+				continue
+			}
+			q := questions[0]
 			if q == "" || seen[q] {
 				continue
 			}
@@ -612,15 +799,15 @@ func (s *customAgentService) GetSuggestedQuestions(
 				Question:        q,
 				Source:          "document",
 				KnowledgeBaseID: chunk.KnowledgeBaseID,
+				KnowledgeID:     chunk.KnowledgeID,
 			})
 		}
 	}
 
-	// Collect Wiki pages as a fallback source. This covers Wiki-only KBs where no
-	// document chunks carry AI-generated questions (question_generation is skipped
-	// when the KB does not need an embedding model). knowledge_id filter is
-	// intentionally ignored here because wiki pages are authored at the KB level
-	// and are not 1:1 with source knowledge items.
+	// Collect Wiki pages as a fallback source, but only for KBs the caller selected
+	// explicitly. A tag's parent KB is merely an ownership boundary; widening a
+	// tag-only scope to arbitrary Wiki pages would make the suggestions unanswerable
+	// inside the user's selected range.
 	//
 	// Skip entirely for quick-answer (RAG-only) agents: those can't ever
 	// retrieve a wiki page, so surfacing wiki-derived suggestions would lure
@@ -628,10 +815,11 @@ func (s *customAgentService) GetSuggestedQuestions(
 	// context. Smart-reasoning agents that opt in to wiki tools keep this.
 	if agent.Config.AgentMode != types.AgentModeQuickAnswer && s.wikiPageRepo != nil {
 		for groupTenantID, groupKBIDs := range kbGroups {
-			if len(groupKBIDs) == 0 {
+			explicitGroupKBIDs := intersectSuggestionStrings(groupKBIDs, queryKBIDs)
+			if len(explicitGroupKBIDs) == 0 {
 				continue
 			}
-			wikiPages, err := s.wikiPageRepo.ListRecentForSuggestions(ctx, groupTenantID, groupKBIDs, fetchLimit)
+			wikiPages, err := s.wikiPageRepo.ListRecentForSuggestions(ctx, groupTenantID, explicitGroupKBIDs, fetchLimit)
 			if err != nil {
 				logger.ErrorWithFields(ctx, err, map[string]interface{}{
 					"agent_id":  agentID,
@@ -639,7 +827,7 @@ func (s *customAgentService) GetSuggestedQuestions(
 				})
 				continue
 			}
-			locale, _ := types.LanguageFromContext(ctx)
+			locale := types.LanguageFromContextOrDefault(ctx)
 			for _, page := range wikiPages {
 				q := wikiSuggestionFromPage(page, locale)
 				if q == "" || seen[q] {
@@ -670,17 +858,18 @@ func (s *customAgentService) GetSuggestedQuestions(
 	})
 
 	// Round-robin pick one question from each document in turn.
+	knowledgeResult := make([]types.SuggestedQuestion, 0, limit)
 	offsets := make(map[string]int, len(bucketKeys))
-	for len(result) < limit {
+	for len(knowledgeResult) < limit {
 		picked := false
 		for _, key := range bucketKeys {
-			if len(result) >= limit {
+			if len(knowledgeResult) >= limit {
 				break
 			}
 			qs := buckets[key]
 			idx := offsets[key]
 			if idx < len(qs) {
-				result = append(result, qs[idx])
+				knowledgeResult = append(knowledgeResult, qs[idx])
 				offsets[key] = idx + 1
 				picked = true
 			}
@@ -690,7 +879,210 @@ func (s *customAgentService) GetSuggestedQuestions(
 		}
 	}
 
-	return s.truncateQuestions(result, limit), nil
+	return finalizeStarterSuggestions(curated, knowledgeResult, starterMode, limit), nil
+}
+
+type resolvedSuggestionTagScopes struct {
+	KnowledgeBaseIDs []string
+	KnowledgeIDs     []string
+	TagIDsByTenant   map[uint64][]string
+}
+
+// resolveSuggestionTagScopes keeps tag ownership separate from whole-KB
+// selection. Document tags become concrete knowledge IDs; FAQ tags remain
+// chunk tag filters. Scoped inputs also let shared-KB tags resolve against the
+// source tenant that owns the tag and chunk rows.
+func (s *customAgentService) resolveSuggestionTagScopes(
+	ctx context.Context,
+	tagScopes []types.TagScope,
+) (resolvedSuggestionTagScopes, error) {
+	result := resolvedSuggestionTagScopes{TagIDsByTenant: make(map[uint64][]string)}
+	if len(tagScopes) == 0 || s.tagRepo == nil || s.knowledgeRepo == nil || s.kbService == nil {
+		return result, nil
+	}
+
+	byKB := make(map[string][]string)
+	for _, scope := range tagScopes {
+		if scope.KnowledgeBaseID == "" {
+			continue
+		}
+		for _, tagID := range scope.TagIDs {
+			if tagID == "" {
+				continue
+			}
+			byKB[scope.KnowledgeBaseID] = append(byKB[scope.KnowledgeBaseID], tagID)
+		}
+	}
+	if len(byKB) == 0 {
+		return result, nil
+	}
+
+	kbIDs := make([]string, 0, len(byKB))
+	for kbID := range byKB {
+		kbIDs = append(kbIDs, kbID)
+	}
+	kbGroups := s.groupKBIDsByEffectiveTenant(ctx, kbIDs)
+	for tenantID, groupKBIDs := range kbGroups {
+		for _, kbID := range groupKBIDs {
+			requested := mergeUniqueStrings(nil, byKB[kbID])
+			tags, err := s.tagRepo.GetByIDs(ctx, tenantID, requested)
+			if err != nil {
+				return result, err
+			}
+			requestedSet := make(map[string]bool, len(requested))
+			for _, id := range requested {
+				requestedSet[id] = true
+			}
+			validTagIDs := make([]string, 0, len(tags))
+			for _, tag := range tags {
+				if tag != nil && tag.KnowledgeBaseID == kbID && requestedSet[tag.ID] {
+					validTagIDs = append(validTagIDs, tag.ID)
+				}
+			}
+			if len(validTagIDs) == 0 {
+				continue
+			}
+
+			result.KnowledgeBaseIDs = mergeUniqueStrings(result.KnowledgeBaseIDs, []string{kbID})
+			result.TagIDsByTenant[tenantID] = mergeUniqueStrings(result.TagIDsByTenant[tenantID], validTagIDs)
+			knowledgeIDs, err := s.knowledgeRepo.ListIDsByTagIDs(ctx, tenantID, kbID, validTagIDs)
+			if err != nil {
+				return result, err
+			}
+			result.KnowledgeIDs = mergeUniqueStrings(result.KnowledgeIDs, knowledgeIDs)
+		}
+	}
+	return result, nil
+}
+
+func flattenTagScopeIDs(scopes []types.TagScope) []string {
+	var ids []string
+	for _, scope := range scopes {
+		ids = mergeUniqueStrings(ids, scope.TagIDs)
+	}
+	return ids
+}
+
+func intersectSuggestionStrings(values, allowed []string) []string {
+	if len(values) == 0 || len(allowed) == 0 {
+		return nil
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, value := range allowed {
+		allowedSet[value] = true
+	}
+	var result []string
+	for _, value := range values {
+		if value != "" && allowedSet[value] {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func excludeSuggestionStrings(values, excluded []string) []string {
+	if len(values) == 0 || len(excluded) == 0 {
+		return values
+	}
+	excludedSet := make(map[string]bool, len(excluded))
+	for _, value := range excluded {
+		excludedSet[value] = true
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" && !excludedSet[value] {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func finalizeStarterSuggestions(
+	curated []types.SuggestedQuestion,
+	knowledge []types.SuggestedQuestion,
+	mode string,
+	limit int,
+) []types.SuggestedQuestion {
+	if limit <= 0 {
+		return []types.SuggestedQuestion{}
+	}
+	switch mode {
+	case types.SuggestionModeCurated:
+		return truncateSuggestedQuestions(curated, limit)
+	case types.SuggestionModeHybrid:
+		return mergeHybridStarterSuggestions(curated, knowledge, limit)
+	default:
+		return truncateSuggestedQuestions(knowledge, limit)
+	}
+}
+
+// mergeHybridStarterSuggestions prioritizes curated starters while reserving
+// about one third of visible slots for scope-aware knowledge questions.
+func mergeHybridStarterSuggestions(
+	curated []types.SuggestedQuestion,
+	knowledge []types.SuggestedQuestion,
+	limit int,
+) []types.SuggestedQuestion {
+	if limit <= 0 {
+		return []types.SuggestedQuestion{}
+	}
+	knowledgeSlots := 0
+	if limit > 1 {
+		knowledgeSlots = (limit + 1) / 3
+	}
+	curatedSlots := limit - knowledgeSlots
+	result := make([]types.SuggestedQuestion, 0, limit)
+	seen := make(map[string]bool, limit)
+	appendFrom := func(items []types.SuggestedQuestion, max int) {
+		added := 0
+		for _, item := range items {
+			if len(result) == limit || (max >= 0 && added == max) {
+				return
+			}
+			key := strings.ToLower(strings.TrimSpace(item.Question))
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, item)
+			added++
+		}
+	}
+	appendFrom(curated, curatedSlots)
+	appendFrom(knowledge, knowledgeSlots)
+	appendFrom(curated, -1)
+	appendFrom(knowledge, -1)
+	return result
+}
+
+func truncateSuggestedQuestions(questions []types.SuggestedQuestion, limit int) []types.SuggestedQuestion {
+	if len(questions) > limit {
+		return questions[:limit]
+	}
+	return questions
+}
+
+func mergeUniqueStrings(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, s := range base {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, s := range extra {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // truncateQuestions truncates the question list to the specified limit
@@ -735,6 +1127,65 @@ func wikiSuggestionFromPage(page *types.WikiPage, locale string) string {
 	}
 }
 
+// maxSuggestionKnowledgeIDs bounds the per-document lookups below; a
+// suggestion scope is a handful of @mentioned or retrieved documents.
+const maxSuggestionKnowledgeIDs = 50
+
+// readableSuggestionKnowledgeIDs keeps the documents the caller may read.
+// KB IDs are filtered the same way in groupKBIDsByEffectiveTenant, but
+// document IDs (from the request or a message snapshot, which records them
+// before a shared agent's scope is applied) reach a tenant's chunks directly:
+// each is resolved to its KB and checked, including a shared agent's scope.
+func (s *customAgentService) readableSuggestionKnowledgeIDs(ctx context.Context, knowledgeIDs []string) []string {
+	if len(knowledgeIDs) == 0 {
+		return knowledgeIDs
+	}
+	if s.knowledgeRepo == nil {
+		return nil
+	}
+	if len(knowledgeIDs) > maxSuggestionKnowledgeIDs {
+		knowledgeIDs = knowledgeIDs[:maxSuggestionKnowledgeIDs]
+	}
+	permissions := access.NewKBPermissions(ctx, s.kbShareService)
+	readable := make([]string, 0, len(knowledgeIDs))
+	for _, id := range knowledgeIDs {
+		knowledge, err := s.knowledgeRepo.GetKnowledgeByIDOnly(ctx, id)
+		if err != nil || knowledge == nil {
+			continue
+		}
+		ok, err := permissions.Check(knowledge.KnowledgeBaseID, knowledge.TenantID, types.OrgRoleViewer)
+		if err == nil && ok {
+			readable = append(readable, id)
+		}
+	}
+	return readable
+}
+
+// sharedSuggestionKnowledgeBases lists the KBs shared into the caller's tenant.
+// A shared agent keeps its owner's scope, so it never picks up the borrower's
+// shares.
+func (s *customAgentService) sharedSuggestionKnowledgeBases(
+	ctx context.Context,
+	tenantID uint64,
+	agent *types.CustomAgent,
+) []*types.KnowledgeBase {
+	if s.kbShareService == nil || agent.TenantID != tenantID {
+		return nil
+	}
+	shared, err := s.kbShareService.ListSharedKnowledgeBases(ctx, tenantID, types.TenantRoleFromContext(ctx))
+	if err != nil {
+		logger.Warnf(ctx, "Failed to list shared knowledge bases for suggestions: %v", err)
+		return nil
+	}
+	kbs := make([]*types.KnowledgeBase, 0, len(shared))
+	for _, info := range shared {
+		if info != nil && info.KnowledgeBase != nil {
+			kbs = append(kbs, info.KnowledgeBase)
+		}
+	}
+	return kbs
+}
+
 // groupKBIDsByEffectiveTenant resolves each kbID to the tenant whose chunk
 // rows back that KB, so cross-tenant shares can be queried correctly:
 //   - In-tenant KBs map to the caller's tenant id.
@@ -750,9 +1201,9 @@ func wikiSuggestionFromPage(page *types.WikiPage, locale string) string {
 // kbIDs is empty.
 func (s *customAgentService) groupKBIDsByEffectiveTenant(
 	ctx context.Context,
-	callerTenantID uint64,
 	kbIDs []string,
 ) map[uint64][]string {
+	callerTenantID := types.CallerFromContext(ctx).TenantID
 	out := make(map[uint64][]string)
 	if len(kbIDs) == 0 {
 		return out
@@ -773,20 +1224,13 @@ func (s *customAgentService) groupKBIDsByEffectiveTenant(
 			kbByID[kb.ID] = kb
 		}
 	}
-	callerRole := types.TenantRoleFromContext(ctx)
+	permissions := access.NewKBPermissions(ctx, s.kbShareService)
 	for _, kbID := range kbIDs {
 		kb := kbByID[kbID]
 		if kb == nil {
 			continue
 		}
-		if kb.TenantID == callerTenantID {
-			out[callerTenantID] = append(out[callerTenantID], kbID)
-			continue
-		}
-		if s.kbShareService == nil {
-			continue
-		}
-		ok, err := s.kbShareService.HasTenantKBPermission(ctx, kbID, callerTenantID, callerRole, types.OrgRoleViewer)
+		ok, err := permissions.Check(kbID, kb.TenantID, types.OrgRoleViewer)
 		if err != nil || !ok {
 			continue
 		}

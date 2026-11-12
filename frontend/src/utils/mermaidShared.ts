@@ -1,96 +1,155 @@
-import mermaid from 'mermaid';
-import type {Tokens} from 'marked';
-import {openMermaidFullscreen} from "@/utils/mermaidViewer.ts";
-import hljs from "highlight.js";
-import "highlight.js/styles/github.css";
+import { mermaidConfig } from './mermaidConfig'
+import type { Tokens } from 'marked'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github.css'
+import { openMermaidFullscreen } from '@/utils/mermaidViewer.ts'
+import {
+  buildCodeBlockHtml,
+  buildMermaidBlockHtml,
+  attachMarkdownEnhancementListeners,
+  highlightCodeBlocksInContainer,
+  syncMermaidExpandButtons,
+} from '@/utils/markdownEnhancements'
 
-hljs.registerAliases("mermaid", { languageName: "plaintext" });
+hljs.registerAliases('mermaid', { languageName: 'plaintext' })
 
-let mermaidInitialized = false;
+let mermaidMod: typeof import('mermaid') | null = null
+let mermaidInitialized = false
+let initPromise: Promise<void> | null = null
 
-const MERMAID_CONFIG = {
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'strict',
-  fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
-  flowchart: {
-    useMaxWidth: true,
-    htmlLabels: true,
-    curve: 'basis',
-  },
-  sequence: {
-    useMaxWidth: true,
-    diagramMarginX: 8,
-    diagramMarginY: 8,
-    actorMargin: 50,
-    width: 150,
-    height: 65,
-  },
-  gantt: {
-    useMaxWidth: true,
-    leftPadding: 75,
-    gridLineStartPadding: 35,
-    barHeight: 20,
-    barGap: 4,
-    topPadding: 50,
-  },
-};
+async function getMermaid() {
+  if (!mermaidMod) {
+    mermaidMod = await import('mermaid')
+  }
+  return mermaidMod.default
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function highlightCode(text: string, lang?: string | null) {
+  const language = (lang || '').trim()
+  if (language && hljs.getLanguage(language)) {
+    try {
+      const result = hljs.highlight(text, { language })
+      return { html: result.value, language: result.language || language }
+    } catch {
+      // fall through
+    }
+  }
+  const auto = hljs.highlightAuto(text, language ? [language] : undefined)
+  return { html: auto.value, language: auto.language || language || 'plaintext' }
+}
 
 export const ensureMermaidInitialized = () => {
-  if (mermaidInitialized) return;
-  mermaid.initialize(MERMAID_CONFIG as any);
-  mermaidInitialized = true;
-};
+  if (!initPromise) {
+    initPromise = (async () => {
+      const mermaid = await getMermaid()
+      if (!mermaidInitialized) {
+        mermaid.initialize({
+          ...mermaidConfig(document.documentElement.getAttribute('theme-mode') === 'dark'),
+        } as Parameters<typeof mermaid.initialize>[0])
+        mermaidInitialized = true
+      }
+    })()
+  }
+}
 
-let mermaidCount = 0;
+let mermaidCount = 0
 
 export const createMermaidCodeRenderer = (idPrefix: string) => {
-  return ({text, lang}: Tokens.Code) => {
-    let highlighted = '';
-    let highlightLang: string = lang || 'Code';
-    if (highlightLang && hljs.getLanguage(highlightLang)) {
-        try {
-            highlighted = hljs.highlight(text, { language: lang }).value;
-        } catch {
-            let ret = hljs.highlightAuto(text);
-            highlighted = ret.value;
-            highlightLang = ret.language || "Code";
-        }
-    } else {
-        let ret = hljs.highlightAuto(text);
-        highlighted = ret.value;
-        highlightLang = ret.language || "Code";
-    }
+  return ({ text, lang }: Tokens.Code) => {
+    const { html: highlighted, language: highlightLang } = highlightCode(text, lang)
     if (lang === 'mermaid') {
-      const id = `${idPrefix}-${++mermaidCount}`;
-      return `<pre id="${id}" data-mermaid="false"><code class="hljs language-${highlightLang}">${highlighted}</code></pre>`;
+      const id = `${idPrefix}-${++mermaidCount}`
+      const inner = `<code class="hljs language-${highlightLang}">${highlighted}</code>`
+      return buildMermaidBlockHtml(inner, `id="${id}" data-mermaid="false"`)
     }
-    return `<pre><code class="hljs language-${highlightLang}">${highlighted}</code></pre>`;
-  };
-};
+    return buildCodeBlockHtml(lang || highlightLang, highlighted, highlightLang)
+  }
+}
+
+export const renderMermaidToSvg = async (code: string, id?: string): Promise<string | null> => {
+  if (!code.trim()) return null
+  try {
+    const mermaid = await getMermaid()
+    ensureMermaidInitialized()
+    await initPromise
+    await mermaid.parse(code)
+    // Mermaid reuses the render id as the SVG root id. Always mint a fresh
+    // one so a later render cannot collide with an SVG already in the DOM.
+    const renderId = `${id || 'mermaid'}-${++mermaidCount}`
+    const { svg } = await mermaid.render(renderId, code)
+    return svg
+  } catch (e) {
+    console.error('Mermaid rendering error:', e)
+    return null
+  }
+}
+
+function mermaidSourceFromElement(el: HTMLElement): string {
+  const codeEl = el.querySelector('code')
+  return (codeEl?.textContent ?? el.textContent ?? '').trim()
+}
+
+export async function appendMermaidSvgCache(
+  codes: string[],
+  cache: readonly string[],
+  idPrefix: string,
+): Promise<string[]> {
+  const next = cache.slice()
+  while (next.length < codes.length) {
+    const i = next.length
+    const svg = await renderMermaidToSvg(codes[i], `${idPrefix}-${i}`)
+    next.push(svg || '')
+  }
+  return next
+}
 
 export const renderMermaidInContainer = async (
   rootElement: HTMLElement | null | undefined,
 ) => {
-  if (!rootElement) return 0;
-  const mermaidElements = rootElement.querySelectorAll<HTMLElement>('pre[data-mermaid="false"]');
+  if (!rootElement) return
+
+  const mermaid = await getMermaid()
+  ensureMermaidInitialized()
+  await initPromise
+
+  const mermaidElements = rootElement.querySelectorAll<HTMLElement>(
+    'pre[data-mermaid="false"], .chat-mermaid-block__canvas[data-mermaid="false"]',
+  )
   for (const el of mermaidElements) {
-    try{
-        const code = el.innerText;
-        // 验证
-        await mermaid.parse(code);
-        // 渲染
-        let {svg} = await mermaid.render(`${el.id}-svg`, code);
-        el.classList.add('mermaid')
-        el.innerHTML = svg;
-        el.onclick = (event) => {
-            event.stopPropagation();
-            openMermaidFullscreen(svg);
-        };
-    } catch(e){
-        console.error("Mermaid rendering error:", e);
+    try {
+      if (el.querySelector('svg')) {
+        el.setAttribute('data-mermaid', 'true')
+        continue
+      }
+      const code = mermaidSourceFromElement(el)
+      if (!code) continue
+      await mermaid.parse(code)
+      const renderId = `mermaid-render-${++mermaidCount}`
+      const { svg } = await mermaid.render(renderId, code)
+      el.classList.add('mermaid')
+      el.innerHTML = svg
+      el.setAttribute('data-mermaid', 'true')
+    } catch (e) {
+      console.error('Mermaid rendering error:', e)
+      continue
     }
-    // 标记为已渲染
-    el.setAttribute('data-mermaid', 'true');
   }
-};
+}
+
+export async function enhanceMarkdownContainer(
+  rootElement: HTMLElement | null | undefined,
+): Promise<void> {
+  if (!rootElement) return
+  attachMarkdownEnhancementListeners(rootElement)
+  highlightCodeBlocksInContainer(rootElement)
+  await renderMermaidInContainer(rootElement)
+  syncMermaidExpandButtons(rootElement)
+}

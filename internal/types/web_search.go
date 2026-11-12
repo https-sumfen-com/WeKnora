@@ -77,13 +77,56 @@ func (c *WebSearchConfig) Scan(value interface{}) error {
 	return json.Unmarshal(b, c)
 }
 
+// WebSearchRequest is one search call. Tenant policy such as the blacklist is applied by the
+// resolved client, not carried here.
+type WebSearchRequest struct {
+	Query       string
+	MaxResults  int
+	IncludeDate bool
+	// Filters must be empty unless the provider's capabilities include Filters.
+	Filters WebSearchFilters
+}
+
+// WebSearchCapabilities is what a provider type declares when it is registered.
+type WebSearchCapabilities struct {
+	// Filters means the provider accepts WebSearchRequest.Filters (country and freshness).
+	Filters bool
+}
+
+// WebSearchClients names the readers registered for a provider type.
+type WebSearchClients struct {
+	// Search is the provider type whose API runs searches.
+	Search string `json:"search"`
+	// Fetch is the provider type whose API reads pages, or "local" for WeKnora's own reader.
+	Fetch string `json:"fetch"`
+}
+
+// WebPage is one page read by a fetcher.
+type WebPage struct {
+	Title   string
+	Content string
+	// Source names the reader that produced the page: a provider type or "local".
+	Source string
+}
+
+// WebSearchCompressionState is the temporary knowledge base reused across one session's
+// RAG compression calls.
+type WebSearchCompressionState struct {
+	TempKBID     string
+	SeenURLs     map[string]bool
+	KnowledgeIDs []string
+}
+
 // WebSearchResult represents a single web search result
 type WebSearchResult struct {
-	Title       string     `json:"title"`                  // 搜索结果标题
-	URL         string     `json:"url"`                    // 结果URL
-	Snippet     string     `json:"snippet"`                // 摘要片段
-	Content     string     `json:"content"`                // 完整内容（可选，需要额外抓取）
-	Source      string     `json:"source"`                 // 来源（如：duckduckgo等）
+	Title   string `json:"title"`   // 搜索结果标题
+	URL     string `json:"url"`     // 结果URL
+	Snippet string `json:"snippet"` // 摘要片段
+	Content string `json:"content"` // 完整内容（可选，需要额外抓取）
+	Source  string `json:"source"`  // 来源（如：duckduckgo等）
+	// Provider-reported age, without inventing an exact publication date.
+	Age string `json:"age,omitempty"`
+
 	PublishedAt *time.Time `json:"published_at,omitempty"` // 发布时间（如果有）
 }
 

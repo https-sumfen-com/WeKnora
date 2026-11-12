@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -62,11 +63,118 @@ func convertMentionedItems(items []MentionedItemRequest) types.MentionedItems {
 	result := make(types.MentionedItems, len(items))
 	for i, item := range items {
 		result[i] = types.MentionedItem{
-			ID:     item.ID,
-			Name:   item.Name,
-			Type:   item.Type,
-			KBType: item.KBType,
+			ID:        item.ID,
+			Name:      item.Name,
+			Type:      item.Type,
+			KBType:    item.KBType,
+			KBID:      item.KBID,
+			KBName:    item.KBName,
+			ServiceID: item.ServiceID,
+			SkillName: item.SkillName,
 		}
+	}
+	return result
+}
+
+func tagScopesFromMentionedItems(items []MentionedItemRequest) []types.TagScope {
+	byKB := make(map[string][]string)
+	seen := make(map[string]map[string]bool)
+	for _, item := range items {
+		if item.Type != "tag" || item.ID == "" || item.KBID == "" {
+			continue
+		}
+		if seen[item.KBID] == nil {
+			seen[item.KBID] = make(map[string]bool)
+		}
+		if seen[item.KBID][item.ID] {
+			continue
+		}
+		seen[item.KBID][item.ID] = true
+		byKB[item.KBID] = append(byKB[item.KBID], item.ID)
+	}
+	scopes := make([]types.TagScope, 0, len(byKB))
+	for kbID, tagIDs := range byKB {
+		scopes = append(scopes, types.TagScope{KnowledgeBaseID: kbID, TagIDs: tagIDs})
+	}
+	return scopes
+}
+
+// orphanTagIDsForScope returns tag IDs from the request that are not already
+// covered by scoped mentions.
+func orphanTagIDsForScope(tagIDs []string, scopes []types.TagScope) []string {
+	if len(tagIDs) == 0 {
+		return nil
+	}
+	covered := make(map[string]bool)
+	for _, scope := range scopes {
+		for _, id := range scope.TagIDs {
+			covered[id] = true
+		}
+	}
+	orphan := make([]string, 0, len(tagIDs))
+	for _, id := range tagIDs {
+		if id != "" && !covered[id] {
+			orphan = append(orphan, id)
+		}
+	}
+	return orphan
+}
+
+// validateUnscopedTagIDs rejects bare tag_ids that cannot be attached to a KB.
+func validateUnscopedTagIDs(orphan []string, kbIDs []string) error {
+	if len(orphan) == 0 {
+		return nil
+	}
+	if len(kbIDs) == 1 {
+		return nil
+	}
+	return fmt.Errorf("tag_ids must be scoped via mentioned_items or exactly one knowledge_base_id")
+}
+
+// mergeTagScopesFromRequestIDs supplements tag scopes built from mentioned_items
+// with bare tag_ids when the client did not send kb_id on each tag mention.
+// Orphan tag IDs are attached to the sole knowledge_base_id when unambiguous.
+func mergeTagScopesFromRequestIDs(scopes []types.TagScope, tagIDs, kbIDs []string) []types.TagScope {
+	orphan := orphanTagIDsForScope(tagIDs, scopes)
+	if len(orphan) == 0 {
+		return scopes
+	}
+	if len(kbIDs) != 1 {
+		return scopes
+	}
+	kbID := kbIDs[0]
+	for i, scope := range scopes {
+		if scope.KnowledgeBaseID == kbID {
+			merged := append(append([]string(nil), scope.TagIDs...), orphan...)
+			scopes[i].TagIDs = dedupRequestStrings(merged)
+			return scopes
+		}
+	}
+	return append(scopes, types.TagScope{KnowledgeBaseID: kbID, TagIDs: dedupRequestStrings(orphan)})
+}
+
+func mentionedIDsByType(items []MentionedItemRequest, itemType string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+	for _, item := range items {
+		if item.Type != itemType || item.ID == "" || seen[item.ID] {
+			continue
+		}
+		seen[item.ID] = true
+		result = append(result, item.ID)
+	}
+	return result
+}
+
+func dedupRequestStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
 	}
 	return result
 }
@@ -87,6 +195,7 @@ func buildStreamResponse(evt interfaces.StreamEvent, requestID string) *types.St
 		Content:      evt.Content,
 		Done:         evt.Done,
 		Data:         evt.Data,
+		Usage:        evt.Usage,
 	}
 
 	// Extract session_id and assistant_message_id for agent_query events
@@ -102,6 +211,9 @@ func buildStreamResponse(evt interfaces.StreamEvent, requestID string) *types.St
 	// Special handling for references event
 	if evt.Type == types.ResponseTypeReferences {
 		refsData := evt.Data["references"]
+		if refsData == nil {
+			return response
+		}
 		if refs, ok := refsData.(types.References); ok {
 			response.KnowledgeReferences = refs
 		} else if refs, ok := refsData.([]*types.SearchResult); ok {
@@ -111,25 +223,7 @@ func buildStreamResponse(evt interfaces.StreamEvent, requestID string) *types.St
 			searchResults := make([]*types.SearchResult, 0, len(refs))
 			for _, ref := range refs {
 				if refMap, ok := ref.(map[string]interface{}); ok {
-					sr := &types.SearchResult{
-						ID:                   getString(refMap, "id"),
-						Content:              getString(refMap, "content"),
-						KnowledgeID:          getString(refMap, "knowledge_id"),
-						ChunkIndex:           int(getFloat64(refMap, "chunk_index")),
-						KnowledgeTitle:       getString(refMap, "knowledge_title"),
-						StartAt:              int(getFloat64(refMap, "start_at")),
-						EndAt:                int(getFloat64(refMap, "end_at")),
-						Seq:                  int(getFloat64(refMap, "seq")),
-						Score:                getFloat64(refMap, "score"),
-						ChunkType:            getString(refMap, "chunk_type"),
-						ParentChunkID:        getString(refMap, "parent_chunk_id"),
-						ImageInfo:            getString(refMap, "image_info"),
-						KnowledgeFilename:    getString(refMap, "knowledge_filename"),
-						KnowledgeSource:      getString(refMap, "knowledge_source"),
-						KnowledgeDescription: getString(refMap, "knowledge_description"),
-						KnowledgeBaseID:      getString(refMap, "knowledge_base_id"),
-					}
-					searchResults = append(searchResults, sr)
+					searchResults = append(searchResults, searchResultFromMap(refMap))
 				}
 			}
 			response.KnowledgeReferences = types.References(searchResults)
@@ -151,34 +245,50 @@ func sendCompletionEvent(c *gin.Context, requestID string) {
 	// which is already sent before this function is called
 }
 
-// createAgentQueryEvent creates a standard agent query event
-func createAgentQueryEvent(sessionID, assistantMessageID string) interfaces.StreamEvent {
+// createAgentQueryEvent creates a standard agent query event.
+// It carries the persisted user/assistant timestamps so the live UI can
+// display the same created_at that history reload will return.
+func createAgentQueryEvent(
+	sessionID, assistantMessageID, userMessageID string,
+	userCreatedAt, assistantCreatedAt time.Time,
+) interfaces.StreamEvent {
+	data := map[string]interface{}{
+		"session_id":           sessionID,
+		"assistant_message_id": assistantMessageID,
+	}
+	if userMessageID != "" {
+		data["user_message_id"] = userMessageID
+	}
+	if !userCreatedAt.IsZero() {
+		data["user_created_at"] = userCreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !assistantCreatedAt.IsZero() {
+		data["assistant_created_at"] = assistantCreatedAt.UTC().Format(time.RFC3339Nano)
+	}
 	return interfaces.StreamEvent{
 		ID:        fmt.Sprintf("query-%d", time.Now().UnixNano()),
 		Type:      types.ResponseTypeAgentQuery,
 		Content:   "",
 		Done:      true,
 		Timestamp: time.Now(),
-		Data: map[string]interface{}{
-			"session_id":           sessionID,
-			"assistant_message_id": assistantMessageID,
-		},
+		Data:      data,
 	}
 }
 
 // createUserMessage creates a user message and returns the created message.
-func (h *Handler) createUserMessage(ctx context.Context, sessionID, query, requestID string, mentionedItems types.MentionedItems, images types.MessageImages, attachments types.MessageAttachments, channel string) (*types.Message, error) {
+func (h *Handler) createUserMessage(ctx context.Context, sessionID, query, requestID string, mentionedItems types.MentionedItems, images types.MessageImages, attachments types.MessageAttachments, channel string, attribution *types.SuggestionAttribution) (*types.Message, error) {
 	return h.messageService.CreateMessage(ctx, &types.Message{
-		SessionID:      sessionID,
-		Role:           "user",
-		Content:        query,
-		RequestID:      requestID,
-		CreatedAt:      time.Now(),
-		IsCompleted:    true,
-		MentionedItems: mentionedItems,
-		Images:         images,
-		Attachments:    attachments,
-		Channel:        channel,
+		SessionID:        sessionID,
+		Role:             "user",
+		Content:          query,
+		RequestID:        requestID,
+		CreatedAt:        time.Now(),
+		IsCompleted:      true,
+		MentionedItems:   mentionedItems,
+		Images:           images,
+		Attachments:      attachments,
+		Channel:          channel,
+		ExecutionContext: types.MessageExecutionContext{SuggestionAttribution: attribution},
 	})
 }
 
@@ -192,13 +302,15 @@ func (h *Handler) createAssistantMessage(ctx context.Context, assistantMessage *
 func (h *Handler) setupStreamHandler(
 	ctx context.Context,
 	sessionID, assistantMessageID, requestID string,
+	tenantID uint64,
 	receivedAt time.Time,
 	assistantMessage *types.Message,
 	eventBus *event.EventBus,
 ) *AgentStreamHandler {
 	streamHandler := NewAgentStreamHandler(
-		ctx, sessionID, assistantMessageID, requestID, receivedAt,
-		assistantMessage, h.streamManager, eventBus,
+		ctx, sessionID, assistantMessageID, requestID, tenantID, receivedAt,
+		assistantMessage, h.streamManager, eventBus, h.artifactCollector,
+		h.workspaceCheckpointer, h.sandboxIDLookup,
 	)
 	streamHandler.Subscribe()
 	return streamHandler
@@ -222,7 +334,7 @@ func (h *Handler) setupStopEventHandler(
 			context.WithoutCancel(ctx),
 			types.TenantIDContextKey, sessionTenantID,
 		)
-		h.completeAssistantMessage(updateCtx, assistantMessage, "") // empty query: stopped conversations are not indexed
+		h.completeAssistantMessage(updateCtx, assistantMessage, "", "") // empty query: stopped conversations are not indexed
 		return nil
 	})
 }
@@ -305,8 +417,26 @@ func (h *Handler) startStopWatcher(
 }
 
 // writeAgentQueryEvent writes an agent query event to the stream manager
-func (h *Handler) writeAgentQueryEvent(ctx context.Context, sessionID, assistantMessageID string) {
-	agentQueryEvent := createAgentQueryEvent(sessionID, assistantMessageID)
+func (h *Handler) writeAgentQueryEvent(
+	ctx context.Context,
+	sessionID, userMessageID string,
+	userCreatedAt time.Time,
+	assistantMessage *types.Message,
+	resume *types.AgentResume,
+) {
+	assistantMessageID := ""
+	var assistantCreatedAt time.Time
+	if assistantMessage != nil {
+		assistantMessageID = assistantMessage.ID
+		assistantCreatedAt = assistantMessage.CreatedAt
+	}
+	agentQueryEvent := createAgentQueryEvent(
+		sessionID, assistantMessageID, userMessageID, userCreatedAt, assistantCreatedAt,
+	)
+	if resume != nil && resume.Prompt != nil {
+		agentQueryEvent.Data["resume_pending_id"] = resume.Prompt.ID
+		agentQueryEvent.Data["resume_tool_call_id"] = resume.Prompt.ToolCallID
+	}
 	if err := h.streamManager.AppendEvent(ctx, sessionID, assistantMessageID, agentQueryEvent); err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"session_id": sessionID,
@@ -314,11 +444,6 @@ func (h *Handler) writeAgentQueryEvent(ctx context.Context, sessionID, assistant
 		})
 		// Non-fatal error, continue
 	}
-}
-
-// getRequestID gets the request ID from gin context
-func getRequestID(c *gin.Context) string {
-	return c.GetString(types.RequestIDContextKey.String())
 }
 
 // Helper function for type assertion with default value
@@ -337,6 +462,58 @@ func getFloat64(m map[string]interface{}, key string) float64 {
 		return float64(val)
 	}
 	return 0.0
+}
+
+// searchResultFromMap rebuilds a *types.SearchResult from a map that went
+// through JSON/Redis serialization, preserving all fields including metadata.
+func searchResultFromMap(refMap map[string]interface{}) *types.SearchResult {
+	sr := &types.SearchResult{
+		ID:                      getString(refMap, "id"),
+		Content:                 getString(refMap, "content"),
+		KnowledgeID:             getString(refMap, "knowledge_id"),
+		ChunkIndex:              int(getFloat64(refMap, "chunk_index")),
+		KnowledgeTitle:          getString(refMap, "knowledge_title"),
+		StartAt:                 int(getFloat64(refMap, "start_at")),
+		EndAt:                   int(getFloat64(refMap, "end_at")),
+		Seq:                     int(getFloat64(refMap, "seq")),
+		Score:                   getFloat64(refMap, "score"),
+		ChunkType:               getString(refMap, "chunk_type"),
+		ParentChunkID:           getString(refMap, "parent_chunk_id"),
+		ImageInfo:               getString(refMap, "image_info"),
+		KnowledgeFilename:       getString(refMap, "knowledge_filename"),
+		KnowledgeSource:         getString(refMap, "knowledge_source"),
+		KnowledgeChannel:        getString(refMap, "knowledge_channel"),
+		KnowledgeDescription:    getString(refMap, "knowledge_description"),
+		KnowledgeCustomMetadata: getString(refMap, "knowledge_custom_metadata"),
+		MatchedContent:          getString(refMap, "matched_content"),
+		KnowledgeBaseID:         getString(refMap, "knowledge_base_id"),
+	}
+	if meta, ok := refMap["metadata"].(map[string]interface{}); ok {
+		metadata := make(map[string]string)
+		for k, v := range meta {
+			if strVal, ok := v.(string); ok {
+				metadata[k] = strVal
+			}
+		}
+		sr.Metadata = metadata
+	}
+	if raw, ok := refMap["source_locators"]; ok && raw != nil {
+		if b, err := json.Marshal(raw); err == nil {
+			var locators types.SourceLocators
+			if json.Unmarshal(b, &locators) == nil {
+				sr.SourceLocators = locators
+			}
+		}
+	}
+	if raw, ok := refMap["matched_images"]; ok && raw != nil {
+		if b, err := json.Marshal(raw); err == nil {
+			var images []types.MatchedImage
+			if json.Unmarshal(b, &images) == nil {
+				sr.MatchedImages = images
+			}
+		}
+	}
+	return sr
 }
 
 // createDefaultSummaryConfig and fillSummaryConfigDefaults used to build

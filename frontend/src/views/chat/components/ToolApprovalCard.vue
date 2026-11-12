@@ -1,104 +1,155 @@
 <template>
-  <div class="approval-card" :class="cardClass">
-    <!-- Status strip -->
-    <div class="approval-strip">
-      <span class="approval-strip-icon">
-        <t-icon v-if="!resolved" name="info-circle-filled" />
-        <t-icon v-else-if="approved" name="check-circle-filled" />
-        <t-icon v-else name="close-circle-filled" />
-      </span>
-      <span class="approval-strip-text">
-        <template v-if="!resolved">{{ $t('agentStream.toolApproval.banner') }}</template>
-        <template v-else-if="approved">{{ $t('agentStream.toolApproval.approvedTag') }}</template>
-        <template v-else>{{ $t('agentStream.toolApproval.rejectedTag') }}</template>
-      </span>
-      <span v-if="!resolved && secondsLeft >= 0" class="approval-strip-timer" :class="timerClass">
-        <t-icon name="time" />
-        {{ formatCountdown(secondsLeft) }}
-      </span>
-    </div>
+  <div v-if="interactive" class="prompt-panel" @click.stop>
+    <div class="prompt-question">{{ question }}</div>
+    <div v-if="delegatedTask" class="prompt-task">{{ $t('agentStream.toolApproval.delegatedTask') }} · {{ delegatedTask }}</div>
+    <div v-if="descriptionParts.head" class="prompt-desc">{{ compactDescription }}</div>
+    <details v-if="hasLongDescription" class="prompt-tool-description">
+      <summary>{{ $t('agentStream.toolApproval.toolDescription') }}</summary>
+      <div class="prompt-desc">{{ descriptionParts.head }}</div>
+    </details>
+    <div v-if="delegatedTask && argumentSummary" class="prompt-argument-summary">{{ argumentSummary }}</div>
+    <dl v-if="descriptionParts.fields.length" class="prompt-fields">
+      <div v-for="(field, i) in descriptionParts.fields" :key="i" class="prompt-field">
+        <dt>{{ approvalFieldLabel(field.label) }}</dt>
+        <dd>
+          {{ approvalFieldValue(field.label, field.value) }}<span v-if="field.count" class="prompt-field-count">{{
+            $t('agentStream.toolApproval.characterCount', { count: field.count }) }}</span>
+        </dd>
+      </div>
+    </dl>
+    <ul v-if="descriptionParts.items.length" class="prompt-desc-items">
+      <li v-for="(item, i) in descriptionParts.items" :key="i">{{ item }}</li>
+    </ul>
 
-    <!-- Identity row -->
-    <div class="approval-identity">
-      <span class="ident-service">{{ serviceName }}</span>
-      <t-icon name="chevron-right" class="ident-sep" />
-      <span class="ident-tool">{{ mcpToolName }}</span>
-    </div>
-
-    <div v-if="description" class="approval-desc">{{ description }}</div>
-
-    <!-- Args (editable while pending, read-only after resolve) -->
-    <div class="approval-args">
-      <div class="approval-args-label">
-        <span class="args-label-text">{{ $t('agentStream.toolApproval.argsLabel') }}</span>
-        <span v-if="!resolved && !isJsonValid" class="args-status args-invalid">
-          <t-icon name="error-circle" /> {{ $t('agentStream.toolApproval.invalidJson') }}
+    <div v-if="hasArgs" class="prompt-args">
+      <button type="button" class="prompt-args-toggle" :aria-expanded="argsExpanded" @click="toggleArgs">
+        <span>{{ $t('agentStream.toolApproval.argsLabel') }}</span>
+        <ChatTimelineIcon width="14" height="14" class="args-toggle-icon" :name="argsExpanded ? 'chevron-down' : 'chevron-right'" />
+        <span v-if="!isJsonValid" class="args-status args-invalid">
+          <t-icon name="error-circle" />
+          {{ $t('agentStream.toolApproval.invalidJson') }}
         </span>
-        <span v-else-if="!resolved && isJsonValid && argsDirty" class="args-status args-dirty">
+        <span v-else-if="argsDirty" class="args-status args-dirty">
           {{ $t('agentStream.toolApproval.argsModified') }}
         </span>
+      </button>
+      <t-textarea v-if="argsExpanded" v-model="argsText" class="prompt-args-input"
+        :autosize="{ minRows: 2, maxRows: 10 }" placeholder="{}" />
+    </div>
+
+    <div v-if="grantLapsedText" class="prompt-grant-lapsed">{{ grantLapsedText }}</div>
+    <t-checkbox v-if="grantScope" v-model="allowInSession" class="prompt-grant">
+      {{ $t('agentStream.toolApproval.allowInSession') }}
+      <span class="prompt-grant-scope">{{ grantScope }}</span>
+    </t-checkbox>
+
+    <div class="prompt-footer">
+      <div class="prompt-footer-meta">
+        <span v-if="parked" class="action-timer">{{ parkedText }}</span>
+        <span v-else-if="secondsLeft >= 0" class="action-timer" :class="timerClass">{{ countdownText }}</span>
       </div>
-      <t-textarea
-        v-if="!resolved"
-        v-model="argsText"
-        class="approval-args-input"
-        :autosize="{ minRows: 3, maxRows: 14 }"
-        placeholder="{}"
-      />
-      <pre v-else class="approval-args-readonly"><code>{{ argsText }}</code></pre>
+      <div class="prompt-footer-actions">
+        <button type="button" class="prompt-btn" :disabled="submitting" @click="submit('reject')">
+          {{ $t('agentStream.toolApproval.reject') }}
+        </button>
+        <button type="button" class="prompt-btn is-primary" :disabled="submitting || !isJsonValid"
+          @click="submit('approve')">
+          {{ $t('agentStream.toolApproval.approve') }}<span class="prompt-btn-key" aria-hidden="true">↵</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-else class="action-card interaction-inline approval-inline" :class="{ 'action-pending': open }">
+    <div class="action-header no-results">
+      <div class="action-title">
+        <ChatTimelineIcon class="action-title-icon" :name="headerIcon" :active="open" />
+        <component :is="hasArgs ? 'button' : 'span'" class="approval-heading"
+          :type="hasArgs ? 'button' : undefined" :aria-expanded="hasArgs ? argsExpanded : undefined"
+          @click.stop="hasArgs && toggleArgs()">
+          <span v-if="delegatedTask" class="approval-task">{{ $t('agentStream.toolApproval.delegatedTask') }} · {{ delegatedTask }}</span>
+          <span class="action-name">{{ inlineTitle }}</span>
+          <span class="approval-status" role="status">
+            {{ awaitingInDock ? $t('agentStream.promptDock.waiting') : statusLine }}
+          </span>
+          <ChatTimelineIcon v-if="hasArgs" width="14" height="14" class="args-toggle-icon" :name="argsExpanded ? 'chevron-down' : 'chevron-right'" />
+        </component>
+        <button v-if="awaitingInDock" type="button" class="inline-action is-primary" @click.stop="dock?.focus(pendingId)">
+          {{ $t('agentStream.promptDock.handle') }}
+        </button>
+      </div>
     </div>
 
-    <!-- Footer (pending) -->
-    <div v-if="!resolved" class="approval-footer">
-      <span class="approval-spacer" />
-      <t-button
-        theme="default"
-        variant="outline"
-        size="small"
-        :loading="submitting && pendingDecision === 'reject'"
-        :disabled="submitting"
-        @click="submit('reject')"
-      >
-        {{ $t('agentStream.toolApproval.reject') }}
-      </t-button>
-      <t-button
-        theme="primary"
-        size="small"
-        :loading="submitting && pendingDecision === 'approve'"
-        :disabled="submitting || !isJsonValid"
-        @click="submit('approve')"
-      >
-        {{ $t('agentStream.toolApproval.approve') }}
-      </t-button>
-    </div>
-
-    <!-- Footer (resolved) -->
-    <div v-else class="approval-resolved-footer">
-      <span v-if="resolveReason" class="approval-resolved-reason">{{ resolveReason }}</span>
+    <div v-if="hasArgs && (open || argsExpanded)" class="approval-args">
+      <button v-if="open" type="button" class="approval-args-toggle" :aria-expanded="argsExpanded" @click.stop="toggleArgs">
+        <span>{{ $t('agentStream.toolApproval.argsLabel') }}</span>
+        <span v-if="!argsExpanded && argumentSummary" class="approval-args-summary">{{ argumentSummary }}</span>
+        <ChatTimelineIcon width="14" height="14" class="args-toggle-icon" :name="argsExpanded ? 'chevron-down' : 'chevron-right'" />
+      </button>
+      <div v-else class="approval-args-label">{{ $t('agentStream.toolApproval.argsLabel') }}</div>
+      <pre v-if="argsExpanded" class="approval-args-content">{{ argsText }}</pre>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import ChatTimelineIcon from '@/components/ChatTimelineIcon.vue'
+import { ref, computed, inject, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
 import { resolveToolApproval } from '@/api/mcp-service'
+import { resolveEmbedToolApproval } from '@/api/embed'
+import { resumeSuspendedRunKey } from '@/utils/suspendedRun'
+import { usePromptCountdown } from '@/composables/usePromptCountdown'
+import { markPromptSubmitted, promptSubmission, usePromptDock } from '@/composables/usePromptDock'
+import { isSubmitKey } from '@/utils/promptKeys'
 
 const props = defineProps<{
   pendingId: string
+  delegatedTask?: string
+  // dock: the approval form, shown above the composer. inline: the timeline row.
+  variant?: 'dock' | 'inline'
   serviceName: string
   mcpToolName: string
   description?: string
   argsJson?: string
+  // grantScope, when set, offers to approve calls like this one for the
+  // rest of the session and says which calls that covers.
+  grantScope?: string
+  // grantLapsed is why an earlier "allow" for this call no longer applies.
+  grantLapsed?: string
   timeoutSeconds?: number
   requestedAt?: number
   resolved?: boolean
   approved?: boolean
+  canceled?: boolean
   resolveReason?: string
+  // suspendable: past hotWaitSeconds the run is suspended rather than failed,
+  // and the prompt stays answerable until expiresAt.
+  suspendable?: boolean
+  hotWaitSeconds?: number
+  suspended?: boolean
+  expiresAt?: string
+  abandoned?: boolean
+  embeddedMode?: boolean
+  embedChannelId?: string
+  embedToken?: string
+  embedSessionId?: string
+  embedSessionSig?: string
+  embedVisitorId?: string
 }>()
 
+const useEmbedApproval = () =>
+  props.embeddedMode
+  && props.embedChannelId
+  && props.embedToken
+  && props.embedSessionId
+  && props.embedSessionSig
+  && props.embedVisitorId
+
 const { t } = useI18n()
+const resumeSuspendedRun = inject(resumeSuspendedRunKey, undefined)
+const dock = usePromptDock()
 
 function formatJson(raw: string): string {
   try {
@@ -110,10 +161,94 @@ function formatJson(raw: string): string {
 
 const initialArgs = formatJson(props.argsJson || '{}')
 const argsText = ref(initialArgs)
+const argsExpanded = ref(false)
+const allowInSession = ref(false)
+const GRANT_LAPSE_REASONS = ['changed', 'expired', 'idle']
+const grantLapsedText = computed(() => (
+  props.grantLapsed && GRANT_LAPSE_REASONS.includes(props.grantLapsed)
+    ? t(`agentStream.toolApproval.grantLapsed.${props.grantLapsed}`)
+    : ''
+))
 const submitting = ref(false)
-const pendingDecision = ref<'approve' | 'reject' | null>(null)
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
+const { parked, secondsLeft, timerClass, countdownText, parkedText } = usePromptCountdown(props)
+
+const submission = computed(() => promptSubmission(props.pendingId))
+const open = computed(() => !props.resolved && !submission.value)
+// A handled approval returns to a compact timeline row, including local submits.
+watch([open, () => props.pendingId], () => { argsExpanded.value = false })
+// Without a dock (a view that does not provide one) the row stays answerable.
+const interactive = computed(() => open.value && (props.variant === 'dock' || !dock))
+const awaitingInDock = computed(() => open.value && props.variant !== 'dock' && Boolean(dock?.isDocked(props.pendingId)))
+
+const hasArgs = computed(() => argsText.value.trim().length > 0)
+
+// The service name the backend gives its own operations (run_operation).
+const isOperation = computed(() => props.serviceName === 'WeKnora')
+
+// A batch operation ends its description with one "- " line per item it acts
+// on; those render as a list so every item stays visible. "Label: value"
+// lines render as a definition list. A broken item list stays one block.
+interface ApprovalField { label: string, value: string, count?: string }
+
+const descriptionParts = computed(() => {
+  const raw = (props.description || '').trim()
+  const prefix = props.delegatedTask ? `${props.delegatedTask}: ` : ''
+  const text = prefix && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
+  const lines = text ? text.split('\n') : []
+  const start = lines.findIndex((line) => line.startsWith('- '))
+  const brokenList = start >= 0 && !lines.slice(start).every((line) => line.startsWith('- '))
+  if (!text || brokenList) {
+    return { head: text, fields: [], items: [], action: '', target: '' }
+  }
+  const body = start < 0 ? lines : lines.slice(0, start)
+  const items = start < 0 ? [] : lines.slice(start).map((line) => line.slice(2))
+  const fields = [] as ApprovalField[]
+  const headLines = [] as string[]
+  for (const line of body) {
+    const match = /^([^:\n]{1,48}): (.+)$/.exec(line)
+    if (!match) {
+      headLines.push(line)
+      continue
+    }
+    const counted = /^(.+) \((\d+) characters\)$/.exec(match[1])
+    fields.push(counted
+      ? { label: counted[1], value: match[2], count: counted[2] }
+      : { label: match[1], value: match[2] })
+  }
+  // A WeKnora operation's description opens with its summary, then the label
+  // of what it acts on; they make the question instead of the raw operation id.
+  let action = ''
+  let target = ''
+  if (isOperation.value && headLines.length) {
+    action = String(headLines.shift()).trim()
+    if (headLines.length && !/[.。!！?？]$/.test(headLines[0].trim())) target = String(headLines.shift()).trim()
+  }
+  return { head: headLines.join('\n').trim(), fields, items, action, target }
+})
+
+// Long MCP schemas are reference material. Keep the actual task and arguments
+// visible instead of letting parameter documentation occupy the approval dock.
+const compactDescription = computed(() => {
+  const description = descriptionParts.value.head
+  if (!props.delegatedTask || isOperation.value) return description
+  return description.split(/\n\s*\n/)[0].slice(0, 180)
+})
+const hasLongDescription = computed(() => compactDescription.value !== descriptionParts.value.head)
+const argumentSummary = computed(() => {
+  try {
+    const args = JSON.parse(argsText.value)
+    if (!args || Array.isArray(args) || typeof args !== 'object') return ''
+    return Object.entries(args).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(' · ').slice(0, 240)
+  } catch { return '' }
+})
+
+const question = computed(() => {
+  const { action, target } = descriptionParts.value
+  if (!action) return t('agentStream.toolApproval.dockQuestion', { target: targetLabel.value })
+  return target
+    ? t('agentStream.toolApproval.operationQuestion', { action, target })
+    : t('agentStream.toolApproval.operationQuestionNoTarget', { action })
+})
 
 const isJsonValid = computed(() => {
   if (!argsText.value.trim()) return true
@@ -125,306 +260,280 @@ const isJsonValid = computed(() => {
   }
 })
 
-const argsDirty = computed(() => argsText.value.trim() !== initialArgs.trim())
-
-const deadline = computed(() => {
-  const base = (props.requestedAt || 0) * 1000
-  const add = (props.timeoutSeconds || 600) * 1000
-  return base + add
-})
-
-const secondsLeft = computed(() => {
-  if (props.resolved) return -1
-  return Math.max(0, Math.floor((deadline.value - now.value) / 1000))
-})
-
-const timerClass = computed(() => {
-  if (secondsLeft.value <= 30) return 'timer-critical'
-  if (secondsLeft.value <= 120) return 'timer-warning'
-  return ''
-})
-
-const cardClass = computed(() => ({
-  'is-resolved': !!props.resolved,
-  'is-approved': !!props.resolved && !!props.approved,
-  'is-rejected': !!props.resolved && !props.approved,
-  'is-pending': !props.resolved,
-}))
-
-function formatCountdown(s: number): string {
-  if (s < 60) return t('agentStream.toolApproval.countdown', { seconds: s })
-  const m = Math.floor(s / 60)
-  const r = s % 60
-  return `${m}:${r.toString().padStart(2, '0')}`
+const approvalDetailKey: Record<string, string> = {
+  Type: 'type',
+  'Embedding model': 'embeddingModel',
+  'Summary model': 'summaryModel',
+  'Caption model': 'captionModel',
+  'Speech model': 'speechModel',
+  Storage: 'storage',
+  Indexes: 'indexes',
+  Name: 'name',
+  Title: 'title',
+  Status: 'status',
+  Summary: 'summary',
+  Model: 'model',
+  Mode: 'mode',
+  URL: 'url',
+  From: 'from',
+  To: 'to',
+  Folder: 'folder',
+  Page: 'page',
+  Version: 'version',
+  Documents: 'documents',
+  'Knowledge bases': 'knowledgeBases',
+  'MCP services': 'mcpServices',
+  Skills: 'skills',
+  'Web search': 'webSearch',
+  'Multi-turn conversation': 'multiTurn',
+  Transport: 'transport',
+  Authentication: 'authentication',
+  'Usage instructions': 'usageInstructions',
+  'Display name': 'displayName',
+  Enabled: 'enabled',
+  Sandbox: 'sandbox',
+  Sandboxes: 'sandboxes',
+  'System prompt': 'systemPrompt',
+  Content: 'content',
+  'Knowledge base scope': 'kbScope',
+  'MCP scope': 'mcpScope',
+  'Skills scope': 'skillsScope',
 }
 
-onMounted(() => {
-  timer = setInterval(() => {
-    now.value = Date.now()
-  }, 1000)
+const approvalValueKey: Record<string, string> = {
+  document: 'document',
+  faq: 'faq',
+  wiki: 'wiki',
+  on: 'on',
+  off: 'off',
+  vector: 'vector',
+  keyword: 'keyword',
+  graph: 'graph',
+  'quick-answer': 'quickAnswer',
+  'smart-reasoning': 'smartReasoning',
+}
+
+function approvalFieldLabel(label: string) {
+  const key = approvalDetailKey[label]
+  return key ? t(`agentStream.toolApproval.detail.${key}`) : label
+}
+
+function approvalToken(token: string) {
+  const key = approvalValueKey[token]
+  return key ? t(`agentStream.toolApproval.value.${key}`) : token
+}
+
+function approvalFieldValue(label: string, value: string) {
+  if (label === 'Indexes') {
+    const parts = value.split(', ').map((part) => part.split(' ').map(approvalToken).join(' '))
+    return parts.join(t('agentStream.toolApproval.value.indexSep'))
+  }
+  if (label === 'Type' || label === 'Mode' || value === 'on' || value === 'off') {
+    return approvalToken(value)
+  }
+  return value
+}
+
+const argsDirty = computed(() => argsText.value.trim() !== initialArgs.trim())
+
+const headerIcon = computed(() => {
+  if (!props.resolved) return 'secured'
+  if (props.abandoned || props.canceled) return 'minus-circle'
+  if (props.approved) return 'check-circle'
+  return 'close-circle'
 })
 
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer)
+const targetLabel = computed(() => (
+  t('agentStream.toolApproval.targetWithTool', {
+    service: props.serviceName,
+    tool: props.mcpToolName,
+  })
+))
+
+const inlineTitle = computed(() => {
+  const { action, target } = descriptionParts.value
+  return action
+    ? (target ? t('agentStream.toolApproval.operationTarget', { action, target }) : action)
+    : targetLabel.value
 })
+
+const statusLine = computed(() => {
+  if (!props.resolved) {
+    return submission.value ? t('agentStream.toolApproval.submitted') : t('agentStream.toolApproval.waitingStatus')
+  }
+  if (props.canceled) return t('agentStream.toolApproval.canceledTag')
+  if (props.abandoned) return t('agentStream.toolApproval.abandonedTag')
+  if (props.approved) return t('agentStream.toolApproval.approvedTag')
+  return t('agentStream.toolApproval.rejectedTag')
+})
+
+function toggleArgs() {
+  argsExpanded.value = !argsExpanded.value
+}
+
+const allowForSession = (decision: 'approve' | 'reject') => (
+  decision === 'approve' && Boolean(props.grantScope) && allowInSession.value ? true : undefined
+)
 
 const submit = async (decision: 'approve' | 'reject') => {
-  if (props.resolved) return
+  if (!open.value || submitting.value) return
   submitting.value = true
-  pendingDecision.value = decision
   try {
     let modified: Record<string, unknown> | undefined
     if (decision === 'approve') {
       try {
         modified = JSON.parse(argsText.value || '{}') as Record<string, unknown>
       } catch {
+        argsExpanded.value = true
         MessagePlugin.error(t('agentStream.toolApproval.invalidJson'))
         return
       }
     }
-    await resolveToolApproval(props.pendingId, {
-      decision,
-      modified_args: decision === 'approve' ? modified : undefined,
-      reason: decision === 'reject' ? t('agentStream.toolApproval.userRejected') : undefined,
-    })
+    const { resumed } = await (useEmbedApproval()
+      ? resolveEmbedToolApproval(
+        props.embedChannelId!,
+        props.embedToken!,
+        props.embedSessionId!,
+        props.embedSessionSig!,
+        props.embedVisitorId!,
+        props.pendingId,
+        {
+          decision,
+          modified_args: decision === 'approve' ? modified : undefined,
+          reason: decision === 'reject' ? t('agentStream.toolApproval.userRejected') : undefined,
+          allow_in_session: allowForSession(decision),
+        },
+      )
+      : resolveToolApproval(props.pendingId, {
+        decision,
+        modified_args: decision === 'approve' ? modified : undefined,
+        reason: decision === 'reject' ? t('agentStream.toolApproval.userRejected') : undefined,
+        allow_in_session: allowForSession(decision),
+      }))
+    markPromptSubmitted(props.pendingId, { approved: decision === 'approve' })
     MessagePlugin.success(t('agentStream.toolApproval.submitted'))
+    if (resumed) resumeSuspendedRun?.(props.pendingId)
   } catch (e: any) {
     const msg = e?.response?.data?.error?.message || e?.message || t('agentStream.toolApproval.submitFailed')
     MessagePlugin.error(msg)
   } finally {
     submitting.value = false
-    pendingDecision.value = null
   }
 }
+
+/** Enter approves while docked; in the args editor it needs Cmd/Ctrl. */
+const handleKey = (e: KeyboardEvent): boolean => {
+  if (!interactive.value || !isSubmitKey(e)) return false
+  const inArgs = (e.target as HTMLElement | null)?.tagName === 'TEXTAREA'
+  if (inArgs && !e.metaKey && !e.ctrlKey) return false
+  if (!isJsonValid.value) return false
+  void submit('approve')
+  return true
+}
+
+defineExpose({ handleKey })
 </script>
 
 <style scoped lang="less">
-@warning-rgb: 237, 122, 11;
-@success-rgb: 7, 192, 95;
-@danger-rgb: 232, 80, 91;
+@import './agent-interaction-card.less';
 
-.approval-card {
-  --strip-color: var(--td-warning-color);
-  --strip-rgb: @warning-rgb;
-  background: var(--td-bg-color-container);
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 3px;
-    background: var(--strip-color);
-    transition: background-color 0.2s ease;
-  }
-
-  &.is-pending {
-    box-shadow: 0 1px 6px rgba(@warning-rgb, 0.08);
-  }
-
-  &.is-approved {
-    --strip-color: var(--td-success-color);
-    --strip-rgb: @success-rgb;
-    opacity: 0.94;
-  }
-
-  &.is-rejected {
-    --strip-color: var(--td-error-color);
-    --strip-rgb: @danger-rgb;
-    opacity: 0.94;
-  }
+.approval-inline {
+  min-width: 0;
+  .action-title { column-gap: 8px; row-gap: 4px; }
+  .action-name { font-size: var(--agent-step-summary-size, 13px); white-space: normal; overflow-wrap: anywhere; flex-shrink: 1; }
 }
 
-.approval-strip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px 7px 14px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--strip-color);
-  background: rgba(var(--strip-rgb), 0.06);
-  border-bottom: 1px solid var(--td-component-stroke);
-
-  .approval-strip-icon {
-    display: inline-flex;
-    align-items: center;
-    .t-icon {
-      font-size: 14px;
-    }
-  }
-  .approval-strip-text {
-    flex: 1;
-    color: var(--strip-color);
-  }
-  .approval-strip-timer {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.04);
-    color: var(--td-text-color-secondary);
-    font-variant-numeric: tabular-nums;
-    font-weight: 500;
-
-    .t-icon {
-      font-size: 12px;
-    }
-    &.timer-warning {
-      color: var(--td-warning-color);
-      background: rgba(@warning-rgb, 0.1);
-    }
-    &.timer-critical {
-      color: var(--td-error-color);
-      background: rgba(@danger-rgb, 0.12);
-      animation: timerPulse 1.2s ease-in-out infinite;
-    }
-  }
-}
-
-.approval-identity {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 12px 6px 14px;
-  font-size: 13px;
-  flex-wrap: wrap;
-
-  .ident-service {
-    color: var(--td-text-color-secondary);
-    font-weight: 500;
-  }
-  .ident-sep {
-    color: var(--td-text-color-placeholder);
-    font-size: 12px;
-  }
-  .ident-tool {
-    color: var(--td-brand-color);
-    font-weight: 600;
-    font-family: var(--td-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 13px;
-  }
-}
-
-.approval-desc {
-  padding: 0 12px 4px 14px;
-  font-size: 12px;
-  line-height: 1.6;
+.approval-status {
+  padding: 1px 6px;
+  border-radius: var(--app-radius-sm, 4px);
+  background: var(--td-bg-color-secondarycontainer);
   color: var(--td-text-color-secondary);
+  font-size: var(--app-text-xs, 12px);
+  line-height: 1.5;
+}
+
+.approval-heading {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  .approval-status, .args-toggle-icon { flex-shrink: 0; }
+  .args-toggle-icon { color: var(--td-text-color-placeholder); }
+}
+button.approval-heading {
+  cursor: pointer;
+  &:hover { color: var(--td-text-color-primary); }
+  &:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: 3px; border-radius: var(--app-radius-xs); }
+}
+.approval-task {
+  color: var(--td-text-color-placeholder);
+  font-size: var(--agent-step-summary-size, 13px);
+  overflow-wrap: anywhere;
+}
+.approval-args-label {
+  padding: 10px 12px 6px;
+  color: var(--td-text-color-secondary);
+  font-size: var(--app-text-xs, 12px);
 }
 
 .approval-args {
-  padding: 8px 12px 0 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.approval-args-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-
-  .args-label-text {
-    color: var(--td-text-color-placeholder);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .args-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    margin-left: auto;
-    font-size: 11px;
-    .t-icon {
-      font-size: 12px;
-    }
-  }
-  .args-invalid {
-    color: var(--td-error-color);
-  }
-  .args-dirty {
-    color: var(--td-warning-color);
-  }
-}
-
-.approval-args-input {
-  :deep(.t-textarea__inner) {
-    font-family: var(--td-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 12px;
-    line-height: 1.7;
-    background: var(--td-bg-color-secondarycontainer);
-    border-color: var(--td-component-stroke);
-    color: var(--td-text-color-primary);
-    padding: 8px 10px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-    &:hover {
-      border-color: var(--td-brand-color-hover);
-    }
-    &:focus,
-    &:focus-visible {
-      border-color: var(--td-brand-color);
-      box-shadow: 0 0 0 2px rgba(@success-rgb, 0.12);
-    }
-  }
-}
-
-.approval-args-readonly {
-  margin: 0;
-  padding: 8px 10px;
+  margin-top: 10px;
+  border-radius: var(--app-radius-md, 8px);
   background: var(--td-bg-color-secondarycontainer);
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 4px;
-  font-family: var(--td-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--td-text-color-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 180px;
-  overflow: auto;
+  overflow: hidden;
 }
 
-.approval-footer {
+.approval-args-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px 12px 14px;
-}
-
-.approval-spacer {
-  flex: 1;
-}
-
-.approval-resolved-footer {
-  padding: 6px 12px 10px 14px;
-  font-size: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
   color: var(--td-text-color-secondary);
-  min-height: 0;
-
-  .approval-resolved-reason {
-    color: var(--td-text-color-secondary);
-  }
-
-  &:empty {
-    display: none;
-  }
+  font: inherit;
+  font-size: var(--app-text-xs, 12px);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  > span:first-child, .args-toggle-icon { flex-shrink: 0; }
+  .args-toggle-icon { margin-left: auto; }
+  &:hover { color: var(--td-text-color-primary); }
+  &:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: -2px; }
 }
 
-@keyframes timerPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+.approval-args-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.approval-args-content {
+  margin: 0;
+  padding: 0 12px 12px;
+  max-height: 280px;
+  overflow: auto;
+  color: var(--td-text-color-primary);
+  font-size: var(--app-text-xs, 12px);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-task { margin: 6px 0; color: var(--td-text-color-secondary); font-size: var(--app-text-sm); }
+.prompt-argument-summary { margin: 8px 0; overflow-wrap: anywhere; font-family: monospace; font-size: var(--app-text-sm); }
+.prompt-tool-description { margin-top: 8px; color: var(--td-text-color-secondary); font-size: var(--app-text-sm);
+  summary { cursor: pointer; }
+  .prompt-desc { max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+}
+
 </style>

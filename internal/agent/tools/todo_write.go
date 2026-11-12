@@ -151,7 +151,7 @@ type TodoWriteInput struct {
 type PlanStep struct {
 	ID          string `json:"id" jsonschema:"Unique identifier for this step (e.g., 'step1', 'step2')"`
 	Description string `json:"description" jsonschema:"Clear description of what to investigate or accomplish in this step"`
-	Status      string `json:"status" jsonschema:"Current status: pending (not started), in_progress (executing), completed (finished)"`
+	Status      string `json:"status" jsonschema:"Status: pending, in_progress, completed, or skipped"`
 }
 
 // NewTodoWriteTool creates a new todo_write tool instance
@@ -178,6 +178,17 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 
 	// Parse plan steps
 	planSteps := input.Steps
+	for i, step := range planSteps {
+		switch step.Status {
+		case "pending", "in_progress", "completed", "skipped":
+		default:
+			return &types.ToolResult{
+				Success: false,
+				Error: fmt.Sprintf("Invalid status %q for step %d; use pending, in_progress, completed, or skipped",
+					step.Status, i+1),
+			}, nil
+		}
+	}
 
 	// Generate formatted output
 	output := generatePlanOutput(input.Task, planSteps)
@@ -199,32 +210,6 @@ func (t *TodoWriteTool) Execute(ctx context.Context, args json.RawMessage) (*typ
 	}, nil
 }
 
-// Helper function to safely get string field from map
-func getStringField(m map[string]interface{}, key string) string {
-	if val, ok := m[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-// Helper function to safely get string array field from map
-func getStringArrayField(m map[string]interface{}, key string) []string {
-	if val, ok := m[key].([]interface{}); ok {
-		result := make([]string, 0, len(val))
-		for _, item := range val {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
-			}
-		}
-		return result
-	}
-	// Handle legacy string format for backward compatibility
-	if val, ok := m[key].(string); ok && val != "" {
-		return []string{val}
-	}
-	return []string{}
-}
-
 // generatePlanOutput generates a formatted plan output
 func generatePlanOutput(task string, steps []PlanStep) string {
 	output := "Plan created\n\n"
@@ -233,10 +218,9 @@ func generatePlanOutput(task string, steps []PlanStep) string {
 	if len(steps) == 0 {
 		output += "Note: No specific steps provided. It is recommended to create 3-7 retrieval tasks for systematic research.\n\n"
 		output += "Suggested retrieval workflow (focused on retrieval tasks, excluding summarization):\n"
-		output += "1. Use grep_chunks to search keywords and locate relevant documents\n"
-		output += "2. Use knowledge_search for semantic search to retrieve relevant content\n"
-		output += "3. Use list_knowledge_chunks to get the full content of key documents\n"
-		output += "4. Use web_search to get supplementary information (if needed)\n"
+		output += "1. Use search_knowledge to locate the relevant documents and passages\n"
+		output += "2. Use read_document to read the key documents in full\n"
+		output += "3. Use web_search to get supplementary information (if needed)\n"
 		output += "\nNote: Summarization and synthesis are handled by the thinking tool. Do not add summarization tasks here.\n"
 		return output
 	}
@@ -245,6 +229,7 @@ func generatePlanOutput(task string, steps []PlanStep) string {
 	pendingCount := 0
 	inProgressCount := 0
 	completedCount := 0
+	skippedCount := 0
 	for _, step := range steps {
 		switch step.Status {
 		case "pending":
@@ -253,6 +238,8 @@ func generatePlanOutput(task string, steps []PlanStep) string {
 			inProgressCount++
 		case "completed":
 			completedCount++
+		case "skipped":
+			skippedCount++
 		}
 	}
 	totalCount := len(steps)
@@ -271,11 +258,14 @@ func generatePlanOutput(task string, steps []PlanStep) string {
 	output += fmt.Sprintf("✅ Completed: %d\n", completedCount)
 	output += fmt.Sprintf("🔄 In Progress: %d\n", inProgressCount)
 	output += fmt.Sprintf("⏳ Pending: %d\n", pendingCount)
+	if skippedCount > 0 {
+		output += fmt.Sprintf("⏭️ Skipped: %d\n", skippedCount)
+	}
 
 	output += "\n=== ⚠️ Important Reminder ===\n"
 	if remainingCount > 0 {
 		output += fmt.Sprintf("**%d tasks remaining!**\n\n", remainingCount)
-		output += "**All tasks must be completed before summarizing or drawing conclusions.**\n\n"
+		output += "**All remaining tasks must be completed before summarizing or drawing conclusions.**\n\n"
 		output += "Next steps:\n"
 		if inProgressCount > 0 {
 			output += "- Continue completing tasks currently in progress\n"
@@ -285,7 +275,10 @@ func generatePlanOutput(task string, steps []PlanStep) string {
 			output += "- Complete each task in order, do not skip\n"
 		}
 		output += "- After completing each task, update todo_write to mark it as completed\n"
-		output += "- Only generate the final summary after all tasks are completed\n"
+		output += "- Only generate the final summary after all remaining tasks are completed\n"
+	} else if skippedCount > 0 {
+		output += "No tasks remain pending or in progress; skipped tasks were not completed.\n\n"
+		output += "Account for the skipped tasks when synthesizing the findings.\n"
 	} else {
 		output += "✅ **All tasks completed!**\n\n"
 		output += "You can now:\n"

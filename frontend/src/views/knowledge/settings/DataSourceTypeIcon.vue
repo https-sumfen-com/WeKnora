@@ -1,29 +1,36 @@
 <script setup lang="ts">
-import feishuIcon from '@/assets/img/datasource-feishu.ico'
-import notionIcon from '@/assets/img/datasource-notion.ico'
-import yuqueIcon from '@/assets/img/datasource-yuque.ico'
+import { getDatasourceIconUrl, datasourceIconMap } from './datasourceIcons'
+import { useConnectorLabel } from '@/composables/useConnectorLabel'
 
 const props = withDefaults(defineProps<{
   type: string
   size?: number
+  /** inline: 类型选择等小尺寸场景；badge: 嵌入 ds-card__badge 等父级徽章容器 */
+  variant?: 'inline' | 'badge'
 }>(), {
   size: 20,
+  variant: 'inline',
 })
 
-const iconMap: Record<string, string> = {
-  feishu: feishuIcon,
-  notion: notionIcon,
-  yuque: yuqueIcon,
-}
+// The card subtitle and the connector picker resolve the same name through this
+// composable, so the icon's alt text and the visible label next to it cannot
+// disagree. Screen readers and copied page text get "钉钉文档", not "dingtalk".
+const { connectorLabel } = useConnectorLabel()
+
+const iconMap = datasourceIconMap
 
 function fallbackText(type: string) {
   switch (type) {
     case 'feishu':
       return 'F'
+    case 'lark':
+      return 'L'
     case 'notion':
       return 'N'
     case 'yuque':
       return 'Y'
+    case 'ima':
+      return 'I'
     default:
       return type.slice(0, 1).toUpperCase() || '?'
   }
@@ -33,13 +40,15 @@ function fallbackText(type: string) {
 <template>
   <span
     class="ds-type-icon"
-    :style="{ width: `${size}px`, height: `${size}px` }"
+    :class="`ds-type-icon--${variant}`"
+    :style="variant === 'inline' ? { width: `${size}px`, height: `${size}px` } : undefined"
   >
     <img
       v-if="iconMap[type]"
       :src="iconMap[type]"
-      :alt="type"
-      :style="{ width: `${size}px`, height: `${size}px` }"
+      :alt="connectorLabel(type)"
+      class="ds-type-icon__img"
+      :style="variant === 'inline' ? { width: `${size}px`, height: `${size}px` } : undefined"
     >
     <span v-else class="ds-type-icon-fallback">{{ fallbackText(type) }}</span>
   </span>
@@ -52,18 +61,41 @@ function fallbackText(type: string) {
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
-  border-radius: 6px;
+}
+
+.ds-type-icon--inline {
+  border-radius: var(--app-radius-sm);
   background: var(--td-bg-color-component);
 }
 
-.ds-type-icon img {
+.ds-type-icon--inline .ds-type-icon__img {
   display: block;
-  object-fit: cover;
+  object-fit: contain;
 }
 
-.ds-type-icon-fallback {
-  font-size: 11px;
+.ds-type-icon--inline .ds-type-icon-fallback {
+  font-size: var(--app-text-xs);
   font-weight: 600;
   color: var(--td-text-color-placeholder);
+}
+
+.ds-type-icon--badge {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.ds-type-icon--badge .ds-type-icon__img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.ds-type-icon--badge .ds-type-icon-fallback {
+  font-size: var(--app-text-lg);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: inherit;
 }
 </style>

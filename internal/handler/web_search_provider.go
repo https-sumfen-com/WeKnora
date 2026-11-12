@@ -80,7 +80,7 @@ func (h *WebSearchProviderHandler) CreateProvider(c *gin.Context) {
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -111,17 +111,26 @@ func (h *WebSearchProviderHandler) CreateProvider(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
-		"data":    dto.NewWebSearchProviderResponse(provider),
+		"data":    dto.NewWebSearchProviderResponse(ctx, provider),
 	})
 }
 
 // ListProviders lists all web search providers for the current tenant
+// @Summary 获取网络搜索服务列表
+// @Tags 网络搜索
+// @Produce json
+// @Success 200 {object} DataResponse{data=[]dto.WebSearchProviderResponse}
+// @Security Bearer
+// @Security ApiKeyAuth
+// @x-agent {"id":"web_search_provider.list","risk":"read","max_items":200}
+// @x-agent-hint "Lists configured search services and the workspace default. Use these IDs for agent.update web_search_provider_id. No provider-wide enable switch exists; web_search_enabled is an agent setting."
+// @Router /web-search-providers [get]
 func (h *WebSearchProviderHandler) ListProviders(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -134,7 +143,7 @@ func (h *WebSearchProviderHandler) ListProviders(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    dto.NewWebSearchProviderResponses(providers),
+		"data":    dto.NewWebSearchProviderResponses(ctx, providers),
 	})
 }
 
@@ -145,18 +154,19 @@ func (h *WebSearchProviderHandler) ListProviders(c *gin.Context) {
 // @Description  根据 ID 获取指定 provider 配置
 // @Tags         网络搜索
 // @Produce      json
-// @Param        id   path      string                          true  "Provider ID"
-// @Success      200  {object}  types.WebSearchProviderEntity   "Provider 详情"
+// @Param        id   path      string                          true  "Provider ID" extensions(x-agent=web_search_provider_id)
+// @Success      200  {object}  DataResponse{data=dto.WebSearchProviderResponse}   "Provider 详情"
 // @Failure      404  {object}  map[string]interface{}          "Provider 不存在"
 // @Security     Bearer
 // @Security     ApiKeyAuth
+// @x-agent {"id":"web_search_provider.get","risk":"read"}
 // @Router       /web-search-providers/{id} [get]
 func (h *WebSearchProviderHandler) GetProvider(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -169,7 +179,7 @@ func (h *WebSearchProviderHandler) GetProvider(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    dto.NewWebSearchProviderResponse(provider),
+		"data":    dto.NewWebSearchProviderResponse(ctx, provider),
 	})
 }
 
@@ -181,7 +191,7 @@ func (h *WebSearchProviderHandler) GetProvider(c *gin.Context) {
 // @Tags         网络搜索
 // @Accept       json
 // @Produce      json
-// @Param        id       path      string                          true  "Provider ID"
+// @Param        id       path      string                          true  "Provider ID" extensions(x-agent=web_search_provider_id)
 // @Param        request  body      handler.UpdateProviderRequest   true  "更新字段"
 // @Success      200      {object}  types.WebSearchProviderEntity   "更新后的 Provider"
 // @Failure      400      {object}  map[string]interface{}          "请求参数错误"
@@ -194,7 +204,7 @@ func (h *WebSearchProviderHandler) UpdateProvider(c *gin.Context) {
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -263,7 +273,7 @@ func (h *WebSearchProviderHandler) UpdateProvider(c *gin.Context) {
 	// Re-fetch to get the full stored state
 	updated, _ := h.repo.GetByID(ctx, tenantID, id)
 	if updated != nil {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": dto.NewWebSearchProviderResponse(updated)})
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": dto.NewWebSearchProviderResponse(ctx, updated)})
 	} else {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	}
@@ -276,18 +286,20 @@ func (h *WebSearchProviderHandler) UpdateProvider(c *gin.Context) {
 // @Description  删除指定 provider 配置
 // @Tags         网络搜索
 // @Produce      json
-// @Param        id   path      string                  true  "Provider ID"
-// @Success      200  {object}  map[string]interface{}  "success: true"
+// @Param        id   path      string                  true  "Provider ID" extensions(x-agent=web_search_provider_id)
+// @Success      200  {object}  handler.SuccessResponse  "success: true"
 // @Failure      404  {object}  map[string]interface{}  "Provider 不存在"
 // @Security     Bearer
 // @Security     ApiKeyAuth
+// @x-agent-hint "Deletes a saved search service and its credential. Agents referring to it may lose search access. Cannot be undone."
+// @x-agent {"id":"web_search_provider.delete","risk":"destructive","role":"admin","target":"web_search_provider.get","label":"name"}
 // @Router       /web-search-providers/{id} [delete]
 func (h *WebSearchProviderHandler) DeleteProvider(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -315,14 +327,21 @@ func (h *WebSearchProviderHandler) DeleteProvider(c *gin.Context) {
 // @Description  返回 UI 表单需要的 provider 类型及参数定义
 // @Tags         网络搜索
 // @Produce      json
-// @Success      200  {object}  map[string]interface{}  "provider 类型列表"
+// @Success      200  {object}  handler.DataResponse{data=[]types.WebSearchProviderTypeInfo}  "provider 类型列表"
 // @Security     Bearer
 // @Security     ApiKeyAuth
+// @x-agent {"id":"web_search_provider.list_types","risk":"read"}
 // @Router       /web-search-providers/types [get]
 func (h *WebSearchProviderHandler) ListProviderTypes(c *gin.Context) {
+	providerTypes := types.GetWebSearchProviderTypes()
+	for i := range providerTypes {
+		if clients, err := h.registry.Clients(providerTypes[i].ID); err == nil {
+			providerTypes[i].Clients = &clients
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    types.GetWebSearchProviderTypes(),
+		"data":    providerTypes,
 	})
 }
 
@@ -333,18 +352,20 @@ func (h *WebSearchProviderHandler) ListProviderTypes(c *gin.Context) {
 // @Description  使用数据库中已保存的凭证测试连通性
 // @Tags         网络搜索
 // @Produce      json
-// @Param        id   path      string                  true  "Provider ID"
-// @Success      200  {object}  map[string]interface{}  "测试结果"
+// @Param        id   path      string                  true  "Provider ID" extensions(x-agent=web_search_provider_id)
+// @Success      200  {object}  handler.WebSearchProviderTestResponse  "测试结果"
 // @Failure      404  {object}  map[string]interface{}  "Provider 不存在"
 // @Security     Bearer
 // @Security     ApiKeyAuth
+// @x-agent-hint "Performs a sample search using saved credentials; success false means connection/configuration failed. No configuration is changed. Credentials are entered on the settings page."
+// @x-agent {"id":"web_search_provider.test","risk":"probe","role":"admin"}
 // @Router       /web-search-providers/{id}/test [post]
 func (h *WebSearchProviderHandler) TestProviderByID(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	tenantID := h.getTenantID(c)
 	if tenantID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: tenant context missing"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "unauthorized: workspace context missing"})
 		return
 	}
 
@@ -357,7 +378,13 @@ func (h *WebSearchProviderHandler) TestProviderByID(c *gin.Context) {
 
 	if err := h.doTestSearch(ctx, string(provider.Provider), provider.Parameters); err != nil {
 		logger.Warnf(ctx, "Web search provider test failed: %v", err)
-		c.JSON(http.StatusOK, gin.H{"success": false, "error": err.Error()})
+		c.JSON(
+			http.StatusOK,
+			gin.H{
+				"success": false,
+				"error":   "Search connection test failed; check the saved credentials and connection settings.",
+			},
+		)
 		return
 	}
 
@@ -379,7 +406,7 @@ type TestProviderRequest struct {
 // @Accept       json
 // @Produce      json
 // @Param        request  body      handler.TestProviderRequest  true  "{provider, parameters}"
-// @Success      200      {object}  map[string]interface{}  "测试结果"
+// @Success      200      {object}  handler.SuccessErrorResponse  "测试结果"
 // @Failure      400      {object}  map[string]interface{}  "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
@@ -411,19 +438,20 @@ func (h *WebSearchProviderHandler) TestProviderRaw(c *gin.Context) {
 // via /test instead.
 func (h *WebSearchProviderHandler) doTestSearch(ctx context.Context, providerType string, params types.WebSearchProviderParameters) error {
 	logger.Infof(ctx, "[WebSearch][Test] testing provider type=%s", providerType)
-	searchProvider, err := h.registry.CreateProvider(providerType, params)
+	searchProvider, err := h.registry.NewSearcher(providerType, params)
 	if err != nil {
 		logger.Warnf(ctx, "[WebSearch][Test] failed to create provider: %v", err)
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
-	results, err := searchProvider.Search(ctx, "test", 1, false)
+	results, err := searchProvider.Search(ctx, types.WebSearchRequest{Query: "test", MaxResults: 1})
 	if err != nil {
 		logger.Warnf(ctx, "[WebSearch][Test] search failed: %v", err)
 		return err
 	}
 	if len(results) == 0 {
-		logger.Warnf(ctx, "[WebSearch][Test] search returned 0 results — API key or configuration may be invalid")
-		return fmt.Errorf("search returned 0 results, please verify your API key and configuration")
+		err := infra_web_search.EmptyTestResultsError(providerType, searchProvider)
+		logger.Warnf(ctx, "[WebSearch][Test] %v", err)
+		return err
 	}
 	logger.Infof(ctx, "[WebSearch][Test] succeeded: type=%s, results=%d", providerType, len(results))
 	return nil

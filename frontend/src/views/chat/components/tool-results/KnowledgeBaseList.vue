@@ -35,7 +35,6 @@
 </template>
 
 <script setup lang="ts">
-import { defineProps } from 'vue';
 import type { KnowledgeBaseListData } from '@/types/tool-results';
 
 const props = defineProps<{
@@ -57,7 +56,7 @@ const props = defineProps<{
   border: .5px solid @card-border;
   border-radius: @card-radius;
   padding: 12px;
-  transition: all 0.2s ease;
+  transition: all var(--app-motion-base) ease;
 
   &:hover {
     border-color: @card-hover-border;
@@ -73,13 +72,13 @@ const props = defineProps<{
 }
 
 .kb-index {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-text-color-placeholder);
   font-weight: 600;
 }
 
 .kb-name {
-  font-size: 14px;
+  font-size: var(--app-text-base);
   font-weight: 600;
   color: var(--td-text-color-primary);
 }
@@ -91,7 +90,7 @@ const props = defineProps<{
 }
 
 .kb-description {
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-text-color-secondary);
   line-height: 1.5;
   margin-top: 4px;
@@ -99,10 +98,9 @@ const props = defineProps<{
 
 code {
   font-family: var(--app-font-family-mono);
-  font-size: 11px;
+  font-size: var(--app-text-xs);
   background: var(--td-bg-color-secondarycontainer);
   padding: 2px 4px;
   border-radius: 3px;
 }
 </style>
-

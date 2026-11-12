@@ -33,9 +33,9 @@ echo "WEKNORA_API_KEY=your_api_key_here" >> .env
 
 以下是各种 MCP 工具的使用示例：
 
-### 租户管理
+### 空间管理
 
-#### 创建租户
+#### 创建空间
 ```json
 {
   "tool": "create_tenant",
@@ -53,7 +53,7 @@ echo "WEKNORA_API_KEY=your_api_key_here" >> .env
 }
 ```
 
-#### 列出所有租户
+#### 列出所有空间
 ```json
 {
   "tool": "list_tenants",
@@ -122,6 +122,34 @@ echo "WEKNORA_API_KEY=your_api_key_here" >> .env
 }
 ```
 
+#### 从文本创建知识
+```json
+{
+  "tool": "create_knowledge_from_text",
+  "arguments": {
+    "kb_id": "my-knowledge-base",
+    "title": "注意力机制摘要",
+    "content": "# 注意力机制\n\n注意力机制允许模型在处理序列时动态分配权重...",
+    "status": "publish"
+  }
+}
+```
+
+#### 更新手工知识
+```json
+{
+  "tool": "update_knowledge_from_text",
+  "arguments": {
+    "knowledge_id": "know_789012",
+    "title": "注意力机制摘要（修订版）",
+    "content": "# 注意力机制\n\n这里是修订后的 Markdown 内容...",
+    "status": "publish"
+  }
+}
+```
+
+省略 `title` 或传空字符串会保留原标题；将 `status` 设为 `draft` 可只保存内容而不重新索引。
+
 #### 列出知识
 ```json
 {
@@ -173,15 +201,14 @@ echo "WEKNORA_API_KEY=your_api_key_here" >> .env
 ### 会话管理
 
 #### 创建聊天会话
+
+创建会话时无需选择知识库。如需检索，在发送消息时传入 `knowledge_base_ids`。
+
 ```json
 {
   "tool": "create_session",
   "arguments": {
-    "kb_id": "kb_123456",
-    "max_rounds": 10,
-    "enable_rewrite": true,
-    "fallback_response": "抱歉，我无法回答这个问题。",
-    "summary_model_id": "gpt-3.5-turbo"
+    "title": "产品咨询"
   }
 }
 ```
@@ -215,7 +242,8 @@ echo "WEKNORA_API_KEY=your_api_key_here" >> .env
   "tool": "chat",
   "arguments": {
     "session_id": "sess_345678",
-    "query": "请介绍一下产品的主要功能"
+    "query": "请介绍一下产品的主要功能",
+    "knowledge_base_ids": ["kb_123456"]
   }
 }
 ```
@@ -256,7 +284,7 @@ python main.py --verbose
 # 2. 在 MCP 客户端中执行以下步骤：
 ```
 
-#### 步骤 1: 创建租户
+#### 步骤 1: 创建空间
 ```json
 {
   "tool": "create_tenant",
@@ -296,9 +324,7 @@ python main.py --verbose
 {
   "tool": "create_session",
   "arguments": {
-    "kb_id": "知识库ID",
-    "max_rounds": 5,
-    "enable_rewrite": true
+    "title": "API 使用咨询"
   }
 }
 ```
@@ -309,7 +335,8 @@ python main.py --verbose
   "tool": "chat",
   "arguments": {
     "session_id": "会话ID",
-    "query": "如何使用用户认证API？"
+    "query": "如何使用用户认证API？",
+    "knowledge_base_ids": ["知识库ID"]
   }
 }
 ```
@@ -358,7 +385,10 @@ python main.py --verbose
 }
 ```
 
-### 自定义会话策略
+### 自定义会话策略（旧版服务端）
+
+如果使用支持会话级检索策略的旧版服务端，仍可显式传入 `kb_id` 和策略参数。
+
 ```json
 {
   "tool": "create_session",
@@ -397,7 +427,7 @@ python main.py --verbose
 }
 ```
 
-项目仓库: https://github.com/NannaOlympicBroadcast/WeKnoraMCP
+项目仓库: https://github.com/Tencent/WeKnora/tree/main/mcp-server
 
 ### 与其他 MCP 客户端集成
 参考各客户端的文档，配置服务器启动命令和环境变量。

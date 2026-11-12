@@ -3,6 +3,7 @@ package agentcmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -107,6 +108,11 @@ func TestCreate_From_CopiesThenUpdates(t *testing.T) {
 	require.True(t, svc.updateCalled, "must Update after Copy when overrides present")
 	assert.Equal(t, "ag_clone", svc.updateID)
 	assert.Equal(t, "Renamed", svc.updateReq.Name)
+	body, err := json.Marshal(svc.updateReq)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body, &fields))
+	assert.NotContains(t, fields, "avatar", "overrides must preserve the copied avatar")
 	require.NotNil(t, svc.updateReq.Config)
 	assert.Equal(t, "model-x", svc.updateReq.Config.ModelID)
 }
@@ -218,6 +224,44 @@ func TestCreate_Temperature_Bounds(t *testing.T) {
 	}
 }
 
+// TestCreate_AgentModeValidation: an unknown --agent-mode / --kb-selection-mode
+// is rejected up front (PreRunE) with a typed input.invalid_argument (exit 5),
+// while a valid value passes the gate. The closed set is sourced from the SDK
+// enumerators, so this also guards against CLI/SDK drift.
+func TestCreate_AgentModeValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr string // substring; "" means the mode gate must pass
+	}{
+		{"bad agent-mode", []string{"--agent-mode", "bogus"}, "agent-mode"},
+		{"bad kb-selection-mode", []string{"--kb-selection-mode", "every"}, "kb-selection-mode"},
+		{"valid agent-mode", []string{"--agent-mode", "smart-reasoning", "--dry-run"}, ""},
+		{"valid kb-selection-mode", []string{"--kb-selection-mode", "selected", "--dry-run"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _ = iostreams.SetForTest(t)
+			cmd := NewCmdCreate(nil)
+			cmd.SetArgs(append([]string{"Test", "--model", "model-x"}, tc.args...))
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			err := cmd.Execute()
+			if tc.wantErr == "" {
+				// Valid mode + --dry-run: must clear the mode gate. (--dry-run
+				// short-circuits before any client call, so nil factory is fine.)
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ce *cmdutil.Error
+			require.ErrorAs(t, err, &ce)
+			assert.Equal(t, cmdutil.CodeInputInvalidArgument, ce.Code)
+			assert.Equal(t, 5, cmdutil.ExitCode(err))
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 func TestCreate_CopyAgent_NotFound(t *testing.T) {
 	_, _ = iostreams.SetForTest(t)
 	svc := &fakeCreateSvc{copyErr: errBadHTTP404}
@@ -251,4 +295,3 @@ func TestCreate_AttachKBFlagExists(t *testing.T) {
 	old := cmd.Flags().Lookup("kb")
 	assert.Nil(t, old, "old --kb flag must not exist on 'agent create' (renamed to --attach-kb)")
 }
-

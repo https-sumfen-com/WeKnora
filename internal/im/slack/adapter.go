@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -99,9 +100,10 @@ func (a *Adapter) Platform() im.Platform {
 
 func (a *Adapter) VerifyCallback(c *gin.Context) error {
 	if a.signingSecret == "" {
-		return nil
+		return fmt.Errorf("webhook verification secret is required")
 	}
 
+	im.LimitWebhookBody(c)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
@@ -123,6 +125,7 @@ func (a *Adapter) VerifyCallback(c *gin.Context) error {
 }
 
 func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
+	im.LimitWebhookBody(c)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
@@ -171,6 +174,7 @@ func (a *Adapter) ParseCallback(c *gin.Context) (*im.IncomingMessage, error) {
 }
 
 func (a *Adapter) HandleURLVerification(c *gin.Context) bool {
+	im.LimitWebhookBody(c)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return false
@@ -254,8 +258,8 @@ func (a *Adapter) StartStream(ctx context.Context, incoming *im.IncomingMessage)
 	return streamID, nil
 }
 
-func (a *Adapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
-	if content == "" {
+func (a *Adapter) UpdateStreamContent(ctx context.Context, incoming *im.IncomingMessage, streamID string, fullContent string) error {
+	if fullContent == "" {
 		return nil
 	}
 
@@ -267,20 +271,25 @@ func (a *Adapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMess
 	}
 
 	state.mu.Lock()
-	state.content.WriteString(content)
-	fullContent := state.content.String()
+	state.content.Reset()
+	state.content.WriteString(fullContent)
+	channel := state.channel
+	ts := state.ts
 	state.mu.Unlock()
 
-	// Update the message
-	logger.Infof(ctx, "[Slack] Updating stream chunk: stream_id=%s, content=%s", streamID, fullContent)
-	_, _, _, err := a.api.UpdateMessageContext(ctx, state.channel, state.ts, slack.MsgOptionText(fullContent, false))
+	_, _, _, err := a.api.UpdateMessageContext(ctx, channel, ts, slack.MsgOptionText(fullContent, false))
 	if err != nil {
-		// slack has rate limit, so we just log the error
-		// see: https://docs.slack.dev/reference/methods/chat.update/
-		logger.Warnf(ctx, "[Slack] Failed to update stream chunk: %v", err)
+		logger.Warnf(ctx, "[Slack] Failed to update stream content: %v", err)
 	}
-
 	return nil
+}
+
+func (a *Adapter) FinalizeStream(ctx context.Context, incoming *im.IncomingMessage, streamID string, finalContent string) error {
+	return a.UpdateStreamContent(ctx, incoming, streamID, finalContent)
+}
+
+func (a *Adapter) SendStreamChunk(ctx context.Context, incoming *im.IncomingMessage, streamID string, content string) error {
+	return a.UpdateStreamContent(ctx, incoming, streamID, content)
 }
 
 func (a *Adapter) EndStream(ctx context.Context, incoming *im.IncomingMessage, streamID string) error {
@@ -328,6 +337,11 @@ func (a *Adapter) DownloadFile(ctx context.Context, msg *im.IncomingMessage) (io
 		return nil, "", fmt.Errorf("no download URL available for file %s", msg.FileKey)
 	}
 
+	u, err := url.Parse(downloadURL)
+	if err != nil || !isTrustedFileDownloadURL(u) {
+		return nil, "", fmt.Errorf("untrusted Slack file download URL")
+	}
+
 	pr, pw := io.Pipe()
 	go func() {
 		err := a.api.GetFileContext(ctx, downloadURL, pw)
@@ -335,4 +349,21 @@ func (a *Adapter) DownloadFile(ctx context.Context, msg *im.IncomingMessage) (io
 	}()
 
 	return pr, msg.FileName, nil
+}
+
+// isTrustedFileDownloadURL accepts private download endpoints, not public
+// permalinks or workspace pages. The SDK attaches the bot token to this URL.
+func isTrustedFileDownloadURL(u *url.URL) bool {
+	if u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "files.slack.com":
+		return true
+	case "slack.com":
+		// Legacy private download URLs remain documented in files.sharedPublicURL.
+		return strings.HasPrefix(u.Path, "/files-pri/")
+	default:
+		return false
+	}
 }

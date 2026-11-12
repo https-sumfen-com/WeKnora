@@ -17,11 +17,15 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Tencent/WeKnora/cli/internal/build"
+	sdk "github.com/Tencent/WeKnora/client"
 )
 
 // ServiceClient bundles the SDK methods the tool registry needs. *sdk.Client
@@ -38,6 +42,8 @@ type ServiceClient interface {
 	chunkListService
 }
 
+var _ ServiceClient = (*sdk.Client)(nil)
+
 // RunStdio constructs the MCP server, registers the curated 10 tools, and
 // blocks reading JSON-RPC from stdin until the client disconnects or ctx
 // is cancelled. Returns the underlying transport error (if any); the cobra
@@ -53,7 +59,24 @@ func RunStdio(ctx context.Context, svc ServiceClient) error {
 	)
 	registerTools(server, svc)
 	if err := server.Run(ctx, &mcpsdk.StdioTransport{}); err != nil {
+		// An MCP host shuts the server down by closing stdin (EOF) or cancelling
+		// the context — that is normal termination, not a failure, so exit 0.
+		// Only a genuine transport fault is surfaced as an error.
+		if isCleanShutdown(err) {
+			return nil
+		}
 		return fmt.Errorf("mcp serve: %w", err)
 	}
 	return nil
+}
+
+// isCleanShutdown reports whether err is the ordinary "client went away"
+// signal: EOF on stdin or a cancelled/expired context. The go-sdk wraps the
+// stdin EOF in a formatted string ("server is closing: EOF") that does not
+// always unwrap to io.EOF, so we also match the message suffix as a fallback.
+func isCleanShutdown(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return strings.HasSuffix(strings.TrimSpace(err.Error()), "EOF")
 }

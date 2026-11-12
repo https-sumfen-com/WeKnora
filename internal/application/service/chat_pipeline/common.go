@@ -37,12 +37,13 @@ func pipelineError(ctx context.Context, stage, action string, fields map[string]
 func prepareChatModel(ctx context.Context, modelService interfaces.ModelService,
 	chatManage *types.ChatManage,
 ) (chat.Chat, *chat.ChatOptions, error) {
-	chatModel, err := modelService.GetChatModel(ctx, chatManage.ChatModelID)
+	chatModel, err := modelService.GetChatModel(chatManage.ChatModelContext(ctx), chatManage.ChatModelID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get chat model: %v", err)
 		return nil, nil, err
 	}
 
+	effort := chat.SanitizeReasoningEffort(ctx, chatManage.SummaryConfig.ReasoningEffort, "session summary config")
 	opt := &chat.ChatOptions{
 		Temperature:         chatManage.SummaryConfig.Temperature,
 		TopP:                chatManage.SummaryConfig.TopP,
@@ -52,6 +53,14 @@ func prepareChatModel(ctx context.Context, modelService interfaces.ModelService,
 		FrequencyPenalty:    chatManage.SummaryConfig.FrequencyPenalty,
 		PresencePenalty:     chatManage.SummaryConfig.PresencePenalty,
 		Thinking:            chatManage.SummaryConfig.Thinking,
+		ReasoningEffort:     effort,
+		PromptCacheKey:      chatManage.SessionID,
+	}
+	if level, requested := opt.Reasoning(); requested {
+		pipelineInfo(ctx, "Stream", "thinking_option", map[string]interface{}{
+			"enabled": level.Enabled(),
+			"level":   string(level),
+		})
 	}
 
 	return chatModel, opt, nil
@@ -70,6 +79,11 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 		"language": chatManage.Language,
 		"contexts": chatManage.RenderedContexts,
 	})
+	systemPrompt += "\n\n" + types.SourceDataBoundaryPrompt + "\n\n" + types.SourcedAnswerOutputPrompt
+	// Memory goes at the end of the system prompt, after the retrieved-context
+	// placeholders have been rendered, so a remembered sentence can never be
+	// substituted into prompt structure.
+	systemPrompt += chatManage.MemoryPrompt
 
 	chatMessages := []chat.Message{
 		{Role: "system", Content: systemPrompt},
@@ -80,12 +94,26 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	// Add current user message. Only include images when the chat model supports
 	// vision; non-vision models rely on the text description in UserContent.
 	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
-	if chatManage.ChatModelSupportsVision && len(chatManage.Images) > 0 {
-		userMsg.Images = chatManage.Images
+	if chatManage.ChatModelSupportsVision && len(chatManage.Images)+len(chatManage.ContextImages) > 0 {
+		// The user's own images first, then the retrieved ones the content
+		// says are attached.
+		userMsg.Images = append(slices.Clone(chatManage.Images), chatManage.ContextImages...)
 	}
 	chatMessages = append(chatMessages, userMsg)
 
 	return chatMessages
+}
+
+func withPromptCacheMetadata(
+	ctx context.Context,
+	chatModel chat.Chat,
+	messages []chat.Message,
+	opts *chat.ChatOptions,
+	purpose string,
+) context.Context {
+	prefixFingerprint := chat.PromptPrefixFingerprint(messages, opts)
+	_ = chatModel // model identity is already captured by the usage sink
+	return types.WithLLMCallMetadata(ctx, purpose, prefixFingerprint)
 }
 
 // AppendHistoryMessages appends prior Q&A rounds in chronological order.
@@ -120,14 +148,21 @@ func loadAndProcessHistory(
 			h = &types.History{}
 		}
 		if message.Role == "user" {
-			if message.RenderedContent != "" {
-				h.Query = message.RenderedContent
-			} else {
-				h.Query = message.Content
+			// RenderedContent is a snapshot of the prompt/context format used by
+			// the original turn. Replaying it would mix legacy <context id="…">
+			// envelopes and old citation instructions into the current protocol.
+			// Historical references are carried separately in KnowledgeReferences
+			// and can be re-merged into this turn's freshly rendered context.
+			h.Query = message.Content
+			if strings.TrimSpace(h.Query) == "" && (len(message.Images) > 0 || len(message.Attachments) > 0) {
+				h.Query = types.UploadOnlyQuestion(types.LanguageFromContextOrDefault(ctx))
 			}
 			h.CreateAt = message.CreatedAt
-			if desc := extractImageCaptions(message.Images); desc != "" && message.RenderedContent == "" {
+			if desc := extractImageCaptions(message.Images); desc != "" {
 				h.Query += "\n\n[用户上传图片内容]\n" + desc
+			}
+			if len(message.Attachments) > 0 {
+				h.Query += message.Attachments.BuildPrompt()
 			}
 		} else {
 			h.Answer = regThinkTags.ReplaceAllString(message.Content, "")

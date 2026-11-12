@@ -19,11 +19,14 @@ import (
 	"github.com/Tencent/WeKnora/internal/assets"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/handler/dto"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/middleware"
+	modelapi "github.com/Tencent/WeKnora/internal/models/api"
 	"github.com/Tencent/WeKnora/internal/models/asr"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
-	"github.com/Tencent/WeKnora/internal/models/provider"
+	"github.com/Tencent/WeKnora/internal/models/providers"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -62,6 +65,7 @@ type InitializationHandler struct {
 	ollamaService    *ollama.OllamaService
 	documentReader   interfaces.DocumentReader
 	pooler           embedding.EmbedderPooler
+	storageResolver  interfaces.StorageBackendResolver
 }
 
 // NewInitializationHandler 创建初始化处理器
@@ -75,6 +79,7 @@ func NewInitializationHandler(
 	ollamaService *ollama.OllamaService,
 	documentReader interfaces.DocumentReader,
 	pooler embedding.EmbedderPooler,
+	storageResolver interfaces.StorageBackendResolver,
 ) *InitializationHandler {
 	return &InitializationHandler{
 		config:           config,
@@ -86,56 +91,75 @@ func NewInitializationHandler(
 		ollamaService:    ollamaService,
 		documentReader:   documentReader,
 		pooler:           pooler,
+		storageResolver:  storageResolver,
 	}
 }
 
 // KBModelConfigRequest 知识库模型配置请求（简化版，只传模型ID）
 type KBModelConfigRequest struct {
-	LLMModelID       string           `json:"llmModelId"       binding:"required"`
-	EmbeddingModelID string           `json:"embeddingModelId"` // optional when RAG indexing is disabled
-	VLMConfig        *types.VLMConfig `json:"vlm_config"`
-	ASRConfig        *types.ASRConfig `json:"asr_config"`
+	LLMModelID       string `json:"llmModelId"       binding:"required"`
+	EmbeddingModelID string `json:"embeddingModelId"` // optional when RAG indexing is disabled
+	VLMConfig        *struct {
+		Enabled             *bool   `json:"enabled"`
+		ModelID             *string `json:"model_id"`
+		DescriptionLanguage *string `json:"description_language"`
+		CustomInstructions  *string `json:"custom_instructions"`
+		ModelName           *string `json:"model_name"`
+		BaseURL             *string `json:"base_url"`
+		APIKey              *string `json:"api_key"`
+		InterfaceType       *string `json:"interface_type"`
+	} `json:"vlm_config"`
+	ASRConfig *struct {
+		Enabled  *bool   `json:"enabled"`
+		ModelID  *string `json:"model_id"`
+		Language *string `json:"language"`
+	} `json:"asr_config"`
 
 	// 文档分块配置
 	DocumentSplitting struct {
-		ChunkSize         int                      `json:"chunkSize"`
-		ChunkOverlap      int                      `json:"chunkOverlap"`
-		Separators        []string                 `json:"separators"`
-		ParserEngineRules []types.ParserEngineRule `json:"parserEngineRules,omitempty"`
-		EnableParentChild bool                     `json:"enableParentChild"`
-		ParentChunkSize   int                      `json:"parentChunkSize,omitempty"`
-		ChildChunkSize    int                      `json:"childChunkSize,omitempty"`
+		ChunkSize         *int                      `json:"chunkSize"`
+		ChunkOverlap      *int                      `json:"chunkOverlap"`
+		Separators        *[]string                 `json:"separators"`
+		ParserEngineRules *[]types.ParserEngineRule `json:"parserEngineRules,omitempty"`
+		EnableParentChild *bool                     `json:"enableParentChild"`
+		ParentChunkSize   *int                      `json:"parentChunkSize,omitempty"`
+		ChildChunkSize    *int                      `json:"childChunkSize,omitempty"`
 		// Strategy / TokenLimit / Languages use pointer types so the
 		// handler can distinguish "field absent in payload" (no change)
 		// from "field present with empty/zero value" (clear / disable).
 		// Without that distinction, users could set strategy="auto" once
 		// but never reset it back to legacy / unset.
-		Strategy   *string   `json:"strategy,omitempty"`
-		TokenLimit *int      `json:"tokenLimit,omitempty"`
-		Languages  *[]string `json:"languages,omitempty"`
+		Strategy                  *string   `json:"strategy,omitempty"`
+		TokenLimit                *int      `json:"tokenLimit,omitempty"`
+		Languages                 *[]string `json:"languages,omitempty"`
+		TableMetadataInstructions *string   `json:"tableMetadataInstructions,omitempty"`
 	} `json:"documentSplitting"`
 
 	// 多模态配置（仅模型相关；存储引擎在 storageProvider 中配置）
 	Multimodal struct {
-		Enabled bool `json:"enabled"`
+		Enabled *bool `json:"enabled"`
 	} `json:"multimodal"`
 
 	// 存储引擎选择（"local" | "minio" | "cos"），影响文档上传与文档内图片存储，参数从全局设置读取
-	StorageProvider string `json:"storageProvider"`
+	StorageProvider  string `json:"storageProvider"`
+	StorageBackendID string `json:"storageBackendId"`
 
 	// 知识图谱配置
 	NodeExtract struct {
-		Enabled   bool                  `json:"enabled"`
-		Text      string                `json:"text"`
-		Tags      []string              `json:"tags"`
-		Nodes     []types.GraphNode     `json:"nodes"`
-		Relations []types.GraphRelation `json:"relations"`
+		Enabled            *bool                  `json:"enabled"`
+		Text               *string                `json:"text"`
+		Tags               *[]string              `json:"tags"`
+		Nodes              *[]types.GraphNode     `json:"nodes"`
+		Relations          *[]types.GraphRelation `json:"relations"`
+		CustomInstructions *string                `json:"customInstructions"`
 	} `json:"nodeExtract"`
 
 	// 问题生成配置
 	QuestionGeneration struct {
-		Enabled       bool `json:"enabled"`
-		QuestionCount int  `json:"questionCount"`
+		ModelID            *string `json:"modelId,omitempty"`
+		Enabled            *bool   `json:"enabled"`
+		QuestionCount      *int    `json:"questionCount"`
+		CustomInstructions *string `json:"customInstructions"`
 	} `json:"questionGeneration"`
 }
 
@@ -221,7 +245,7 @@ type InitializationRequest struct {
 // @Produce      json
 // @Param        kbId     path      string               true  "知识库ID"
 // @Param        request  body      KBModelConfigRequest true  "配置请求"
-// @Success      200      {object}  map[string]interface{}  "更新成功"
+// @Success      200      {object}  handler.MessageResponse  "更新成功"
 // @Failure      400      {object}  errors.AppError         "请求参数错误"
 // @Failure      404      {object}  errors.AppError         "知识库不存在"
 // @Security     Bearer
@@ -243,6 +267,19 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 	if err != nil || kb == nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{"kbId": utils.SanitizeForLog(kbIdStr)})
 		c.Error(errors.NewNotFoundError("知识库不存在"))
+		return
+	}
+	ownWorkspace, err := kbSettingsAccess(c, kb)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	questionModelID, err := h.resolveQuestionGenerationModel(
+		ctx, req.QuestionGeneration.ModelID, kb.QuestionGenerationConfig,
+	)
+	if err != nil {
+		_ = c.Error(err)
 		return
 	}
 
@@ -285,55 +322,97 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 		kb.EmbeddingModelID = req.EmbeddingModelID
 	}
 
-	// 处理多模态模型配置
-	kb.VLMConfig = types.VLMConfig{}
-	if req.VLMConfig != nil && req.Multimodal.Enabled && req.VLMConfig.ModelID != "" {
-		vllmModel, err := h.modelService.GetModelByID(ctx, req.VLMConfig.ModelID)
-		if err != nil || vllmModel == nil {
-			logger.Warn(ctx, "VLM model not found")
-		} else {
-			kb.VLMConfig.Enabled = req.VLMConfig.Enabled
-			kb.VLMConfig.ModelID = req.VLMConfig.ModelID
+	// Merge only supplied fields: model-only requests must preserve KB settings.
+	if req.Multimodal.Enabled != nil {
+		kb.VLMConfig.Enabled = *req.Multimodal.Enabled
+	}
+	if req.VLMConfig != nil {
+		if req.VLMConfig.Enabled != nil {
+			kb.VLMConfig.Enabled = *req.VLMConfig.Enabled
+		}
+		if req.VLMConfig.ModelID != nil {
+			kb.VLMConfig.ModelID = *req.VLMConfig.ModelID
+		}
+		if req.VLMConfig.DescriptionLanguage != nil {
+			kb.VLMConfig.DescriptionLanguage = strings.TrimSpace(*req.VLMConfig.DescriptionLanguage)
+		}
+		if req.VLMConfig.CustomInstructions != nil {
+			kb.VLMConfig.CustomInstructions = strings.TrimSpace(*req.VLMConfig.CustomInstructions)
+		}
+		if req.VLMConfig.ModelName != nil {
+			kb.VLMConfig.ModelName = *req.VLMConfig.ModelName
+		}
+		if req.VLMConfig.BaseURL != nil {
+			kb.VLMConfig.BaseURL = *req.VLMConfig.BaseURL
+		}
+		if req.VLMConfig.APIKey != nil {
+			kb.VLMConfig.APIKey = *req.VLMConfig.APIKey
+		}
+		if req.VLMConfig.InterfaceType != nil {
+			kb.VLMConfig.InterfaceType = *req.VLMConfig.InterfaceType
+		}
+
+		if req.VLMConfig.ModelID != nil && kb.VLMConfig.Enabled && kb.VLMConfig.ModelID != "" {
+			model, err := h.modelService.GetModelByID(ctx, kb.VLMConfig.ModelID)
+			if err != nil || model == nil {
+				logger.Warn(ctx, "VLM model not found")
+				kb.VLMConfig.Enabled = false
+				kb.VLMConfig.ModelID = ""
+			}
 		}
 	}
-	if !kb.VLMConfig.Enabled {
+	if (req.Multimodal.Enabled != nil && !*req.Multimodal.Enabled) ||
+		(req.VLMConfig != nil && req.VLMConfig.Enabled != nil && !*req.VLMConfig.Enabled) {
+		// Legacy bindings also enable VLM, independently of Enabled.
+		kb.VLMConfig.Enabled = false
 		kb.VLMConfig.ModelID = ""
+		kb.VLMConfig.ModelName = ""
+		kb.VLMConfig.BaseURL = ""
 	}
+	if req.ASRConfig != nil {
+		if req.ASRConfig.Enabled != nil {
+			kb.ASRConfig.Enabled = *req.ASRConfig.Enabled
+		}
+		if req.ASRConfig.ModelID != nil {
+			kb.ASRConfig.ModelID = *req.ASRConfig.ModelID
+		}
+		if req.ASRConfig.Language != nil {
+			kb.ASRConfig.Language = *req.ASRConfig.Language
+		}
 
-	// 处理ASR语音识别配置
-	kb.ASRConfig = types.ASRConfig{}
-	if req.ASRConfig != nil && req.ASRConfig.Enabled && req.ASRConfig.ModelID != "" {
-		asrModel, err := h.modelService.GetModelByID(ctx, req.ASRConfig.ModelID)
-		if err != nil || asrModel == nil {
-			logger.Warn(ctx, "ASR model not found")
-		} else {
-			kb.ASRConfig.Enabled = true
-			kb.ASRConfig.ModelID = req.ASRConfig.ModelID
-			kb.ASRConfig.Language = req.ASRConfig.Language
+		if req.ASRConfig.ModelID != nil && kb.ASRConfig.Enabled && kb.ASRConfig.ModelID != "" {
+			model, err := h.modelService.GetModelByID(ctx, kb.ASRConfig.ModelID)
+			if err != nil || model == nil {
+				logger.Warn(ctx, "ASR model not found")
+				kb.ASRConfig.Enabled = false
+				kb.ASRConfig.ModelID = ""
+			}
+		}
+		if req.ASRConfig.Enabled != nil && !*req.ASRConfig.Enabled {
+			kb.ASRConfig.ModelID = ""
 		}
 	}
-
-	// 更新文档分块配置
-	if req.DocumentSplitting.ChunkSize > 0 {
-		kb.ChunkingConfig.ChunkSize = req.DocumentSplitting.ChunkSize
+	if req.DocumentSplitting.ChunkSize != nil {
+		kb.ChunkingConfig.ChunkSize = *req.DocumentSplitting.ChunkSize
 	}
-	if req.DocumentSplitting.ChunkOverlap >= 0 {
-		kb.ChunkingConfig.ChunkOverlap = req.DocumentSplitting.ChunkOverlap
+	if req.DocumentSplitting.ChunkOverlap != nil {
+		kb.ChunkingConfig.ChunkOverlap = *req.DocumentSplitting.ChunkOverlap
 	}
-	if len(req.DocumentSplitting.Separators) > 0 {
-		kb.ChunkingConfig.Separators = req.DocumentSplitting.Separators
+	if req.DocumentSplitting.Separators != nil {
+		kb.ChunkingConfig.Separators = *req.DocumentSplitting.Separators
 	}
-	kb.ChunkingConfig.ParserEngineRules = req.DocumentSplitting.ParserEngineRules
-	kb.ChunkingConfig.EnableParentChild = req.DocumentSplitting.EnableParentChild
-	if req.DocumentSplitting.ParentChunkSize > 0 {
-		kb.ChunkingConfig.ParentChunkSize = req.DocumentSplitting.ParentChunkSize
+	if req.DocumentSplitting.ParserEngineRules != nil {
+		kb.ChunkingConfig.ParserEngineRules = *req.DocumentSplitting.ParserEngineRules
 	}
-	if req.DocumentSplitting.ChildChunkSize > 0 {
-		kb.ChunkingConfig.ChildChunkSize = req.DocumentSplitting.ChildChunkSize
+	if req.DocumentSplitting.EnableParentChild != nil {
+		kb.ChunkingConfig.EnableParentChild = *req.DocumentSplitting.EnableParentChild
 	}
-	// Pointer-based fields support clearing (empty string / 0 / empty slice
-	// is a valid "user picked default again" signal; absent in payload means
-	// "no change").
+	if req.DocumentSplitting.ParentChunkSize != nil {
+		kb.ChunkingConfig.ParentChunkSize = *req.DocumentSplitting.ParentChunkSize
+	}
+	if req.DocumentSplitting.ChildChunkSize != nil {
+		kb.ChunkingConfig.ChildChunkSize = *req.DocumentSplitting.ChildChunkSize
+	}
 	if req.DocumentSplitting.Strategy != nil {
 		kb.ChunkingConfig.Strategy = *req.DocumentSplitting.Strategy
 	}
@@ -343,79 +422,95 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 	if req.DocumentSplitting.Languages != nil {
 		kb.ChunkingConfig.Languages = *req.DocumentSplitting.Languages
 	}
-
-	// 更新多模态配置
-	if req.Multimodal.Enabled {
-		// VLM model already set above
-	} else {
-		kb.VLMConfig.ModelID = ""
+	if req.DocumentSplitting.TableMetadataInstructions != nil {
+		kb.ChunkingConfig.TableMetadataInstructions = strings.TrimSpace(*req.DocumentSplitting.TableMetadataInstructions)
 	}
 
-	// 存储引擎：仅写入 provider 到新字段，参数从租户全局 StorageEngineConfig 读取
-	provider := strings.ToLower(strings.TrimSpace(req.StorageProvider))
-	if provider == "" {
-		provider = "local"
-	}
-	if !isStorageProviderAllowed(provider) {
-		c.Error(errors.NewBadRequestError("Storage provider is not allowed by STORAGE_ALLOW_LIST"))
+	// Storage backends resolve per workspace and belong to the owner's
+	// infrastructure: another workspace can neither see the owner's backends
+	// nor bind the KB to one of its own, so it may only leave them unchanged.
+	if ownWorkspace {
+		if err := h.applyKBStorageBinding(ctx, kb, kbIdStr, &req); err != nil {
+			_ = c.Error(err)
+			return
+		}
+	} else if kbStorageBindingChanged(kb, req.StorageBackendID, req.StorageProvider) {
+		_ = c.Error(errors.NewForbiddenError("只有知识库所属空间可以修改存储配置"))
 		return
 	}
-	oldProvider := kb.GetStorageProvider()
-	if oldProvider == "" {
-		oldProvider = "local"
-	}
-	if oldProvider != provider {
-		knowledgeList, err := h.knowledgeService.ListPagedKnowledgeByKnowledgeBaseID(ctx,
-			kbIdStr, &types.Pagination{Page: 1, PageSize: 1}, types.KnowledgeListFilter{})
-		if err == nil && knowledgeList != nil && knowledgeList.Total > 0 {
-			logger.Warn(ctx, "Storage engine changed with existing files, old files may become inaccessible")
-		}
-	}
-	kb.SetStorageProvider(provider)
 
-	// 更新知识图谱配置
-	if req.NodeExtract.Enabled {
-		// 转换 Nodes 和 Relations 为指针类型
-		nodes := make([]*types.GraphNode, len(req.NodeExtract.Nodes))
-		for i := range req.NodeExtract.Nodes {
-			nodes[i] = &req.NodeExtract.Nodes[i]
+	if req.NodeExtract.Enabled != nil ||
+		req.NodeExtract.Text != nil ||
+		req.NodeExtract.Tags != nil ||
+		req.NodeExtract.Nodes != nil ||
+		req.NodeExtract.Relations != nil ||
+		req.NodeExtract.CustomInstructions != nil {
+		if kb.ExtractConfig == nil {
+			kb.ExtractConfig = &types.ExtractConfig{}
 		}
-		relations := make([]*types.GraphRelation, len(req.NodeExtract.Relations))
-		for i := range req.NodeExtract.Relations {
-			relations[i] = &req.NodeExtract.Relations[i]
+		if req.NodeExtract.Enabled != nil {
+			kb.ExtractConfig.Enabled = *req.NodeExtract.Enabled
 		}
-
-		kb.ExtractConfig = &types.ExtractConfig{
-			Enabled:   req.NodeExtract.Enabled,
-			Text:      req.NodeExtract.Text,
-			Tags:      req.NodeExtract.Tags,
-			Nodes:     nodes,
-			Relations: relations,
+		if req.NodeExtract.Text != nil {
+			kb.ExtractConfig.Text = *req.NodeExtract.Text
 		}
-	} else {
-		kb.ExtractConfig = &types.ExtractConfig{Enabled: false}
+		if req.NodeExtract.Tags != nil {
+			kb.ExtractConfig.Tags = *req.NodeExtract.Tags
+		}
+		if req.NodeExtract.Nodes != nil {
+			kb.ExtractConfig.Nodes = make([]*types.GraphNode, len(*req.NodeExtract.Nodes))
+			for i := range *req.NodeExtract.Nodes {
+				kb.ExtractConfig.Nodes[i] = &(*req.NodeExtract.Nodes)[i]
+			}
+		}
+		if req.NodeExtract.Relations != nil {
+			kb.ExtractConfig.Relations = make([]*types.GraphRelation, len(*req.NodeExtract.Relations))
+			for i := range *req.NodeExtract.Relations {
+				kb.ExtractConfig.Relations[i] = &(*req.NodeExtract.Relations)[i]
+			}
+		}
+		if req.NodeExtract.CustomInstructions != nil {
+			kb.ExtractConfig.CustomInstructions = strings.TrimSpace(*req.NodeExtract.CustomInstructions)
+		}
+		if err := validateExtractConfig(kb.ExtractConfig); err != nil {
+			logger.Error(ctx, "Invalid extract configuration", err)
+			_ = c.Error(err)
+			return
+		}
 	}
-	if err := validateExtractConfig(kb.ExtractConfig); err != nil {
-		logger.Error(ctx, "Invalid extract configuration", err)
+	if req.QuestionGeneration.Enabled != nil ||
+		req.QuestionGeneration.QuestionCount != nil ||
+		req.QuestionGeneration.CustomInstructions != nil ||
+		req.QuestionGeneration.ModelID != nil {
+		firstEnable := kb.QuestionGenerationConfig == nil || !kb.QuestionGenerationConfig.Enabled
+		if kb.QuestionGenerationConfig == nil {
+			kb.QuestionGenerationConfig = &types.QuestionGenerationConfig{}
+		}
+		if req.QuestionGeneration.Enabled != nil {
+			kb.QuestionGenerationConfig.Enabled = *req.QuestionGeneration.Enabled
+		}
+		if req.QuestionGeneration.QuestionCount != nil {
+			kb.QuestionGenerationConfig.QuestionCount = *req.QuestionGeneration.QuestionCount
+		}
+		if req.QuestionGeneration.CustomInstructions != nil {
+			kb.QuestionGenerationConfig.CustomInstructions = strings.TrimSpace(
+				*req.QuestionGeneration.CustomInstructions,
+			)
+		}
+		kb.QuestionGenerationConfig.ModelID = questionModelID
+		// Default only a first enable without an explicit count.
+		if firstEnable && req.QuestionGeneration.Enabled != nil && *req.QuestionGeneration.Enabled &&
+			req.QuestionGeneration.QuestionCount == nil && kb.QuestionGenerationConfig.QuestionCount <= 0 {
+			kb.QuestionGenerationConfig.QuestionCount = 3
+		}
+		if req.QuestionGeneration.QuestionCount != nil && kb.QuestionGenerationConfig.QuestionCount > 10 {
+			kb.QuestionGenerationConfig.QuestionCount = 10
+		}
+	}
+	types.NormalizeKnowledgeBasePromptInstructions(kb)
+	if err := validateKnowledgeBasePromptInstructions(kb); err != nil {
 		c.Error(err)
 		return
-	}
-
-	// 更新问题生成配置
-	if req.QuestionGeneration.Enabled {
-		questionCount := req.QuestionGeneration.QuestionCount
-		if questionCount <= 0 {
-			questionCount = 3
-		}
-		if questionCount > 10 {
-			questionCount = 10
-		}
-		kb.QuestionGenerationConfig = &types.QuestionGenerationConfig{
-			Enabled:       true,
-			QuestionCount: questionCount,
-		}
-	} else {
-		kb.QuestionGenerationConfig = &types.QuestionGenerationConfig{Enabled: false}
 	}
 
 	// 保存更新后的知识库
@@ -429,6 +524,100 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 		"success": true,
 		"message": "配置更新成功",
 	})
+}
+
+// kbSettingsAccess reports whether the caller's workspace owns kb. Another
+// workspace may change KB settings only through an admin share: the frontend
+// offers KB settings to share admins alone, and OrgRoleEditor edits content,
+// not settings. KBAccessWrite on the route also admits share editors, so the
+// grant's effective share permission is checked here.
+func kbSettingsAccess(c *gin.Context, kb *types.KnowledgeBase) (bool, error) {
+	if kb.TenantID == types.CallerFromContext(c.Request.Context()).TenantID {
+		return true, nil
+	}
+	grant, ok := middleware.KBAccessFromContext(c)
+	if !ok || grant.KnowledgeBase == nil || grant.KnowledgeBase.ID != kb.ID ||
+		!grant.Permission.HasPermission(types.OrgRoleAdmin) {
+		return false, errors.NewForbiddenError("修改共享知识库的设置需要管理员共享权限")
+	}
+	return false, nil
+}
+
+// kbStorageBindingChanged reports whether a config request would rebind the
+// KB's storage. A backend ID that matches the current one leaves the binding
+// alone (its provider is only a projection); without one, an empty current
+// provider means the default, which clients echo back as "local".
+func kbStorageBindingChanged(kb *types.KnowledgeBase, backendID, provider string) bool {
+	backendID = strings.TrimSpace(backendID)
+	current := ""
+	if kb.StorageBackendID != nil {
+		current = *kb.StorageBackendID
+	}
+	if backendID != "" {
+		return backendID != current
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	currentProvider := kb.GetStorageProvider()
+	if currentProvider == "" {
+		currentProvider = "local"
+	}
+	return provider != "" && provider != currentProvider
+}
+
+// applyKBStorageBinding binds the owner's storage instance to the KB. The
+// caller's workspace must own the KB: backends resolve against TenantInfo.
+func (h *InitializationHandler) applyKBStorageBinding(
+	ctx context.Context, kb *types.KnowledgeBase, kbID string, req *KBModelConfigRequest,
+) error {
+	// Model-only clients omit storage fields. Keep the stored binding and
+	// provider projection instead of implicitly switching them to local.
+	if strings.TrimSpace(req.StorageBackendID) == "" && strings.TrimSpace(req.StorageProvider) == "" {
+		return nil
+	}
+	// Bind the concrete storage instance. Provider remains a compatibility
+	// projection for older clients and historical rows.
+	if strings.TrimSpace(req.StorageBackendID) != "" {
+		tenant, _ := types.TenantInfoFromContext(ctx)
+		backend, resolveErr := h.storageResolver.ResolveBackend(ctx, tenant, req.StorageBackendID, "")
+		if resolveErr != nil || backend == nil {
+			return errors.NewBadRequestError("Storage backend is unavailable")
+		}
+		oldID := ""
+		if kb.StorageBackendID != nil {
+			oldID = *kb.StorageBackendID
+		}
+		if oldID != "" && oldID != backend.ID {
+			knowledgeList, listErr := h.knowledgeService.ListPagedKnowledgeByKnowledgeBaseID(ctx,
+				kbID, &types.Pagination{Page: 1, PageSize: 1}, types.KnowledgeListFilter{})
+			if listErr == nil && knowledgeList != nil && knowledgeList.Total > 0 {
+				return errors.NewBadRequestError(
+					"Storage backend cannot be changed while the knowledge base contains files; migrate storage first")
+			}
+		}
+		kb.StorageBackendID = &backend.ID
+		req.StorageProvider = backend.Provider
+	}
+	// Legacy provider projection.
+	provider := strings.ToLower(strings.TrimSpace(req.StorageProvider))
+	if provider == "" {
+		provider = "local"
+	}
+	if !isStorageProviderAllowed(provider) {
+		return errors.NewBadRequestError("Storage provider is not allowed by STORAGE_ALLOW_LIST")
+	}
+	oldProvider := kb.GetStorageProvider()
+	if oldProvider == "" {
+		oldProvider = "local"
+	}
+	if oldProvider != provider {
+		knowledgeList, err := h.knowledgeService.ListPagedKnowledgeByKnowledgeBaseID(ctx,
+			kbID, &types.Pagination{Page: 1, PageSize: 1}, types.KnowledgeListFilter{})
+		if err == nil && knowledgeList != nil && knowledgeList.Total > 0 {
+			logger.Warn(ctx, "Storage engine changed with existing files, old files may become inaccessible")
+		}
+	}
+	kb.SetStorageProvider(provider)
+	return nil
 }
 
 // InitializeByKB godoc
@@ -490,7 +679,12 @@ func (h *InitializationHandler) InitializeByKB(c *gin.Context) {
 		"success": true,
 		"message": "知识库配置更新成功",
 		"data": gin.H{
-			"models":         processedModels,
+			// Through the response DTO, like every other body carrying a
+			// model: types.Model marshals api_key in plaintext, and now that
+			// the reuse path keeps the stored credential instead of
+			// overwriting it, echoing the row would hand back a key the
+			// caller never submitted. KnowledgeBase redacts itself.
+			"models":         dto.NewModelResponses(ctx, processedModels),
 			"knowledge_base": kb,
 		},
 	})
@@ -522,7 +716,30 @@ func (h *InitializationHandler) getKnowledgeBaseForInitialization(ctx context.Co
 		logger.Error(ctx, "Knowledge base not found")
 		return nil, errors.NewNotFoundError("知识库不存在")
 	}
+	// Initialization rewrites the models the KB points at, and those rows
+	// belong to the KB's workspace. A shared-KB editor passes the route's
+	// KBAccessWrite guard (which moves execution into that workspace), so
+	// without this check it could repoint the owner's models at its own
+	// endpoint and key.
+	if kb.TenantID != types.CallerFromContext(ctx).TenantID {
+		return nil, errors.NewForbiddenError("只有知识库所属空间可以初始化知识库")
+	}
 	return kb, nil
+}
+
+// canUpdateTenantModels mirrors the PUT /models/:id guard: rewriting a stored
+// model changes every KB and agent that uses it, so initializing a KB must not
+// let a KB creator do what the model settings page reserves for admins.
+func (h *InitializationHandler) canUpdateTenantModels(ctx context.Context) bool {
+	if scope, ok := types.TenantAPIKeyScopeFromContext(ctx); ok {
+		return scope.FullAccess || scope.HasCapability(types.APIKeyCapabilityManageModels)
+	}
+	if types.CallerFromContext(ctx).Role.HasPermission(types.TenantRoleAdmin) || types.IsSystemAdminFromContext(ctx) {
+		return true
+	}
+	// Same rollout switch as the route guards: role checks only log while
+	// RBAC enforcement is off.
+	return h.config == nil || !h.config.Tenant.IsRBACEnforced()
 }
 
 func (h *InitializationHandler) validateInitializationConfigs(ctx context.Context, req *InitializationRequest) error {
@@ -694,6 +911,12 @@ func (h *InitializationHandler) processInitializationModels(
 
 	for _, descriptor := range descriptors {
 		model := descriptor.toModel()
+		// Stamp the KB's tenant before insert: toModel() carries no tenant and
+		// modelRepository.GetByID filters on (tenant_id = ? OR is_builtin), so
+		// an unstamped row lands at tenant_id = 0 where no tenant — not even
+		// the one that just configured the KB — can ever read it back
+		// (issue #3333).
+		model.TenantID = kb.TenantID
 		existingModelID := h.findExistingModelID(kb, descriptor.modelType)
 
 		var existingModel *types.Model
@@ -707,10 +930,13 @@ func (h *InitializationHandler) processInitializationModels(
 		}
 
 		if existingModel != nil {
+			if !h.canUpdateTenantModels(ctx) {
+				return nil, errors.NewForbiddenError("修改已有模型配置需要空间管理员权限")
+			}
 			existingModel.Name = model.Name
 			existingModel.Source = model.Source
 			existingModel.Description = model.Description
-			existingModel.Parameters = model.Parameters
+			descriptor.applyToStoredParameters(&existingModel.Parameters)
 			existingModel.UpdatedAt = time.Now()
 
 			if err := h.modelService.UpdateModel(ctx, existingModel); err != nil {
@@ -735,6 +961,32 @@ func (h *InitializationHandler) processInitializationModels(
 	}
 
 	return processedModels, nil
+}
+
+// applyToStoredParameters merges the initialization payload into the
+// parameters of a model row that already exists.
+//
+// The wizard collects four fields (endpoint, key, interface type, embedding
+// dimension); everything else on the row — provider, extra_config, custom
+// headers, spec, concurrency, context window — was configured in the model
+// editor. Assigning toModel()'s parameters wholesale erased all of it, and
+// blanked the stored API key whenever the payload carried none, so a KB that
+// was merely re-initialized came back with a model nobody could call. Only
+// the fields the payload actually carries are written; an empty one means
+// "not submitted", not "clear it".
+func (descriptor modelDescriptor) applyToStoredParameters(params *types.ModelParameters) {
+	if descriptor.baseURL != "" {
+		params.BaseURL = descriptor.baseURL
+	}
+	if descriptor.apiKey != "" {
+		params.APIKey = descriptor.apiKey
+	}
+	if descriptor.interfaceType != "" {
+		params.InterfaceType = descriptor.interfaceType
+	}
+	if descriptor.modelType == types.ModelTypeEmbedding && descriptor.dimension > 0 {
+		params.EmbeddingParameters.Dimension = descriptor.dimension
+	}
 }
 
 func (descriptor modelDescriptor) toModel() *types.Model {
@@ -1102,7 +1354,7 @@ func (h *InitializationHandler) DownloadOllamaModel(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        taskId  path      string  true  "任务ID"
-// @Success      200     {object}  map[string]interface{}  "下载进度"
+// @Success      200     {object}  handler.DataResponse{data=handler.DownloadTask}  "下载进度"
 // @Failure      404     {object}  errors.AppError         "任务不存在"
 // @Security     Bearer
 // @Security     ApiKeyAuth
@@ -1136,7 +1388,7 @@ func (h *InitializationHandler) GetDownloadProgress(c *gin.Context) {
 // @Tags         初始化
 // @Accept       json
 // @Produce      json
-// @Success      200  {object}  map[string]interface{}  "任务列表"
+// @Success      200  {object}  handler.DataResponse{data=[]handler.DownloadTask}  "任务列表"
 // @Security     Bearer
 // @Security     ApiKeyAuth
 // @Router       /initialization/ollama/download/tasks [get]
@@ -1377,18 +1629,21 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 	config := map[string]interface{}{
 		"hasFiles": hasFiles,
 	}
+	// Integration details describe the owning workspace's infrastructure. A
+	// share receiver — even an admin of its own workspace — only learns
+	// whether credentials are configured.
+	ownWorkspace := kb != nil && kb.TenantID == types.CallerFromContext(ctx).TenantID
+	includeIntegrationDetail := ownWorkspace && dto.CanViewIntegrationSecrets(ctx)
 
 	// 按类型分组模型
 	for _, model := range models {
 		if model == nil {
 			continue
 		}
-		// Hide sensitive information for builtin models
+		// Hide sensitive information for builtin models and viewers.
 		baseURL := model.Parameters.BaseURL
-		apiKey := model.Parameters.APIKey
-		if model.IsBuiltin {
+		if model.IsBuiltin || !includeIntegrationDetail {
 			baseURL = ""
-			apiKey = ""
 		}
 
 		switch model.Type {
@@ -1397,22 +1652,28 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 				"source":    string(model.Source),
 				"modelName": model.Name,
 				"baseUrl":   baseURL,
-				"apiKey":    apiKey,
+				"credentials": map[string]bool{
+					"apiKey": model.Parameters.APIKey != "" && !model.IsBuiltin,
+				},
 			}
 		case types.ModelTypeEmbedding:
 			config["embedding"] = map[string]interface{}{
 				"source":    string(model.Source),
 				"modelName": model.Name,
 				"baseUrl":   baseURL,
-				"apiKey":    apiKey,
 				"dimension": model.Parameters.EmbeddingParameters.Dimension,
+				"credentials": map[string]bool{
+					"apiKey": model.Parameters.APIKey != "" && !model.IsBuiltin,
+				},
 			}
 		case types.ModelTypeRerank:
 			config["rerank"] = map[string]interface{}{
 				"enabled":   true,
 				"modelName": model.Name,
 				"baseUrl":   baseURL,
-				"apiKey":    apiKey,
+				"credentials": map[string]bool{
+					"apiKey": model.Parameters.APIKey != "" && !model.IsBuiltin,
+				},
 			}
 		case types.ModelTypeVLLM:
 			if config["multimodal"] == nil {
@@ -1424,9 +1685,11 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 			multimodal["vlm"] = map[string]interface{}{
 				"modelName":     model.Name,
 				"baseUrl":       baseURL,
-				"apiKey":        apiKey,
 				"interfaceType": model.Parameters.InterfaceType,
 				"modelId":       model.ID,
+				"credentials": map[string]bool{
+					"apiKey": model.Parameters.APIKey != "" && !model.IsBuiltin,
+				},
 			}
 		}
 	}
@@ -1443,6 +1706,20 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 	} else {
 		config["multimodal"].(map[string]interface{})["enabled"] = hasMultimodal
 	}
+	if kb.VLMConfig.DescriptionLanguage != "" || kb.VLMConfig.CustomInstructions != "" {
+		if config["multimodal"] == nil {
+			config["multimodal"] = map[string]interface{}{
+				"enabled": hasMultimodal,
+			}
+		}
+		multimodal := config["multimodal"].(map[string]interface{})
+		if kb.VLMConfig.DescriptionLanguage != "" {
+			multimodal["descriptionLanguage"] = kb.VLMConfig.DescriptionLanguage
+		}
+		if kb.VLMConfig.CustomInstructions != "" {
+			multimodal["customInstructions"] = kb.VLMConfig.CustomInstructions
+		}
+	}
 
 	// 如果没有Rerank模型，设置rerank为disabled
 	if config["rerank"] == nil {
@@ -1450,7 +1727,9 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 			"enabled":   false,
 			"modelName": "",
 			"baseUrl":   "",
-			"apiKey":    "",
+			"credentials": map[string]bool{
+				"apiKey": false,
+			},
 		}
 	}
 
@@ -1470,6 +1749,9 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 		if len(kb.ChunkingConfig.Languages) > 0 {
 			ds["languages"] = kb.ChunkingConfig.Languages
 		}
+		if kb.ChunkingConfig.TableMetadataInstructions != "" {
+			ds["tableMetadataInstructions"] = kb.ChunkingConfig.TableMetadataInstructions
+		}
 		config["documentSplitting"] = ds
 
 		// 添加多模态的存储配置信息（优先读新字段，兼容旧 cos_config）
@@ -1485,12 +1767,14 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 			switch effectiveProvider {
 			case "cos":
 				multimodal["cos"] = map[string]interface{}{
-					"secretId":   kb.StorageConfig.SecretID,
-					"secretKey":  kb.StorageConfig.SecretKey,
 					"region":     kb.StorageConfig.Region,
 					"bucketName": kb.StorageConfig.BucketName,
 					"appId":      kb.StorageConfig.AppID,
 					"pathPrefix": kb.StorageConfig.PathPrefix,
+					"credentials": map[string]bool{
+						"secretId":  kb.StorageConfig.SecretID != "",
+						"secretKey": kb.StorageConfig.SecretKey != "",
+					},
 				}
 			case "minio":
 				multimodal["minio"] = map[string]interface{}{
@@ -1498,19 +1782,46 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 					"pathPrefix": kb.StorageConfig.PathPrefix,
 				}
 			}
+			if !ownWorkspace {
+				// Bucket locations are the owner's infrastructure too.
+				for _, provider := range []string{"cos", "minio"} {
+					if detail, ok := multimodal[provider].(map[string]interface{}); ok {
+						for _, field := range []string{"region", "bucketName", "appId", "pathPrefix"} {
+							delete(detail, field)
+						}
+					}
+				}
+			}
 		}
 	}
 
 	if kb.ExtractConfig != nil {
-		config["nodeExtract"] = map[string]interface{}{
+		nodeExtract := map[string]interface{}{
 			"enabled":   kb.ExtractConfig.Enabled,
 			"text":      kb.ExtractConfig.Text,
 			"tags":      kb.ExtractConfig.Tags,
 			"nodes":     kb.ExtractConfig.Nodes,
 			"relations": kb.ExtractConfig.Relations,
 		}
+		if kb.ExtractConfig.CustomInstructions != "" {
+			nodeExtract["customInstructions"] = kb.ExtractConfig.CustomInstructions
+		}
+		config["nodeExtract"] = nodeExtract
 	} else {
 		config["nodeExtract"] = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
+	if kb.QuestionGenerationConfig != nil {
+		config["questionGeneration"] = map[string]interface{}{
+			"enabled":            kb.QuestionGenerationConfig.Enabled,
+			"questionCount":      kb.QuestionGenerationConfig.QuestionCount,
+			"modelId":            kb.QuestionGenerationConfig.ModelID,
+			"customInstructions": kb.QuestionGenerationConfig.CustomInstructions,
+		}
+	} else {
+		config["questionGeneration"] = map[string]interface{}{
 			"enabled": false,
 		}
 	}
@@ -1529,16 +1840,18 @@ func (h *InitializationHandler) buildConfigResponse(ctx context.Context, models 
 // 所有 provider/model 通用字段都在这里集中声明；若未来新增字段（比如现在的
 // custom_headers），只需改一处，生产路径和测试路径会同时生效。
 type ModelTestRequest struct {
-	Source        string            `json:"source"` // 为空时按需默认为 "remote"
-	ModelName     string            `json:"modelName" binding:"required"`
-	BaseURL       string            `json:"baseUrl"`
-	APIKey        string            `json:"apiKey"`
-	Provider      string            `json:"provider"`
-	InterfaceType string            `json:"interfaceType,omitempty"`
-	Dimension     int               `json:"dimension,omitempty"`
-	CustomHeaders map[string]string `json:"customHeaders,omitempty"`
-	ExtraConfig   map[string]string `json:"extraConfig,omitempty"`
-	// AppSecret 用于 LKEAP Rerank 等需要第二段密钥的场景（对应模型 Parameters.AppSecret）。
+	Spec                      *types.ModelSpecOverride `json:"spec,omitempty"`
+	Source                    string                   `json:"source"` // 为空时按需默认为 "remote"
+	ModelName                 string                   `json:"modelName" binding:"required"`
+	BaseURL                   string                   `json:"baseUrl"`
+	APIKey                    string                   `json:"apiKey"`
+	Provider                  string                   `json:"provider"`
+	InterfaceType             string                   `json:"interfaceType,omitempty"`
+	Dimension                 int                      `json:"dimension,omitempty"`
+	SupportsDimensionOverride bool                     `json:"supportsDimensionOverride,omitempty"`
+	CustomHeaders             map[string]string        `json:"customHeaders,omitempty"`
+	ExtraConfig               map[string]string        `json:"extraConfig,omitempty"`
+	// AppSecret 用于 LKEAP / Volcengine Rerank 等需要第二段密钥的场景（对应模型 Parameters.AppSecret）。
 	AppSecret string `json:"appSecret,omitempty"`
 	// ModelID, when set, instructs the handler to substitute any missing
 	// secrets (APIKey, AppSecret via ExtraConfig) from the stored model
@@ -1553,16 +1866,25 @@ type ModelTestRequest struct {
 
 // fillSecretsFromStoredModel mutates req in place: if req.ModelID is set
 // and a secret field on the request is empty, the corresponding value from
-// the stored (and decrypted) model is copied in. Non-empty request values
-// are always preferred — they represent the user actively typing a new key
-// they want to verify. Missing or inaccessible model is treated as a no-op
-// (the connection test will fail downstream with a clearer "missing apiKey"
-// error than we could produce here).
+// the stored (and decrypted) model is copied in. The stored ExtraConfig is
+// filled in as well when the request does not carry one — provider-specific
+// settings (thinking_control, api_version, remote_model_name, ...) must
+// apply to the connection test exactly as they apply to real traffic, and
+// the frontend only sends extraConfig when the user actively edits it.
+// Non-empty request values are always preferred — they represent the user
+// actively typing a new key they want to verify. Missing or inaccessible
+// model is treated as a no-op (the connection test will fail downstream
+// with a clearer "missing apiKey" error than we could produce here).
 func (h *InitializationHandler) fillSecretsFromStoredModel(ctx context.Context, req *ModelTestRequest) {
 	if req == nil || req.ModelID == "" {
 		return
 	}
-	if req.APIKey != "" && req.AppSecret != "" {
+	// A request that already carries every secret needs no lookup — but a
+	// secret stored in extra_config (LKEAP / Volcengine secret_key) is
+	// redacted by GET, so "extraConfig is present" does not mean it is
+	// complete.
+	if req.APIKey != "" && req.AppSecret != "" && req.ExtraConfig != nil && req.Spec != nil &&
+		dto.HasAllSecretExtras(req.Provider, req.BaseURL, req.ExtraConfig) {
 		return
 	}
 	stored, err := h.modelService.GetModelByID(ctx, req.ModelID)
@@ -1571,12 +1893,24 @@ func (h *InitializationHandler) fillSecretsFromStoredModel(ctx context.Context, 
 			utils.SanitizeForLog(req.ModelID), err)
 		return
 	}
+	if req.Spec == nil && req.Provider == stored.Parameters.Provider {
+		req.Spec = stored.Parameters.Spec
+	}
 	if req.APIKey == "" {
 		req.APIKey = stored.Parameters.APIKey
 	}
 	if req.AppSecret == "" {
 		req.AppSecret = stored.Parameters.AppSecret
 	}
+	// Same contract as PUT /models/{id}: an absent or masked secret extra
+	// falls back to the stored value, a real one the user just typed wins —
+	// and a test against a different vendor gets no stored credential, which
+	// belongs to the integration the row is being moved away from.
+	req.ExtraConfig = dto.PreserveStoredSecretExtras(
+		stored.Parameters.ExtraConfig, req.ExtraConfig,
+		dto.VendorRef{Provider: stored.Parameters.Provider, BaseURL: stored.Parameters.BaseURL},
+		dto.VendorRef{Provider: req.Provider, BaseURL: req.BaseURL},
+	)
 }
 
 // RemoteModelCheckRequest 兼容旧 swagger 定义。
@@ -1618,16 +1952,18 @@ func (h *InitializationHandler) buildTestModel(
 			Provider:      req.Provider,
 			InterfaceType: req.InterfaceType,
 			ExtraConfig:   req.ExtraConfig,
+			Spec:          req.Spec,
 			CustomHeaders: req.CustomHeaders,
 			EmbeddingParameters: types.EmbeddingParameters{
-				Dimension:            req.Dimension,
-				TruncatePromptTokens: 256,
+				Dimension:                 req.Dimension,
+				TruncatePromptTokens:      256,
+				SupportsDimensionOverride: req.SupportsDimensionOverride,
 			},
 		},
 	}
 }
 
-// resolveTenantWeKnoraCloudCreds 从当前租户上下文里取出 WeKnoraCloud 凭证，
+// resolveTenantWeKnoraCloudCreds 从当前空间上下文里取出 WeKnoraCloud 凭证，
 // 供测试连接端点补齐 appID/appSecret。与 service.resolveWeKnoraCloudCredentials
 // 对应，但因为 handler 还没有被注入 tenantService（历史原因），暂时从
 // TenantInfoFromContext 读取，等效果相同。
@@ -1682,7 +2018,7 @@ func (h *InitializationHandler) CheckRemoteModel(c *gin.Context) {
 	appID, appSecret, ok := h.resolveTenantWeKnoraCloudCreds(ctx)
 	if !ok {
 		logger.Error(ctx, "Tenant info not found")
-		c.Error(errors.NewBadRequestError("租户信息未找到"))
+		c.Error(errors.NewBadRequestError("空间信息未找到"))
 		return
 	}
 
@@ -1756,7 +2092,7 @@ func (h *InitializationHandler) TestEmbeddingModel(c *gin.Context) {
 	appID, appSecret, ok := h.resolveTenantWeKnoraCloudCreds(ctx)
 	if !ok {
 		logger.Error(ctx, "Tenant info not found")
-		c.Error(errors.NewBadRequestError("租户信息未找到"))
+		c.Error(errors.NewBadRequestError("空间信息未找到"))
 		return
 	}
 
@@ -1788,6 +2124,27 @@ func (h *InitializationHandler) TestEmbeddingModel(c *gin.Context) {
 	})
 }
 
+// authFailureMarkers are lower-cased fragments that mark an upstream error
+// body as a credential problem, whatever status code carried it.
+var authFailureMarkers = []string{
+	"api_key_invalid", "api key not valid", "invalid api key", "invalid_api_key",
+	"unauthorized", "authentication",
+}
+
+// isAuthFailureBody reports whether an upstream error body describes a bad
+// or missing credential. Gemini's native API answers an invalid key with
+// 400 INVALID_ARGUMENT / API_KEY_INVALID, so a 400 alone does not prove the
+// key was accepted.
+func isAuthFailureBody(body string) bool {
+	b := strings.ToLower(body)
+	for _, m := range authFailureMarkers {
+		if strings.Contains(b, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyConnectionError maps an upstream error string to a short
 // human-readable hint in Chinese. Callers should always combine the hint
 // with the raw error message (e.g. fmt.Sprintf("%s：%v", hint, err)) so
@@ -1796,7 +2153,7 @@ func (h *InitializationHandler) TestEmbeddingModel(c *gin.Context) {
 // "what actually happened".
 func classifyConnectionError(errMsg string) string {
 	switch {
-	case strings.Contains(errMsg, "401") || strings.Contains(errMsg, "unauthorized"):
+	case strings.Contains(errMsg, "401") || isAuthFailureBody(errMsg):
 		return "认证失败，请检查API Key"
 	case strings.Contains(errMsg, "403") || strings.Contains(errMsg, "forbidden"):
 		return "权限不足，请检查API Key权限"
@@ -1830,12 +2187,19 @@ func (h *InitializationHandler) checkChatModelConnection(
 
 	_, err = chatInstance.Chat(ctx, testMessages, testOptions)
 	if err != nil {
-		errMsg := err.Error()
 		// 400 = endpoint reachable + auth ok, just a parameter mismatch
-		// (e.g. max_tokens vs max_completion_tokens). Treat as success.
-		if strings.Contains(errMsg, "status code: 400") {
+		// (e.g. max_tokens vs max_completion_tokens, or a reasoning model
+		// that cannot finish within the 1-token probe). Treat as success.
+		// Match the status code, not the message: the wording belongs to
+		// whichever HTTP client built the error and has changed before.
+		// Exception: some vendors (Gemini native) report an invalid key as
+		// 400, which must still fail the check.
+		var httpErr *modelapi.HTTPError
+		if stderrors.As(err, &httpErr) && httpErr.StatusCode == http.StatusBadRequest &&
+			!isAuthFailureBody(httpErr.Body) {
 			return true, "连接正常，模型可用"
 		}
+		errMsg := err.Error()
 		// For every other failure mode we surface a human-readable hint
 		// AND the upstream error verbatim. Swallowing the underlying
 		// message used to hide things like the actual URL the SDK
@@ -1908,12 +2272,14 @@ func (h *InitializationHandler) CheckRerankModel(c *gin.Context) {
 	appID, appSecret, ok := h.resolveTenantWeKnoraCloudCreds(ctx)
 	if !ok {
 		logger.Error(ctx, "Tenant info not found")
-		c.Error(errors.NewBadRequestError("租户信息未找到"))
+		c.Error(errors.NewBadRequestError("空间信息未找到"))
 		return
 	}
 
 	model := h.buildTestModel(&req, types.ModelTypeRerank, types.ModelSourceRemote)
-	if provider.ProviderName(model.Parameters.Provider) == provider.ProviderLKEAP {
+	// LKEAP and Volcengine rerank sign with a key pair stored on the row
+	// itself, not with the tenant's WeKnora Cloud credentials.
+	if p := model.Parameters.Provider; p == providers.LkeapID || p == providers.VolcengineID {
 		appID = ""
 		appSecret = decryptModelAppSecret(model.Parameters.AppSecret)
 	}
@@ -1999,6 +2365,14 @@ func (h *InitializationHandler) CheckASRModel(c *gin.Context) {
 		case strings.Contains(errMsg, "401") || strings.Contains(errMsg, "Unauthorized") || strings.Contains(errMsg, "authentication"):
 			available = false
 			message = fmt.Sprintf("认证失败，请检查API Key：%s", errMsg)
+		case strings.Contains(errMsg, "403") || strings.Contains(errMsg, "Forbidden"):
+			// Also what proxies and endpoint-security agents answer when they
+			// block the request, so the endpoint was never actually reached.
+			available = false
+			message = fmt.Sprintf("访问被拒绝，请检查API Key权限或网络代理/安全软件拦截：%s", errMsg)
+		case strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "context deadline exceeded"):
+			available = false
+			message = fmt.Sprintf("连接超时，请检查网络连接：%s", errMsg)
 		case strings.Contains(errMsg, "404") || strings.Contains(errMsg, "Not Found"):
 			available = false
 			message = fmt.Sprintf("API端点不存在，请检查Base URL：%s", errMsg)
@@ -2125,9 +2499,23 @@ func (h *InitializationHandler) TestMultimodalFunction(c *gin.Context) {
 		return
 	}
 
+	// 验证文件大小 — MAX_FILE_SIZE_MB env (50MB 默认)。
+	// 见 utils/filesize.go 注释：故意保留为部署期 env，不做 runtime setting。
+	maxSizeMB := utils.GetMaxFileSizeMB()
+	maxSize := maxSizeMB * 1024 * 1024
+	// 上限必须在 multipart 解析之前生效：FormFile 会先把整个 body 缓冲下来
+	// （超出内存部分落临时文件），之后的 header.Size 检查看到的已是收完的上传。
+	// nginx 的 location /api/ 仍是 MAX_FILE_SIZE；这里是直连 app 时的同一道上限。
+	limitUploadBody(c, maxSize)
+
 	// 获取上传的图片文件
 	file, header, err := c.Request.FormFile("image")
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			logger.Error(ctx, "File size too large")
+			c.Error(errors.NewBadRequestError(fmt.Sprintf("图片文件大小不能超过%dMB", maxSizeMB)))
+			return
+		}
 		logger.Error(ctx, "Failed to get uploaded image", err)
 		c.Error(errors.NewBadRequestError("获取上传图片失败"))
 		return
@@ -2141,10 +2529,6 @@ func (h *InitializationHandler) TestMultimodalFunction(c *gin.Context) {
 		return
 	}
 
-	// 验证文件大小 — MAX_FILE_SIZE_MB env (50MB 默认)。
-	// 见 utils/filesize.go 注释：故意保留为部署期 env，不做 runtime setting。
-	maxSizeMB := utils.GetMaxFileSizeMB()
-	maxSize := maxSizeMB * 1024 * 1024
 	if header.Size > maxSize {
 		logger.Error(ctx, "File size too large")
 		c.Error(errors.NewBadRequestError(fmt.Sprintf("图片文件大小不能超过%dMB", maxSizeMB)))
@@ -2287,7 +2671,7 @@ type TextRelationExtractionResponse struct {
 // @Accept       json
 // @Produce      json
 // @Param        request  body      TextRelationExtractionRequest  true  "提取请求"
-// @Success      200      {object}  map[string]interface{}         "提取结果"
+// @Success      200      {object}  handler.DataResponse{data=handler.TextRelationExtractionResponse}         "提取结果"
 // @Failure      400      {object}  errors.AppError                "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
@@ -2388,7 +2772,7 @@ type FabriTextResponse struct {
 // @Accept       json
 // @Produce      json
 // @Param        request  body      FabriTextRequest  true  "生成请求"
-// @Success      200      {object}  map[string]interface{}  "生成的文本"
+// @Success      200      {object}  handler.DataResponse{data=handler.FabriTextResponse}  "生成的文本"
 // @Failure      400      {object}  errors.AppError         "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
@@ -2465,7 +2849,7 @@ var tagOptions = []string{
 // @Tags         初始化
 // @Accept       json
 // @Produce      json
-// @Success      200  {object}  map[string]interface{}  "生成的标签"
+// @Success      200  {object}  handler.DataResponse{data=handler.FabriTagResponse}  "生成的标签"
 // @Router       /initialization/extract/fabri-tag [post]
 func (h *InitializationHandler) FabriTag(c *gin.Context) {
 	tagRandom := RandomSelect(tagOptions, rand.Intn(len(tagOptions)-1)+1)

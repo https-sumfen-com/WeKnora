@@ -1,19 +1,20 @@
 <template>
-  <t-popup
-    v-if="kbInfo"
-    trigger="click"
-    placement="bottom-right"
-    :overlay-style="{ padding: 0 }"
-    :overlay-inner-style="{ padding: 0 }"
-  >
-    <template #content>
+  <t-tooltip :content="t('knowledgeBase.infoCard.tooltip')" placement="top">
+    <t-popup
+      v-if="kbInfo"
+      trigger="click"
+      placement="bottom-right"
+      :overlay-style="{ padding: 0 }"
+      :overlay-inner-style="{ padding: 0 }"
+    >
+      <template #content>
       <div class="kb-info-card">
         <div class="kb-info-card-header">{{ t('knowledgeBase.infoCard.title') }}</div>
         <div class="kb-info-card-body">
-          <div class="kb-info-card-section">
-            <div class="kb-info-card-section-title">
+          <section class="setting-drawer__section">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.basic') }}
-            </div>
+            </h4>
             <div class="kb-info-card-row">
               <span class="kb-info-card-label">{{ t('knowledgeBase.infoCard.type') }}</span>
               <span class="kb-info-card-value">
@@ -44,11 +45,11 @@
                 >.{{ ft }}</span>
               </span>
             </div>
-          </div>
-          <div class="kb-info-card-section">
-            <div class="kb-info-card-section-title">
+          </section>
+          <section class="setting-drawer__section">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.access') }}
-            </div>
+            </h4>
             <div class="kb-info-card-row">
               <span class="kb-info-card-label">{{ t('knowledgeBase.accessInfo.myRole') }}</span>
               <span class="kb-info-card-value">
@@ -75,11 +76,11 @@
                 {{ t('knowledgeList.sharedToOrgs', { count: kbInfo.share_count }) }}
               </span>
             </div>
-          </div>
-          <div v-if="capabilities.length" class="kb-info-card-section">
-            <div class="kb-info-card-section-title">
+          </section>
+          <section v-if="capabilities.length" class="setting-drawer__section">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.capabilities') }}
-            </div>
+            </h4>
             <div class="kb-info-card-row">
               <span class="kb-info-card-label">{{ t('knowledgeBase.infoCard.enabled') }}</span>
               <span class="kb-info-card-value">
@@ -94,11 +95,11 @@
                 </t-tag>
               </span>
             </div>
-          </div>
-          <div v-if="chunkingRows.length" class="kb-info-card-section">
-            <div class="kb-info-card-section-title">
+          </section>
+          <section v-if="chunkingRows.length" class="setting-drawer__section">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.chunking') }}
-            </div>
+            </h4>
             <div
               v-for="row in chunkingRows"
               :key="row.key"
@@ -107,11 +108,11 @@
               <span class="kb-info-card-label">{{ row.label }}</span>
               <span class="kb-info-card-value">{{ row.value }}</span>
             </div>
-          </div>
-          <div v-if="statRows.length" class="kb-info-card-section">
-            <div class="kb-info-card-section-title">
+          </section>
+          <section v-if="statRows.length" class="setting-drawer__section">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.stats') }}
-            </div>
+            </h4>
             <div
               v-for="stat in statRows"
               :key="stat.key"
@@ -120,14 +121,14 @@
               <span class="kb-info-card-label">{{ stat.label }}</span>
               <span class="kb-info-card-value kb-info-card-value-number">{{ stat.value }}</span>
             </div>
-          </div>
-          <div
+          </section>
+          <section
             v-if="kbInfo.vector_store_source || kbInfo.storage_provider_config?.provider"
-            class="kb-info-card-section"
+            class="setting-drawer__section"
           >
-            <div class="kb-info-card-section-title">
+            <h4 class="setting-drawer__section-title">
               {{ t('knowledgeBase.infoCard.binding') }}
-            </div>
+            </h4>
             <div v-if="kbInfo.vector_store_source" class="kb-info-card-row">
               <span class="kb-info-card-label">{{ t('knowledgeBase.infoCard.vectorStore') }}</span>
               <span class="kb-info-card-value">
@@ -148,20 +149,19 @@
                 {{ kbInfo.storage_provider_config.provider }}
               </span>
             </div>
-          </div>
+          </section>
         </div>
       </div>
     </template>
-    <t-tooltip :content="t('knowledgeBase.infoCard.tooltip')" placement="top">
-      <button
-        type="button"
-        class="kb-info-button"
-        :class="{ 'has-warning': kbInfo?.vector_store_status === 'unavailable' }"
-      >
-        <t-icon name="info-circle" size="16px" />
-      </button>
-    </t-tooltip>
+    <button
+      type="button"
+      class="kb-info-button"
+      :class="{ 'has-warning': kbInfo?.vector_store_status === 'unavailable' }"
+    >
+      <t-icon name="info-circle" size="16px" />
+    </button>
   </t-popup>
+  </t-tooltip>
 </template>
 
 <script setup lang="ts">
@@ -198,7 +198,8 @@ const isOwner = computed<boolean>(() => {
   const creatorId = kb.creator_id || ''
   const userId = authStore.user?.id || ''
   if (!creatorId) return false
-  return creatorId === userId
+  // A creator demoted to Viewer no longer manages it (access.CreatorRoleFloor).
+  return creatorId === userId && authStore.hasRole('contributor')
 })
 
 const currentSharedKb = computed(() => {
@@ -389,7 +390,7 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
   justify-content: center;
   color: var(--td-text-color-placeholder);
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition: background var(--app-motion-base) ease, color var(--app-motion-base) ease;
   padding: 0;
 
   &:hover:not(:disabled) {
@@ -415,11 +416,11 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
     height: 7px;
     background: var(--td-error-color);
     border-radius: 50%;
-    border: 1.5px solid var(--td-bg-color-container, #fff);
+    border: 1.5px solid var(--td-bg-color-container);
   }
 
   :deep(.t-icon) {
-    font-size: 16px;
+    font-size: var(--app-text-xl);
   }
 }
 
@@ -433,14 +434,14 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
   display: flex;
   flex-direction: column;
   padding: 12px 16px;
-  font-size: 12px;
+  font-size: var(--app-text-sm);
   color: var(--td-text-color-primary);
   overflow: hidden;
 }
 
 .kb-info-card-header {
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: var(--app-text-md);
   font-weight: 600;
   margin-bottom: 8px;
   padding-bottom: 8px;
@@ -455,28 +456,52 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
   overflow-y: auto;
   margin: 0 -16px;
   padding: 0 16px;
+  display: flex;
+  flex-direction: column;
 }
 
-.kb-info-card-section + .kb-info-card-section {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--td-component-stroke);
+.kb-info-card-body .setting-drawer__section {
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--td-component-stroke);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.kb-info-card-section-title {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--td-text-color-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
+.kb-info-card-body .setting-drawer__section:first-child {
+  padding-top: 0;
+}
+
+.kb-info-card-body .setting-drawer__section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.kb-info-card-body .setting-drawer__section-title {
+  font-size: var(--app-text-md);
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  margin: 0 0 4px;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-info-card-body .setting-drawer__section-title::before {
+  content: '';
+  width: 3px;
+  height: 14px;
+  background: var(--td-brand-color);
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 
 .kb-info-card-row {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 3px 0;
+  padding: 0;
   line-height: 1.6;
 }
 
@@ -507,8 +532,8 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
 }
 
 .kb-info-card-value-mono {
-  font-family: var(--td-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11px;
+  font-family: var(--td-font-family-mono);
+  font-size: var(--app-text-xs);
   color: var(--td-text-color-secondary);
 }
 
@@ -517,15 +542,15 @@ const statRows = computed<Array<{ key: string; label: string; value: number | st
   align-items: center;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--td-bg-color-component, #f5f7fa);
+  background: var(--td-bg-color-component);
   color: var(--td-text-color-secondary);
-  font-family: var(--td-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11px;
+  font-family: var(--td-font-family-mono);
+  font-size: var(--app-text-xs);
   line-height: 1.4;
 }
 
 .kb-info-card-hint {
   color: var(--td-text-color-placeholder);
-  font-size: 11px;
+  font-size: var(--app-text-xs);
 }
 </style>

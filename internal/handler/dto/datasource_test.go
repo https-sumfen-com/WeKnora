@@ -48,9 +48,103 @@ func TestDataSourceResponse_OmitsCredentials(t *testing.T) {
 	assert.Contains(t, s, "main")
 }
 
+func TestDataSourceResponses_OmitsLastSyncCursor(t *testing.T) {
+	ds := &types.DataSource{
+		ID:             "ds-1",
+		Name:           "github-prod",
+		Type:           "github",
+		LastSyncCursor: types.JSON(`{"page":42}`),
+		LastSyncResult: types.JSON(`{"total":10}`),
+	}
+
+	list := NewDataSourceResponses([]*types.DataSource{ds})
+	assert.Len(t, list, 1)
+	got := list[0]
+	assert.Empty(t, got.LastSyncCursor)
+
+	body, err := json.Marshal(got)
+	assert.NoError(t, err)
+	var raw map[string]json.RawMessage
+	assert.NoError(t, json.Unmarshal(body, &raw))
+	assert.NotContains(t, raw, "last_sync_cursor")
+
+	// Every other field must match the single-entity conversion.
+	want := NewDataSourceResponse(ds)
+	assert.Equal(t, json.RawMessage(`{"page":42}`), want.LastSyncCursor)
+	want.LastSyncCursor = nil
+	assert.Equal(t, want, got)
+}
+
 func TestDataSourceResponse_NilSafe(t *testing.T) {
 	assert.Nil(t, NewDataSourceResponse(nil))
 	assert.Equal(t, []*DataSourceResponse{}, NewDataSourceResponses(nil))
+}
+
+func TestNextcloudResponseOmitsAppPassword(t *testing.T) {
+	cfg := types.DataSourceConfig{Type: types.ConnectorTypeNextcloud, Credentials: map[string]any{
+		"base_url": "https://nextcloud.example.com", "username": "alice", "app_password": "app-password-for-tests",
+	}, ResourceIDs: []string{"/docs"}}
+	blob, err := cfg.ToJSON()
+	assert.NoError(t, err)
+	ds := &types.DataSource{ID: "ds-nextcloud", Type: types.ConnectorTypeNextcloud, Config: blob}
+	for _, response := range []any{NewDataSourceResponse(ds), NewDataSourceResponses([]*types.DataSource{ds})} {
+		body, err := json.Marshal(response)
+		assert.NoError(t, err)
+		assert.NotContains(t, string(body), "app_password")
+		assert.NotContains(t, string(body), "app-password-for-tests")
+		assert.NotContains(t, string(body), "nextcloud.example.com")
+		assert.Contains(t, string(body), `"configured":true`)
+	}
+}
+
+func TestDataSourceResponse_RSSFeedURLsFromCredentials(t *testing.T) {
+	cfg := types.DataSourceConfig{
+		Type: types.ConnectorTypeRSS,
+		Credentials: map[string]interface{}{
+			"feed_urls": "https://example.com/a.xml\nhttps://example.com/b.xml",
+		},
+		ResourceIDs: []string{"https://example.com/a.xml"},
+	}
+	blob, _ := cfg.ToJSON()
+	ds := &types.DataSource{
+		ID:     "ds-rss",
+		Name:   "my-rss",
+		Type:   types.ConnectorTypeRSS,
+		Config: blob,
+	}
+	resp := NewDataSourceResponse(ds)
+	assert.NotNil(t, resp.Config)
+	assert.Equal(t, "https://example.com/a.xml\nhttps://example.com/b.xml", resp.Config.Settings["feed_urls"])
+	assert.False(t, resp.Credentials["credentials"].Configured)
+	body, err := json.Marshal(resp)
+	assert.NoError(t, err)
+	s := string(body)
+	assert.Contains(t, s, "https://example.com/a.xml")
+	assert.NotContains(t, s, "Bearer secret")
+}
+
+func TestDataSourceResponse_RSSAuthHeadersConfigured(t *testing.T) {
+	cfg := types.DataSourceConfig{
+		Type: types.ConnectorTypeRSS,
+		Credentials: map[string]interface{}{
+			"auth_headers": "Authorization: Bearer secret",
+		},
+		Settings: map[string]interface{}{
+			"feed_urls": "https://example.com/feed.xml",
+		},
+	}
+	blob, _ := cfg.ToJSON()
+	ds := &types.DataSource{
+		ID:     "ds-rss-auth",
+		Name:   "my-rss",
+		Type:   types.ConnectorTypeRSS,
+		Config: blob,
+	}
+	resp := NewDataSourceResponse(ds)
+	assert.True(t, resp.Credentials["credentials"].Configured)
+	body, err := json.Marshal(resp)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(body), "Bearer secret")
 }
 
 func TestDataSourceResponse_NoConfig(t *testing.T) {

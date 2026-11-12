@@ -26,7 +26,9 @@ type fakeListService struct {
 	gotPageSize int
 }
 
-func (f *fakeListService) GetSessionsByTenant(_ context.Context, page, pageSize int) ([]sdk.Session, int, error) {
+func (f *fakeListService) GetSessionsByTenant(
+	_ context.Context, page, pageSize int, _ ...sdk.SessionListOptions,
+) ([]sdk.Session, int, error) {
 	f.gotPage = page
 	f.gotPageSize = pageSize
 	return f.items, f.total, f.err
@@ -209,7 +211,9 @@ type pagedSessionSvc struct {
 	pageSize int
 }
 
-func (p *pagedSessionSvc) GetSessionsByTenant(_ context.Context, page, pageSize int) ([]sdk.Session, int, error) {
+func (p *pagedSessionSvc) GetSessionsByTenant(
+	_ context.Context, page, pageSize int, _ ...sdk.SessionListOptions,
+) ([]sdk.Session, int, error) {
 	p.calls = append(p.calls, page)
 	p.pageSize = pageSize
 	start := (page - 1) * pageSize
@@ -270,4 +274,46 @@ func TestList_AllPages_WithLimit_StopsAtLimit(t *testing.T) {
 	got := strings.Count(out.String(), `"id":"s_`)
 	assert.Equal(t, 50, got)
 	assert.LessOrEqual(t, len(svc.calls), 3, "must not fetch beyond what fills --limit")
+}
+
+// TestList_JSON_TotalCount_SinglePage asserts that meta.total_count is populated
+// from the server total when doing a single-page fetch.
+func TestList_JSON_TotalCount_SinglePage(t *testing.T) {
+	out, _ := iostreams.SetForTest(t)
+	svc := &fakeListService{
+		items: []sdk.Session{{ID: "s_1", Title: "T1", UpdatedAt: "2026-05-12T14:00:00Z"}},
+		total: 42,
+	}
+	require.NoError(t, runList(context.Background(),
+		&ListOptions{PageSize: 10, Limit: 30},
+		&cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, svc))
+	body := out.String()
+	assert.Contains(t, body, `"total_count":42`, "single-page fetch must surface server total in meta.total_count")
+}
+
+// TestList_JSON_TotalCount_AllPages asserts meta.total_count is populated
+// from the server total when walking all pages.
+func TestList_JSON_TotalCount_AllPages(t *testing.T) {
+	out, _ := iostreams.SetForTest(t)
+	svc := &pagedSessionSvc{all: makeSessions(45)}
+	require.NoError(t, runList(context.Background(),
+		&ListOptions{PageSize: 20, AllPages: true, Limit: 10000},
+		&cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, svc))
+	body := out.String()
+	assert.Contains(t, body, `"total_count":45`, "--all-pages fetch must surface server total in meta.total_count")
+}
+
+// TestList_JSON_TotalCount_Zero_Present asserts that when server returns total=0
+// on an empty list, meta.total_count (and meta.count) still serialize as 0. The
+// *int + omitempty pattern omits only nil, so the agent contract stays stable:
+// an empty result reports 0, not a missing key.
+func TestList_JSON_TotalCount_Zero_Present(t *testing.T) {
+	out, _ := iostreams.SetForTest(t)
+	svc := &fakeListService{items: nil, total: 0}
+	require.NoError(t, runList(context.Background(),
+		&ListOptions{PageSize: 30, Limit: 30},
+		&cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, svc))
+	body := out.String()
+	assert.Contains(t, body, `"total_count":0`, "zero server total must serialize as 0 on empty list")
+	assert.Contains(t, body, `"count":0`, "empty list must report count:0, not omit it")
 }

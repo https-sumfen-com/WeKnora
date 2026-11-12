@@ -5,6 +5,7 @@ type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ServerCapabilities `json:"capabilities"`
 	ServerInfo      ServerInfo         `json:"serverInfo"`
+	Instructions    string             `json:"instructions,omitempty"`
 }
 
 // ServerCapabilities represents server capabilities
@@ -34,22 +35,27 @@ type PromptsCapability struct {
 
 // ServerInfo represents information about the server
 type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CallToolResult represents the result of tools/call request
 type CallToolResult struct {
-	Content []ContentItem `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
+	Content           []ContentItem `json:"content"`
+	StructuredContent any           `json:"structuredContent,omitempty"`
+	IsError           bool          `json:"isError,omitempty"`
 }
 
 // ContentItem represents a content item in tool result
 type ContentItem struct {
-	Type     string `json:"type"` // "text", "image", "resource"
+	Type     string `json:"type"` // "text", "image", "audio", "resource", "resource_link"
 	Text     string `json:"text,omitempty"`
 	Data     string `json:"data,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
+	// URI identifies the resource of a "resource" or "resource_link" item.
+	URI string `json:"uri,omitempty"`
 }
 
 // ReadResourceResult represents the result of resources/read request

@@ -3,6 +3,7 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -423,13 +424,14 @@ func TestInjectAndConditions(t *testing.T) {
 			name:   "existing WHERE with ORDER BY",
 			sql:    "SELECT id, title FROM knowledges WHERE parse_status = 'completed' ORDER BY created_at DESC LIMIT 10",
 			filter: "knowledges.tenant_id = 123",
-			want:   "SELECT id, title FROM knowledges WHERE knowledges.tenant_id = 123 AND (parse_status = 'completed') ORDER BY created_at DESC LIMIT 10",
+			want: "SELECT id, title FROM knowledges WHERE knowledges.tenant_id = 123 " +
+				"AND parse_status = 'completed' ORDER BY created_at DESC LIMIT 10",
 		},
 		{
 			name:   "existing WHERE without tail clauses",
 			sql:    "SELECT id FROM knowledges WHERE enable_status = 'enabled'",
 			filter: "knowledges.deleted_at IS NULL",
-			want:   "SELECT id FROM knowledges WHERE knowledges.deleted_at IS NULL AND (enable_status = 'enabled')",
+			want:   "SELECT id FROM knowledges WHERE knowledges.deleted_at IS NULL AND enable_status = 'enabled'",
 		},
 		{
 			name:   "no WHERE with ORDER BY",
@@ -446,5 +448,228 @@ func TestInjectAndConditions(t *testing.T) {
 				t.Fatalf("InjectAndConditions() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateAndSecureSQL_WithStructuredSearchScopes(t *testing.T) {
+	securedSQL, validation, err := ValidateAndSecureSQL(
+		"SELECT id FROM chunks",
+		WithSearchScopes([]SearchScope{
+			{KnowledgeBaseID: "kb-full"},
+			{KnowledgeBaseID: "kb-doc", KnowledgeIDs: []string{"doc-1"}},
+			{KnowledgeBaseID: "kb-tag", TagIDs: []string{"tag-a", "tag-b"}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("ValidateAndSecureSQL() error = %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("expected validation to pass, got %#v", validation.Errors)
+	}
+
+	for _, want := range []string{
+		"chunks.knowledge_base_id = 'kb-full'",
+		"chunks.knowledge_base_id = 'kb-doc' AND chunks.knowledge_id IN ('doc-1')",
+		"chunks.knowledge_base_id = 'kb-tag' AND EXISTS",
+		"knowledge_tag_relations",
+		"ktr.knowledge_id = chunks.knowledge_id",
+		"ktr.tag_id IN ('tag-a', 'tag-b')",
+		" OR ",
+	} {
+		if !strings.Contains(securedSQL, want) {
+			t.Fatalf("secured SQL missing %q:\n%s", want, securedSQL)
+		}
+	}
+}
+
+func TestValidateAndSecureSQL_WithChunkEnabledFilter(t *testing.T) {
+	securedSQL, validation, err := ValidateAndSecureSQL(
+		"SELECT c.id, c.content FROM chunks c WHERE c.chunk_type = 'faq'",
+		WithChunkEnabledFilter(),
+	)
+	if err != nil {
+		t.Fatalf("ValidateAndSecureSQL() error = %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("expected validation to pass, got %#v", validation.Errors)
+	}
+	if !strings.Contains(securedSQL, "c.is_enabled = true") {
+		t.Fatalf("secured SQL must exclude disabled chunks:\n%s", securedSQL)
+	}
+}
+
+// A scope carrying both a document whitelist and a tag filter must apply both.
+// Emitting only one of them would admit rows the other excludes.
+func TestValidateAndSecureSQL_ScopeCombinesDocumentAndTagFilters(t *testing.T) {
+	securedSQL, validation, err := ValidateAndSecureSQL(
+		"SELECT id FROM chunks",
+		WithSearchScopes([]SearchScope{
+			{KnowledgeBaseID: "kb-1", KnowledgeIDs: []string{"doc-1"}, TagIDs: []string{"tag-a"}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("ValidateAndSecureSQL() error = %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("expected validation to pass, got %#v", validation.Errors)
+	}
+	for _, want := range []string{
+		"chunks.knowledge_base_id = 'kb-1'",
+		"chunks.knowledge_id IN ('doc-1')",
+		"ktr.tag_id IN ('tag-a')",
+	} {
+		if !strings.Contains(securedSQL, want) {
+			t.Fatalf("secured SQL missing %q:\n%s", want, securedSQL)
+		}
+	}
+	if strings.Contains(securedSQL, " OR ") {
+		t.Fatalf("a single scope must not be split into alternatives:\n%s", securedSQL)
+	}
+}
+
+// TestValidateSQL_JSONNodeBypass verifies that PG17 SQL/JSON expression nodes
+// cannot be used to smuggle dangerous functions past the blacklist. These were
+// previously accepted because validateNode had no handler for them and fell
+// through to a permissive `return nil`.
+func TestValidateSQL_JSONNodeBypass(t *testing.T) {
+	dangerous := []struct {
+		name string
+		sql  string
+	}{
+		{"JSON_SCALAR + pg_read_file", "SELECT JSON_SCALAR(pg_read_file('/etc/passwd')) AS data FROM knowledge_bases LIMIT 1"},
+		{"JSON_VALUE + pg_read_file", "SELECT JSON_VALUE(pg_read_file('/etc/passwd'), '$') AS data FROM knowledge_bases LIMIT 1"},
+		{"JSON_QUERY + pg_read_file", "SELECT JSON_QUERY(pg_read_file('/etc/passwd'), '$') AS data FROM knowledge_bases LIMIT 1"},
+		{"JSON scalar + lo_export", "SELECT JSON_SCALAR(lo_export(1, '/tmp/x')) FROM knowledge_bases LIMIT 1"},
+		{"JSON() parse + pg_read_file", "SELECT JSON(pg_read_file('/etc/passwd')) FROM knowledge_bases LIMIT 1"},
+		{"JSON_SERIALIZE + pg_read_file", "SELECT JSON_SERIALIZE(pg_read_file('/etc/passwd')) FROM knowledge_bases LIMIT 1"},
+	}
+
+	for _, tt := range dangerous {
+		t.Run(tt.name, func(t *testing.T) {
+			_, validation := ValidateSQL(tt.sql, WithSecurityDefaults(10000))
+			if validation.Valid {
+				t.Fatalf("expected SQL to be REJECTED, but it was accepted: %s", tt.sql)
+			}
+		})
+	}
+}
+
+// TestValidateSQL_UnknownNodeDefaultDeny ensures a legitimate query still
+// passes after the default-deny change, guarding against over-blocking.
+func TestValidateSQL_DefaultDenyAllowsLegitimate(t *testing.T) {
+	legit := []string{
+		"SELECT id, name FROM knowledge_bases WHERE name LIKE '%test%' ORDER BY created_at DESC LIMIT 10",
+		"SELECT COUNT(*) AS c FROM knowledges WHERE parse_status = 'completed'",
+		"SELECT COALESCE(title, 'untitled') FROM knowledges LIMIT 5",
+		"SELECT CASE WHEN file_size > 100 THEN 'big' ELSE 'small' END FROM knowledges LIMIT 5",
+		"SELECT kb.name, COUNT(k.id) FROM knowledge_bases kb LEFT JOIN knowledges k ON kb.id = k.knowledge_base_id GROUP BY kb.id, kb.name",
+	}
+	for _, sql := range legit {
+		t.Run(sql, func(t *testing.T) {
+			_, validation := ValidateSQL(sql, WithSecurityDefaults(10000))
+			if !validation.Valid {
+				t.Fatalf("expected legitimate SQL to pass, got errors: %#v\nSQL: %s", validation.Errors, sql)
+			}
+		})
+	}
+}
+
+// TestValidateSQL_DuckDBSubqueryFileRead verifies that the data_analysis tool's
+// validation options (no WithNoSubqueries) still reject file-reading functions
+// hidden inside a FROM subquery, as well as at the top level.
+func TestValidateSQL_DuckDBFileRead(t *testing.T) {
+	// Mirror the exact options used by the data_analysis (DuckDB) tool.
+	opts := []SQLValidationOption{
+		WithAllowedTables("k_data"),
+		WithSingleStatement(),
+		WithNoDangerousFunctions(),
+	}
+
+	dangerous := []struct {
+		name string
+		sql  string
+	}{
+		{"read_text in FROM subquery", "SELECT * FROM (SELECT * FROM read_text('/etc/passwd')) AS f, k_data AS k LIMIT 1"},
+		{"read_text in target list", "SELECT read_text('/etc/passwd') FROM k_data LIMIT 1"},
+		{"read_blob in FROM subquery", "SELECT * FROM (SELECT * FROM read_blob('/etc/passwd')) AS f LIMIT 1"},
+		{"nested subquery read_csv", "SELECT * FROM (SELECT * FROM (SELECT * FROM read_csv('/etc/passwd')) AS a) AS b LIMIT 1"},
+	}
+	for _, tt := range dangerous {
+		t.Run(tt.name, func(t *testing.T) {
+			_, validation := ValidateSQL(tt.sql, opts...)
+			if validation.Valid {
+				t.Fatalf("expected SQL to be REJECTED, but it was accepted: %s", tt.sql)
+			}
+		})
+	}
+
+	t.Run("legitimate table query passes", func(t *testing.T) {
+		_, validation := ValidateSQL("SELECT product, SUM(amount) FROM k_data GROUP BY product", opts...)
+		if !validation.Valid {
+			t.Fatalf("expected legitimate DuckDB query to pass, got: %#v", validation.Errors)
+		}
+	})
+}
+
+func TestValidateSQLScalarCasts(t *testing.T) {
+	for _, typ := range []string{
+		"SMALLINT", "INTEGER", "BIGINT", "REAL", "DOUBLE PRECISION", "DECIMAL(12,2)",
+		"BOOLEAN", "CHAR(5)", "VARCHAR(20)", "TEXT", "DATE", "TIME", "TIME WITH TIME ZONE",
+		"TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "INTERVAL", "pg_catalog.int4", "pg_catalog.text", "pg_catalog.date",
+	} {
+		for _, query := range []string{
+			"SELECT CAST(amount AS " + typ + ") FROM dataset",
+			"SELECT amount::" + typ + " FROM dataset",
+		} {
+			t.Run(query, func(t *testing.T) {
+				_, validation := ValidateSQL(query, WithSelectOnly(), WithSingleStatement(),
+					WithAllowedTables("dataset"), WithNoDangerousFunctions())
+				if !validation.Valid {
+					t.Fatalf("safe scalar cast rejected: %v", validation.Errors)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateSQLCastsRetainSecurityChecks(t *testing.T) {
+	for _, query := range []string{
+		"SELECT amount::pg_lsn FROM dataset",
+		"SELECT amount::pg_catalog.pg_lsn FROM dataset",
+		"SELECT amount::pg_catalog.regclass FROM dataset",
+		"SELECT amount::pg_catalog.unknown_type FROM dataset",
+		`SELECT amount::"pg_catalog.int4" FROM dataset`,
+		`SELECT amount::pg_catalog."INT4" FROM dataset`,
+		"SELECT CAST(pg_read_file('/etc/passwd') AS INTEGER) FROM dataset",
+		"SELECT CAST(read_text('/etc/passwd') AS VARCHAR) FROM dataset",
+		"SELECT CAST((SELECT amount FROM other_table) AS INTEGER) FROM dataset",
+		"SELECT CAST(amount AS INTEGER) FROM dataset; DELETE FROM dataset",
+		"SELECT CAST(amount AS NUMERIC(pg_read_file('/etc/passwd'))) FROM dataset",
+	} {
+		t.Run(query, func(t *testing.T) {
+			_, validation := ValidateSQL(query, WithSelectOnly(), WithSingleStatement(),
+				WithAllowedTables("dataset"), WithNoDangerousFunctions())
+			if validation.Valid {
+				t.Fatal("unsafe query accepted")
+			}
+			if strings.Contains(query, "NUMERIC(pg_read_file") &&
+				!strings.Contains(fmt.Sprint(validation.Errors), "function 'pg_read_file' is not allowed") {
+				t.Fatalf("type modifier must be checked for dangerous functions: %v", validation.Errors)
+			}
+		})
+	}
+}
+
+func BenchmarkInjectAndConditions(b *testing.B) {
+	const sql = "SELECT id, title FROM docs WHERE status = 'active' ORDER BY created_at LIMIT 50"
+	for i := 0; i < b.N; i++ {
+		_ = InjectAndConditions(sql, "tenant_id = 1")
+	}
+}
+
+func BenchmarkCheckSQLInjectionRisks(b *testing.B) {
+	const where = "status = 'active' AND name LIKE '%foo%' AND (deleted_at IS NULL OR archived = false)"
+	for i := 0; i < b.N; i++ {
+		_ = checkSQLInjectionRisks(where)
 	}
 }

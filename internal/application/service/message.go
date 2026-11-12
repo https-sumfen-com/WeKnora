@@ -12,6 +12,8 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
+	"github.com/redis/go-redis/v9"
 )
 
 // regThinkIndex matches <think>...</think> blocks for stripping from KB index content.
@@ -22,12 +24,14 @@ var regThinkIndex = regexp.MustCompile(`(?s)<think>.*?</think>`)
 // It reads the chat history knowledge base configuration from the tenant's ChatHistoryConfig,
 // which is managed via the settings UI.
 type messageService struct {
-	messageRepo   interfaces.MessageRepository    // Repository for message storage operations
-	sessionRepo   interfaces.SessionRepository    // Repository for session validation
-	tenantService interfaces.TenantService        // Service for tenant operations (read ChatHistoryConfig)
-	kbService     interfaces.KnowledgeBaseService // Service for knowledge base operations (search chat history KB)
-	knowService   interfaces.KnowledgeService     // Service for knowledge operations (index/delete passages)
-	modelService  interfaces.ModelService         // Service for model operations (rerank model)
+	messageRepo    interfaces.MessageRepository    // Repository for message storage operations
+	sessionRepo    interfaces.SessionRepository    // Repository for session validation
+	tenantService  interfaces.TenantService        // Service for tenant operations (read ChatHistoryConfig)
+	kbService      interfaces.KnowledgeBaseService // Service for knowledge base operations (search chat history KB)
+	knowService    interfaces.KnowledgeService     // Service for knowledge operations (index/delete passages)
+	modelService   interfaces.ModelService         // Service for model operations (rerank model)
+	suggestionRepo interfaces.MessageSuggestionRepository
+	historyRedis   *redis.Client
 }
 
 // NewMessageService creates a new message service instance with the required repositories
@@ -37,14 +41,18 @@ func NewMessageService(messageRepo interfaces.MessageRepository,
 	kbService interfaces.KnowledgeBaseService,
 	knowService interfaces.KnowledgeService,
 	modelService interfaces.ModelService,
+	suggestionRepo interfaces.MessageSuggestionRepository,
+	historyRedis *redis.Client,
 ) interfaces.MessageService {
 	return &messageService{
-		messageRepo:   messageRepo,
-		sessionRepo:   sessionRepo,
-		tenantService: tenantService,
-		kbService:     kbService,
-		knowService:   knowService,
-		modelService:  modelService,
+		messageRepo:    messageRepo,
+		sessionRepo:    sessionRepo,
+		tenantService:  tenantService,
+		kbService:      kbService,
+		knowService:    knowService,
+		modelService:   modelService,
+		suggestionRepo: suggestionRepo,
+		historyRedis:   historyRedis,
 	}
 }
 
@@ -69,8 +77,7 @@ func sessionUserIDForLookup(ctx context.Context) string {
 		// Shared-agent pipelines resolve the session owner tenant first; keep that internal lookup tenant-scoped.
 		return ""
 	}
-	userID, _ := types.UserIDFromContext(ctx)
-	return userID
+	return types.SessionOwnerIDFromContext(ctx)
 }
 
 // CreateMessage creates a new message within an existing session
@@ -106,7 +113,7 @@ func (s *messageService) GetMessage(ctx context.Context, sessionID string, messa
 
 	tenantID := types.MustTenantIDFromContext(ctx)
 	logger.Infof(ctx, "Checking if session exists, tenant ID: %d", tenantID)
-	_, err := s.sessionRepo.Get(ctx, tenantID, sessionUserIDForLookup(ctx), sessionID)
+	_, err := loadSessionForRead(ctx, s.sessionRepo, tenantID, sessionUserIDForLookup(ctx), sessionID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get session: %v", err)
 		return nil, err
@@ -123,7 +130,7 @@ func (s *messageService) GetMessage(ctx context.Context, sessionID string, messa
 	}
 
 	logger.Info(ctx, "Message retrieved successfully")
-	return message, nil
+	return s.clarifyReadArtifactVersions(ctx, sessionID, []*types.Message{message})[0], nil
 }
 
 // GetMessagesBySession retrieves paginated messages for a specific session
@@ -135,7 +142,7 @@ func (s *messageService) GetMessagesBySession(ctx context.Context,
 
 	tenantID := types.MustTenantIDFromContext(ctx)
 	logger.Infof(ctx, "Checking if session exists, tenant ID: %d", tenantID)
-	_, err := s.sessionRepo.Get(ctx, tenantID, sessionUserIDForLookup(ctx), sessionID)
+	_, err := loadSessionForRead(ctx, s.sessionRepo, tenantID, sessionUserIDForLookup(ctx), sessionID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get session: %v", err)
 		return nil, err
@@ -153,7 +160,7 @@ func (s *messageService) GetMessagesBySession(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Retrieved %d messages successfully", len(messages))
-	return messages, nil
+	return s.clarifyReadArtifactVersions(ctx, sessionID, messages), nil
 }
 
 // GetRecentMessagesBySession retrieves the most recent messages from a session
@@ -165,11 +172,11 @@ func (s *messageService) GetRecentMessagesBySession(ctx context.Context,
 
 	tenantID, ok := sessionTenantIDForLookup(ctx)
 	if !ok {
-		logger.Error(ctx, "Tenant ID not found in context for session lookup")
-		return nil, errors.New("tenant ID not found in context")
+		logger.Error(ctx, "Workspace ID not found in context for session lookup")
+		return nil, errors.New("workspace ID not found in context")
 	}
 	logger.Infof(ctx, "Checking if session exists, tenant ID: %d", tenantID)
-	_, err := s.sessionRepo.Get(ctx, tenantID, sessionUserIDForLookup(ctx), sessionID)
+	_, err := loadSessionForRead(ctx, s.sessionRepo, tenantID, sessionUserIDForLookup(ctx), sessionID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get session: %v", err)
 		return nil, err
@@ -186,7 +193,21 @@ func (s *messageService) GetRecentMessagesBySession(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Retrieved %d recent messages successfully", len(messages))
-	return messages, nil
+	return s.clarifyReadArtifactVersions(ctx, sessionID, messages), nil
+}
+
+// GetRecentUserMessages returns a session's latest user messages, oldest first.
+func (s *messageService) GetRecentUserMessages(
+	ctx context.Context, sessionID string, limit int,
+) ([]*types.Message, error) {
+	tenantID, ok := sessionTenantIDForLookup(ctx)
+	if !ok {
+		return nil, errors.New("workspace ID not found in context")
+	}
+	if _, err := loadSessionForRead(ctx, s.sessionRepo, tenantID, sessionUserIDForLookup(ctx), sessionID); err != nil {
+		return nil, err
+	}
+	return s.messageRepo.GetRecentUserMessages(ctx, sessionID, limit)
 }
 
 // GetMessagesBySessionBeforeTime retrieves messages sent before a specific time
@@ -198,11 +219,11 @@ func (s *messageService) GetMessagesBySessionBeforeTime(ctx context.Context,
 
 	tenantID, ok := sessionTenantIDForLookup(ctx)
 	if !ok {
-		logger.Error(ctx, "Tenant ID not found in context for session lookup")
-		return nil, errors.New("tenant ID not found in context")
+		logger.Error(ctx, "Workspace ID not found in context for session lookup")
+		return nil, errors.New("workspace ID not found in context")
 	}
 	logger.Infof(ctx, "Checking if session exists, tenant ID: %d", tenantID)
-	_, err := s.sessionRepo.Get(ctx, tenantID, sessionUserIDForLookup(ctx), sessionID)
+	_, err := loadSessionForRead(ctx, s.sessionRepo, tenantID, sessionUserIDForLookup(ctx), sessionID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get session: %v", err)
 		return nil, err
@@ -220,7 +241,7 @@ func (s *messageService) GetMessagesBySessionBeforeTime(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Retrieved %d messages before time successfully", len(messages))
-	return messages, nil
+	return s.clarifyReadArtifactVersions(ctx, sessionID, messages), nil
 }
 
 // UpdateMessage updates an existing message's content or metadata
@@ -290,6 +311,11 @@ func (s *messageService) DeleteMessage(ctx context.Context, sessionID string, me
 		})
 		return err
 	}
+	if s.suggestionRepo != nil {
+		if err := s.suggestionRepo.DeleteByMessageID(ctx, tenantID, sessionID, messageID); err != nil {
+			logger.Warnf(ctx, "Failed to delete suggestions for message %s: %v", messageID, err)
+		}
+	}
 
 	// Async cleanup: delete the associated Knowledge entry from the chat history KB.
 	// Use WithoutCancel so the goroutine survives after the HTTP request context is done.
@@ -319,6 +345,11 @@ func (s *messageService) ClearSessionMessages(ctx context.Context, sessionID str
 	if err := s.messageRepo.DeleteMessagesBySessionID(ctx, sessionID); err != nil {
 		logger.Errorf(ctx, "Failed to delete messages for session %s: %v", sessionID, err)
 		return err
+	}
+	if s.suggestionRepo != nil {
+		if err := s.suggestionRepo.DeleteBySessionID(ctx, tenantID, sessionID); err != nil {
+			logger.Warnf(ctx, "Failed to delete suggestions for session %s: %v", sessionID, err)
+		}
 	}
 
 	logger.Infof(ctx, "All messages cleared for session: %s", sessionID)
@@ -372,30 +403,64 @@ func (s *messageService) IndexMessageToKB(ctx context.Context, userQuery string,
 
 	cfg := s.getChatHistoryConfig(ctx)
 	if cfg == nil {
+		// Say why, otherwise an operator who enabled indexing in the UI sees
+		// "indexed messages: 0" with nothing in the logs to explain it: the
+		// stats endpoint only checks Enabled, while indexing additionally
+		// requires an embedding model and an auto-created KB.
+		logger.Infof(ctx, "Skipping message index for message %s: %s",
+			messageID, describeChatHistorySkip(ctx))
 		return
 	}
 
-	logger.Infof(ctx, "Indexing message to chat history KB %s, message ID: %s, session ID: %s", cfg.KnowledgeBaseID, messageID, sessionID)
-
-	// Build passage content: combine Q&A for better semantic search
-	var passages []string
-	passage := fmt.Sprintf("[Session: %s]\nQ: %s\nA: %s", sessionID, userQuery, assistantAnswer)
-	passages = append(passages, passage)
-
-	// Use async (non-sync) passage creation so it doesn't block the response
-	knowledge, err := s.knowService.CreateKnowledgeFromPassage(ctx, cfg.KnowledgeBaseID, passages, "")
+	// A turn may carry the configuration from before an administrator disabled
+	// or cleared indexing. Re-read it under the same lock as those mutations.
+	tenantID := types.MustTenantIDFromContext(ctx)
+	indexCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	err := s.withChatHistoryLock(indexCtx, tenantID, func(ctx context.Context) error {
+		tenant, err := s.chatHistoryTenant(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		cfg := tenant.ChatHistoryConfig
+		if !cfg.IsConfigured() {
+			return nil
+		}
+		ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
+		passage := fmt.Sprintf("[Session: %s]\nQ: %s\nA: %s", sessionID, userQuery, assistantAnswer)
+		knowledge, err := s.knowService.CreateKnowledgeFromPassage(ctx, cfg.KnowledgeBaseID, []string{passage}, "")
+		if err != nil {
+			return err
+		}
+		return s.messageRepo.UpdateMessageKnowledgeID(ctx, messageID, knowledge.ID)
+	})
 	if err != nil {
 		logger.Warnf(ctx, "Failed to index message to chat history KB: %v", err)
-		return
 	}
+}
 
-	// Link the message to the knowledge entry
-	if err := s.messageRepo.UpdateMessageKnowledgeID(ctx, messageID, knowledge.ID); err != nil {
-		logger.Warnf(ctx, "Failed to update message knowledge_id: %v", err)
-		return
+// describeChatHistorySkip reports which chat-history precondition is missing,
+// for the log line emitted when indexing is skipped. ChatHistoryConfig.
+// IsConfigured requires Enabled plus a selected embedding model plus an
+// auto-created KB, so "enabled" alone is not enough to index.
+func describeChatHistorySkip(ctx context.Context) string {
+	tenant, ok := types.TenantInfoFromContext(ctx)
+	if !ok {
+		return "no tenant in context"
 	}
-
-	logger.Infof(ctx, "Message indexed to chat history KB: knowledge_id=%s, message_id=%s", knowledge.ID, messageID)
+	cfg := tenant.ChatHistoryConfig
+	switch {
+	case cfg == nil:
+		return "chat history config not set"
+	case !cfg.Enabled:
+		return "chat history indexing disabled"
+	case cfg.EmbeddingModelID == "":
+		return "enabled but no embedding model selected"
+	case cfg.KnowledgeBaseID == "":
+		return "enabled but chat history knowledge base not created yet"
+	default:
+		return "chat history config incomplete"
+	}
 }
 
 // DeleteMessageKnowledge deletes the Knowledge entry associated with a message from the chat history KB.
@@ -404,7 +469,7 @@ func (s *messageService) DeleteMessageKnowledge(ctx context.Context, knowledgeID
 		return
 	}
 	logger.Infof(ctx, "Deleting chat history knowledge entry: %s", knowledgeID)
-	if err := s.knowService.DeleteKnowledge(ctx, knowledgeID); err != nil {
+	if err := deleteReferencedKnowledge(ctx, s.knowService, "", []string{knowledgeID}); err != nil {
 		logger.Warnf(ctx, "Failed to delete chat history knowledge %s: %v", knowledgeID, err)
 	}
 }
@@ -424,7 +489,7 @@ func (s *messageService) DeleteSessionKnowledge(ctx context.Context, sessionID s
 	}
 
 	logger.Infof(ctx, "Deleting %d chat history knowledge entries for session %s", len(knowledgeIDs), sessionID)
-	if err := s.knowService.DeleteKnowledgeList(ctx, knowledgeIDs); err != nil {
+	if err := deleteReferencedKnowledge(ctx, s.knowService, "", knowledgeIDs); err != nil {
 		logger.Warnf(ctx, "Failed to batch delete chat history knowledge for session %s: %v", sessionID, err)
 	}
 }
@@ -439,11 +504,11 @@ func (s *messageService) GetChatHistoryKBStats(ctx context.Context) (*types.Chat
 
 	stats := &types.ChatHistoryKBStats{}
 	cfg := tenant.ChatHistoryConfig
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return stats, nil
 	}
 
-	stats.Enabled = true
+	stats.Enabled = cfg.Enabled
 	stats.EmbeddingModelID = cfg.EmbeddingModelID
 	stats.KnowledgeBaseID = cfg.KnowledgeBaseID
 
@@ -451,20 +516,95 @@ func (s *messageService) GetChatHistoryKBStats(ctx context.Context) (*types.Chat
 		return stats, nil
 	}
 
-	// Fetch KB info and fill counts (KnowledgeCount is gorm:"-", needs FillKnowledgeBaseCounts)
+	// Count directly: FillKnowledgeBaseCounts is a best-effort UI helper and
+	// intentionally swallows database errors, which must not unlock this model.
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, cfg.KnowledgeBaseID)
 	if err != nil {
-		logger.Warnf(ctx, "Failed to get chat history KB %s: %v", cfg.KnowledgeBaseID, err)
-		return stats, nil
+		return nil, fmt.Errorf("get chat history knowledge base: %w", err)
 	}
-	if err := s.kbService.FillKnowledgeBaseCounts(ctx, kb); err != nil {
-		logger.Warnf(ctx, "Failed to fill chat history KB counts %s: %v", cfg.KnowledgeBaseID, err)
+	if kb == nil || kb.TenantID != tenantID {
+		return nil, errors.New("chat history knowledge base does not belong to workspace")
+	}
+	count, err := s.knowService.GetRepository().CountAllKnowledgeByKnowledgeBaseID(ctx, tenantID, kb.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count chat history indexes: %w", err)
 	}
 	stats.KnowledgeBaseName = kb.Name
-	stats.IndexedMessageCount = kb.KnowledgeCount
-	stats.HasIndexedMessages = kb.KnowledgeCount > 0
+	stats.IndexedMessageCount = count
+	stats.HasIndexedMessages = count > 0
 
 	return stats, nil
+}
+
+// GetSessionArtifacts returns every skill-produced artifact recorded against
+// any assistant message of the session. Thin pass-through to the repository:
+// the collector and session cleanup both need it, and centralising it here
+// keeps tests able to inject a stub MessageService.
+func (s *messageService) GetSessionArtifacts(
+	ctx context.Context, sessionID string,
+) (types.MessageArtifacts, error) {
+	if sessionID == "" {
+		return types.MessageArtifacts{}, nil
+	}
+	return s.messageRepo.GetSessionArtifacts(ctx, sessionID)
+}
+
+// artifactLibraryMaxPageSize caps one library page; the page renders a card
+// per row, so larger pages only cost bandwidth.
+const artifactLibraryMaxPageSize = 100
+
+// ListArtifactLibrary lists the latest version of every artifact in the
+// sessions the caller can see. Scope follows ListSessions for its default
+// (unfiltered) view: the caller's own sessions plus legacy tenant-level ones.
+func (s *messageService) ListArtifactLibrary(
+	ctx context.Context, query *types.ArtifactLibraryQuery,
+) (*types.PageResult, error) {
+	if query == nil {
+		query = &types.ArtifactLibraryQuery{}
+	}
+	query.TenantID = types.MustTenantIDFromContext(ctx)
+	query.UserID = types.SessionOwnerIDFromContext(ctx)
+	pagination := &types.Pagination{Page: query.Page, PageSize: query.PageSize}
+	query.Page = pagination.GetPage()
+	query.PageSize = min(pagination.GetPageSize(), artifactLibraryMaxPageSize)
+	pagination.PageSize = query.PageSize
+	query.FileTypes = normalizeArtifactFileTypes(query.FileTypes)
+
+	items, total, err := s.messageRepo.ListArtifactLibrary(ctx, query)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"tenant_id": query.TenantID,
+			"user_id":   query.UserID,
+		})
+		return nil, err
+	}
+	for _, item := range items {
+		if handle, ok := types.ParseResourcePath(item.URL); ok {
+			item.Handle = types.BuildResourcePath(handle)
+		}
+	}
+	return types.NewPageResult(total, pagination, items), nil
+}
+
+// normalizeArtifactFileTypes lower-cases extensions and adds the leading dot
+// the collector stores ("pdf" and ".PDF" both become ".pdf").
+func normalizeArtifactFileTypes(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, raw := range in {
+		ext := strings.ToLower(strings.TrimSpace(raw))
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		if !seen[ext] {
+			seen[ext] = true
+			out = append(out, ext)
+		}
+	}
+	return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -474,9 +614,18 @@ func (s *messageService) GetChatHistoryKBStats(ctx context.Context) (*types.Chat
 // SearchMessages searches messages by keyword and/or vector similarity across all sessions of the current tenant.
 // Vector search is delegated to the chat history knowledge base's HybridSearch (configured via ChatHistoryConfig).
 func (s *messageService) SearchMessages(ctx context.Context, params *types.MessageSearchParams) (*types.MessageSearchResult, error) {
-	logger.Infof(ctx, "Start searching messages, query: %s, mode: %s", params.Query, params.Mode)
+	logger.Infof(ctx, "Start searching messages, query: %s, mode: %s",
+		secutils.SanitizeForLog(params.Query), secutils.SanitizeForLog(string(params.Mode)))
 
 	tenantID := types.MustTenantIDFromContext(ctx)
+
+	// Conversation search is scoped to the person asking, exactly as the
+	// session list is. Sessions are per-user state, and a workspace-wide
+	// keyword search over them let any viewer read a colleague's private
+	// conversations, which is not something a search box should be able to do.
+	if params.OwnerID == "" {
+		params.OwnerID = types.SessionOwnerIDFromContext(ctx)
+	}
 
 	// Set defaults
 	if params.Mode == "" {
@@ -490,9 +639,10 @@ func (s *messageService) SearchMessages(ctx context.Context, params *types.Messa
 	var vectorResults []*types.MessageSearchResultItem
 	var err error
 
-	// Step 1: Keyword search (direct PG ILIKE)
+	// Step 1: Keyword search (dialect-aware LIKE in the repository)
 	if params.Mode == types.MessageSearchModeKeyword || params.Mode == types.MessageSearchModeHybrid {
-		keywordResults, err = s.messageRepo.SearchMessagesByKeyword(ctx, tenantID, params.Query, params.SessionIDs, params.Limit*3)
+		keywordResults, err = s.messageRepo.SearchMessagesByKeyword(
+			ctx, tenantID, params.OwnerID, params.Query, params.SessionIDs, params.Limit*3)
 		if err != nil {
 			logger.Errorf(ctx, "Keyword search failed: %v", err)
 			return nil, err
@@ -525,6 +675,13 @@ func (s *messageService) SearchMessages(ctx context.Context, params *types.Messa
 		items = rrfMerge(keywordResults, vectorResults)
 	}
 
+	// The vector path resolves hits through a shared knowledge base that does
+	// not know who wrote a message, so ownership is re-checked on the results.
+	items, err = s.restrictToOwnedSessions(ctx, tenantID, params.OwnerID, items)
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 4: Fetch partner messages (Q&A counterparts) to ensure complete pairs
 	items = s.fetchPartnerMessages(ctx, items)
 
@@ -543,6 +700,38 @@ func (s *messageService) SearchMessages(ctx context.Context, params *types.Messa
 
 	logger.Infof(ctx, "Message search completed, returning %d grouped results", result.Total)
 	return result, nil
+}
+
+// restrictToOwnedSessions drops results from sessions the caller does not own.
+func (s *messageService) restrictToOwnedSessions(
+	ctx context.Context, tenantID uint64, ownerID string, items []*types.MessageSearchResultItem,
+) ([]*types.MessageSearchResultItem, error) {
+	if ownerID == "" || len(items) == 0 {
+		return items, nil
+	}
+	sessionIDs := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item == nil || item.SessionID == "" {
+			continue
+		}
+		if _, dup := seen[item.SessionID]; dup {
+			continue
+		}
+		seen[item.SessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, item.SessionID)
+	}
+	owned, err := s.messageRepo.OwnedSessionIDs(ctx, tenantID, ownerID, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]*types.MessageSearchResultItem, 0, len(items))
+	for _, item := range items {
+		if item != nil && owned[item.SessionID] {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
 }
 
 // vectorSearchViaKB performs vector search using the chat history knowledge base's HybridSearch.
@@ -752,14 +941,14 @@ func (s *messageService) fetchPartnerMessages(ctx context.Context, items []*type
 	existingIDs := make(map[string]bool)
 	for _, item := range items {
 		existingIDs[item.ID] = true
-		rid := item.RequestID
-		if rid == "" {
+		if item.RequestID == "" || item.SessionID == "" {
 			continue
 		}
-		rs, ok := seen[rid]
+		key := searchPairKey(item.SessionID, item.RequestID)
+		rs, ok := seen[key]
 		if !ok {
 			rs = &roleSet{}
-			seen[rid] = rs
+			seen[key] = rs
 		}
 		if item.Role == "user" {
 			rs.hasUser = true
@@ -768,35 +957,38 @@ func (s *messageService) fetchPartnerMessages(ctx context.Context, items []*type
 		}
 	}
 
-	// Find request_ids that need partner lookup
-	var needFetch []string
-	for rid, rs := range seen {
-		if !rs.hasUser || !rs.hasAssistant {
-			needFetch = append(needFetch, rid)
-		}
-	}
-	if len(needFetch) == 0 {
-		return items
-	}
-
-	// Fetch partner messages
-	partners, err := s.messageRepo.GetMessagesByRequestIDs(ctx, needFetch)
-	if err != nil {
-		logger.Warnf(ctx, "Failed to fetch partner messages: %v", err)
-		return items
-	}
-
-	// Append only messages not already in results
-	for _, p := range partners {
-		if existingIDs[p.ID] {
+	needBySession := make(map[string][]string)
+	for key, rs := range seen {
+		if rs.hasUser && rs.hasAssistant {
 			continue
 		}
-		existingIDs[p.ID] = true
-		items = append(items, &types.MessageSearchResultItem{
-			MessageWithSession: *p,
-			Score:              0, // partner is not directly matched
-			MatchType:          "",
-		})
+		sessionID, rid, ok := strings.Cut(key, "\x00")
+		if !ok || sessionID == "" || rid == "" {
+			continue
+		}
+		needBySession[sessionID] = append(needBySession[sessionID], rid)
+	}
+	if len(needBySession) == 0 {
+		return items
+	}
+
+	for sessionID, rids := range needBySession {
+		partners, err := s.messageRepo.GetMessagesByRequestIDs(ctx, sessionID, rids)
+		if err != nil {
+			logger.Warnf(ctx, "Failed to fetch partner messages: %v", err)
+			return items
+		}
+		for _, p := range partners {
+			if existingIDs[p.ID] {
+				continue
+			}
+			existingIDs[p.ID] = true
+			items = append(items, &types.MessageSearchResultItem{
+				MessageWithSession: *p,
+				Score:              0, // partner is not directly matched
+				MatchType:          "",
+			})
+		}
 	}
 
 	return items
@@ -813,10 +1005,9 @@ func groupByRequestID(items []*types.MessageSearchResultItem) []*types.MessageSe
 	nextOrder := 0
 
 	for _, item := range items {
-		key := item.RequestID
-		if key == "" {
-			// No request_id — treat as standalone
-			key = item.ID
+		key := item.ID
+		if item.RequestID != "" {
+			key = searchPairKey(item.SessionID, item.RequestID)
 		}
 
 		g, exists := groups[key]
@@ -872,4 +1063,8 @@ func groupByRequestID(items []*types.MessageSearchResultItem) []*types.MessageSe
 	}
 
 	return result
+}
+
+func searchPairKey(sessionID, requestID string) string {
+	return sessionID + "\x00" + requestID
 }

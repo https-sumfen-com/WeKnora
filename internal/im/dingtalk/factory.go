@@ -5,11 +5,10 @@ import (
 	"fmt"
 
 	"github.com/Tencent/WeKnora/internal/im"
-	"github.com/Tencent/WeKnora/internal/logger"
 )
 
 // NewFactory returns an im.AdapterFactory for DingTalk channels.
-// Supports "webhook" and "websocket" (stream mode, default).
+// Supports "websocket" (Stream) only.
 func NewFactory() im.AdapterFactory {
 	return func(factoryCtx context.Context, channel *im.IMChannel, msgHandler func(context.Context, *im.IncomingMessage) error) (im.Adapter, context.CancelFunc, error) {
 		creds, err := im.ParseCredentials(channel.Credentials)
@@ -25,20 +24,23 @@ func NewFactory() im.AdapterFactory {
 
 		switch mode {
 		case "webhook":
-			adapter := NewWebhookAdapter(clientID, clientSecret, cardTemplateID)
-			return adapter, nil, nil
+			return nil, nil, fmt.Errorf("DingTalk HTTP callbacks are disabled; use Stream mode")
 
 		case "websocket":
-			client := NewLongConnClient(clientID, clientSecret, msgHandler)
-
 			wsCtx, wsCancel := context.WithCancel(context.Background())
-			go func() {
-				if err := client.Start(wsCtx); err != nil && wsCtx.Err() == nil {
-					logger.Errorf(context.Background(), "[IM] DingTalk stream stopped for channel %s: %v", channel.ID, err)
-				}
-			}()
+			go im.RunSupervised(wsCtx, im.SupervisorConfig{
+				Name: fmt.Sprintf("DingTalk channel %s", channel.ID),
+				Connect: func(ctx context.Context) (func(), error) {
+					client := NewLongConnClient(clientID, clientSecret, msgHandler)
+					if err := client.Start(ctx); err != nil {
+						client.Close()
+						return nil, err
+					}
+					return client.Close, nil
+				},
+			})
 
-			adapter := NewAdapter(client, clientID, clientSecret, cardTemplateID)
+			adapter := NewAdapter(clientID, clientSecret, cardTemplateID)
 			return adapter, wsCancel, nil
 
 		default:

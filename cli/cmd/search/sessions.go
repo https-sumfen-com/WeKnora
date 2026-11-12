@@ -48,7 +48,9 @@ type SessionsSearchOptions struct {
 // Server has no session-search endpoint; CLI pages through and filters by
 // Title / Description client-side.
 type SessionsSearchService interface {
-	GetSessionsByTenant(ctx context.Context, page, pageSize int) ([]sdk.Session, int, error)
+	GetSessionsByTenant(
+		ctx context.Context, page, pageSize int, opts ...sdk.SessionListOptions,
+	) ([]sdk.Session, int, error)
 }
 
 // NewCmdSessions builds `weknora search sessions "<query>"`. Finds chat
@@ -93,8 +95,9 @@ to stop after one page.`,
 	cmd.Flags().BoolVar(&opts.AllPages, "all-pages", true, "Walk every server page until exhausted or --limit hit")
 	cmdutil.AddFormatFlag(cmd, sessionsSearchFields...)
 	cmdutil.SetAgentHelp(cmd, cmdutil.AgentHelp{
-		UsedFor:  "Find chat sessions by title or description (client-side case-insensitive substring match). Results come with meta.count; use --limit to cap and --all-pages=false to stop after one page.",
-		Examples: []string{`weknora search sessions "onboarding" --format json`},
+		UsedFor:       "Find chat sessions by title or description (client-side case-insensitive substring match). Results come with meta.count; use --limit to cap and --all-pages=false to stop after one page.",
+		RequiredFlags: []string{"<query> (positional)"},
+		Examples:      []string{`weknora search sessions "onboarding" --format json`},
 		Output:   "envelope.data is an array of Session objects with id, title, updated_at; meta.count is the returned count; meta.has_more=true if more matched than --limit",
 	})
 	return cmd
@@ -146,7 +149,7 @@ done:
 		if matches == nil {
 			matches = []sdk.Session{}
 		}
-		meta := &output.Meta{Count: len(matches), HasMore: truncated}
+		meta := &output.Meta{Count: output.IntPtr(len(matches)), HasMore: truncated}
 		return fopts.Emit(iostreams.IO.Out, matches, meta)
 	}
 	if len(matches) == 0 {

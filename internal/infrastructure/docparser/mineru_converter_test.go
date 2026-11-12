@@ -1,10 +1,326 @@
 package docparser
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/utils"
 )
+
+func TestNewMinerUReaderResolvesParseMethod(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]string
+		want      string
+	}{
+		{name: "default is auto", overrides: map[string]string{}, want: "auto"},
+		{name: "legacy enabled becomes auto", overrides: map[string]string{"mineru_enable_ocr": "true"}, want: "auto"},
+		{name: "legacy disabled becomes text", overrides: map[string]string{"mineru_enable_ocr": "false"}, want: "txt"},
+		{name: "explicit method wins", overrides: map[string]string{"mineru_parse_method": "ocr", "mineru_enable_ocr": "false"}, want: "ocr"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := NewMinerUReader(tt.overrides)
+			if reader.parseMethod != tt.want {
+				t.Fatalf("parseMethod = %q, want %q", reader.parseMethod, tt.want)
+			}
+		})
+	}
+}
+
+func TestMinerUUploadFileName(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileName string
+		fileType string
+		want     string
+	}{
+		{name: "original basename", fileName: "reports/Illustrator 研报.pdf", fileType: "pdf", want: "Illustrator 研报.pdf"},
+		{
+			name:     "strip multipart controls",
+			fileName: "reports/\r\nIllustrator\x00 export.pdf",
+			fileType: "pdf",
+			want:     "Illustrator export.pdf",
+		},
+		{name: "append extension from type", fileName: "report", fileType: "pdf", want: "report.pdf"},
+		{name: "fallback from bare type", fileType: "pdf", want: "document.pdf"},
+		{name: "fallback from dotted uppercase type", fileType: ".PDF", want: "document.pdf"},
+		{name: "fallback from path-only name", fileName: "/", fileType: "pdf", want: "document.pdf"},
+		{name: "legacy fallback without metadata", want: "document"},
+		{name: "reject unsafe fallback type", fileType: "../pdf", want: "document"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := minerUUploadFileName(tt.fileName, tt.fileType); got != tt.want {
+				t.Fatalf("minerUUploadFileName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseMinerUFileParseResponse(t *testing.T) {
+	tests := []struct {
+		name           string
+		uploadFileName string
+		response       map[string]any
+		wantMarkdown   string
+		wantResultKey  string
+	}{
+		{
+			name:           "match upload stem",
+			uploadFileName: "Illustrator 研报.pdf",
+			response: map[string]any{
+				"results": map[string]any{
+					"Illustrator 研报": map[string]any{"md_content": "from-stem", "images": map[string]any{}},
+				},
+			},
+			wantMarkdown:  "from-stem",
+			wantResultKey: "Illustrator 研报",
+		},
+		{
+			name:           "legacy document key",
+			uploadFileName: "document",
+			response: map[string]any{
+				"results": map[string]any{
+					"document": map[string]any{"md_content": "legacy", "images": map[string]any{}},
+				},
+			},
+			wantMarkdown:  "legacy",
+			wantResultKey: "document",
+		},
+		{
+			name:           "files variant",
+			uploadFileName: "document.pdf",
+			response: map[string]any{
+				"results": map[string]any{
+					"files": map[string]any{"md_content": "from-files", "images": map[string]any{}},
+				},
+			},
+			wantMarkdown:  "from-files",
+			wantResultKey: "files",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			respBody, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+			gotMarkdown, _, gotKey, err := parseMinerUFileParseResponse(respBody, tt.uploadFileName)
+			if err != nil {
+				t.Fatalf("parseMinerUFileParseResponse() error: %v", err)
+			}
+			if gotMarkdown != tt.wantMarkdown {
+				t.Fatalf("markdown = %q, want %q", gotMarkdown, tt.wantMarkdown)
+			}
+			if gotKey != tt.wantResultKey {
+				t.Fatalf("result key = %q, want %q", gotKey, tt.wantResultKey)
+			}
+		})
+	}
+}
+
+func TestMinerULegacyMultipartRequest(t *testing.T) {
+	utils.SetSSRFWhitelistFromRaw("127.0.0.1")
+	t.Cleanup(func() {
+		utils.SetSSRFWhitelistFromRaw("")
+	})
+
+	const fileContent = "%PDF-1.7 synthetic test content"
+	tests := []struct {
+		name       string
+		fileName   string
+		fileType   string
+		want       string
+		backend    string
+		effort     string
+		wantEffort string
+		apiKey     string
+		wantAuth   string
+	}{
+		{name: "original basename", fileName: "reports/Illustrator 研报.pdf", fileType: "pdf", want: "Illustrator 研报.pdf"},
+		{
+			name:     "strip multipart controls",
+			fileName: "reports/\r\nIllustrator\x00 export.pdf",
+			fileType: "pdf",
+			want:     "Illustrator export.pdf",
+		},
+		{name: "fallback from bare type", fileType: "pdf", want: "document.pdf"},
+		{name: "fallback from dotted uppercase type", fileType: ".PDF", want: "document.pdf"},
+		{name: "fallback from path-only name", fileName: "/", fileType: "pdf", want: "document.pdf"},
+		{name: "legacy fallback without metadata", want: "document"},
+		{name: "reject unsafe fallback type", fileType: "../pdf", want: "document"},
+		{
+			name: "hybrid high effort", fileName: "report.pdf", want: "report.pdf",
+			backend: "hybrid-auto-engine", effort: " HIGH ", wantEffort: "high",
+		},
+		{
+			name: "hybrid medium effort", fileName: "report.pdf", want: "report.pdf",
+			backend: "hybrid-auto-engine", effort: "medium", wantEffort: "medium",
+		},
+		{
+			name: "non-hybrid ignores effort", fileName: "report.pdf", want: "report.pdf",
+			backend: "pipeline", effort: "high",
+		},
+		{
+			name: "invalid effort is omitted", fileName: "report.pdf", want: "report.pdf",
+			backend: "hybrid-auto-engine", effort: "invalid",
+		},
+		{
+			name: "legacy gateway auth header", fileName: "report.pdf", want: "report.pdf",
+			apiKey: "sk-test-key", wantAuth: "Bearer sk-test-key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type capturedRequest struct {
+				method    string
+				path      string
+				fileName  string
+				content   string
+				effort    string
+				hasEffort bool
+				auth      string
+				err       error
+			}
+
+			captured := make(chan capturedRequest, 1)
+			uploadName := minerUUploadFileName(tt.fileName, tt.fileType)
+			resultStem := minerUResultStem(uploadName)
+			responseBody, err := json.Marshal(map[string]any{
+				"results": map[string]any{
+					resultStem: map[string]any{
+						"md_content": "ok",
+						"images":     map[string]any{},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/health" {
+					// MinerU <= 3.x has no V1 API.
+					http.NotFound(w, r)
+					return
+				}
+				got := capturedRequest{method: r.Method, path: r.URL.Path}
+				got.auth = r.Header.Get("Authorization")
+				file, header, err := r.FormFile("files")
+				got.effort = r.FormValue("effort")
+				_, got.hasEffort = r.MultipartForm.Value["effort"]
+				if err != nil {
+					got.err = err
+				} else {
+					got.fileName = header.Filename
+					content, readErr := io.ReadAll(file)
+					got.content = string(content)
+					got.err = readErr
+					_ = file.Close()
+				}
+				captured <- got
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(responseBody)
+			}))
+			defer server.Close()
+
+			reader := NewMinerUReader(map[string]string{
+				"mineru_endpoint": server.URL,
+				"mineru_model":    tt.backend,
+				"mineru_effort":   tt.effort,
+			})
+			if tt.apiKey != "" {
+				reader.apiKey = tt.apiKey
+			}
+			result, err := reader.Read(context.Background(), &types.ReadRequest{
+				FileContent: []byte(fileContent),
+				FileName:    tt.fileName,
+				FileType:    tt.fileType,
+			})
+			if err != nil {
+				t.Fatalf("Read returned error: %v", err)
+			}
+			if result.MarkdownContent != "ok" {
+				t.Fatalf("MarkdownContent = %q, want %q", result.MarkdownContent, "ok")
+			}
+
+			request := <-captured
+			if request.err != nil {
+				t.Fatalf("capture multipart request: %v", request.err)
+			}
+			if request.method != http.MethodPost {
+				t.Errorf("method = %q, want %q", request.method, http.MethodPost)
+			}
+			if request.path != "/file_parse" {
+				t.Errorf("path = %q, want %q", request.path, "/file_parse")
+			}
+			if request.fileName != tt.want {
+				t.Errorf("multipart filename = %q, want %q", request.fileName, tt.want)
+			}
+			if request.content != fileContent {
+				t.Errorf("multipart content = %q, want %q", request.content, fileContent)
+			}
+			if request.effort != tt.wantEffort || request.hasEffort != (tt.wantEffort != "") {
+				t.Errorf("multipart effort = %q (present=%v), want %q",
+					request.effort, request.hasEffort, tt.wantEffort)
+			}
+			if request.auth != tt.wantAuth {
+				t.Errorf("Authorization header = %q, want %q", request.auth, tt.wantAuth)
+			}
+		})
+	}
+}
+
+func TestPingMinerULegacyGatewayAuth(t *testing.T) {
+	allowLoopbackSSRF(t)
+
+	const key = "sk-gateway-key"
+	var gotAuth string
+	// A legacy MinerU server (no /v1/health) sitting behind an authenticating
+	// gateway: /docs answers 401 without the key, 200 with it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			http.NotFound(w, r)
+		case "/docs":
+			gotAuth = r.Header.Get("Authorization")
+			if gotAuth != "Bearer "+key {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ok, msg := PingMinerU(server.URL, key)
+	if !ok {
+		t.Fatalf("PingMinerU with gateway key = false, msg = %q; want true", msg)
+	}
+	if gotAuth != "Bearer "+key {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer "+key)
+	}
+
+	// Without a key the legacy probe should still surface the gateway 401.
+	ok, _ = PingMinerU(server.URL, "")
+	if ok {
+		t.Errorf("PingMinerU without key = true; want false (gateway requires auth)")
+	}
+}
 
 func TestNormalizeMinerUMarkdownPreservesMarkdownAndHTML(t *testing.T) {
 	input := strings.Join([]string{

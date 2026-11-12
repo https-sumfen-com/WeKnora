@@ -62,6 +62,7 @@ type UploadService interface {
 		metadata map[string]string,
 		enableMultimodel *bool,
 		customFileName, channel string,
+		processConfig *sdk.KnowledgeProcessOverrides,
 	) (*sdk.Knowledge, error)
 }
 
@@ -82,7 +83,9 @@ has a generic name like "report.pdf" but you want to surface it as e.g.
 
 The two input modes (positional file / --recursive directory walk) are
 mutually exclusive - pass exactly one. Use --recursive --glob to upload a
-directory tree (see Examples). To ingest a remote URL use "weknora doc fetch";
+directory tree (see Examples); subdirectories are preserved as knowledge-base
+folders, so a nested file lands at its path relative to the walked directory.
+To ingest a remote URL use "weknora doc fetch";
 to create an entry from inline text use "weknora doc create".
 
 Server-side ingestion knobs:
@@ -190,8 +193,12 @@ Server-side ingestion knobs:
 	cmdutil.AddDryRunFlag(cmd, &opts.DryRun)
 	cmdutil.SetAgentHelp(cmd, cmdutil.AgentHelp{
 		UsedFor:       "Upload a local file to the resolved knowledge base. KB resolved via --kb flag, WEKNORA_KB_ID env, or project link. Emits the created Knowledge object with its id.",
-		RequiredFlags: []string{"<file> (positional)"},
-		Output:        "envelope.data is the created Knowledge object with id, knowledge_base_id, file_name, parse_status",
+		RequiredFlags: []string{"<file> (positional)", "--kb (or WEKNORA_KB_ID / project link)"},
+		Examples: []string{
+			`weknora doc upload report.pdf --kb kb_eng`,
+			`weknora doc upload report.pdf --kb kb_eng --jq .data.id   # then: doc wait <id>`,
+		},
+		Output: "envelope.data is the created Knowledge object with id, knowledge_base_id, file_name, parse_status",
 	})
 	return cmd
 }
@@ -294,7 +301,7 @@ func runUpload(ctx context.Context, opts *UploadOptions, fopts *cmdutil.FormatOp
 	if err != nil {
 		return err
 	}
-	k, err := svc.CreateKnowledgeFromFile(ctx, kbID, path, meta, opts.EnableMultimodel, opts.Name, cmp.Or(opts.Channel, uploadChannel))
+	k, err := svc.CreateKnowledgeFromFile(ctx, kbID, path, meta, opts.EnableMultimodel, opts.Name, cmp.Or(opts.Channel, uploadChannel), nil)
 	if err != nil {
 		if errors.Is(err, sdk.ErrDuplicateFile) {
 			// SDK returns sentinel without an "HTTP error <status>:" prefix

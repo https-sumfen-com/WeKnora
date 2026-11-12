@@ -3,8 +3,10 @@ package chatpipeline
 import (
 	"context"
 	"fmt"
+	"html"
 	"strings"
 
+	"github.com/Tencent/WeKnora/internal/reranking"
 	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -14,11 +16,16 @@ import (
 // PluginIntoChatMessage handles the transformation of search results into chat messages
 type PluginIntoChatMessage struct {
 	messageService interfaces.MessageService
+	// kbService reads retrieved images for a vision chat model. Nil leaves
+	// the model with their captions.
+	kbService interfaces.KnowledgeBaseService
 }
 
 // NewPluginIntoChatMessage creates and registers a new PluginIntoChatMessage instance
-func NewPluginIntoChatMessage(eventManager *EventManager, messageService interfaces.MessageService) *PluginIntoChatMessage {
-	res := &PluginIntoChatMessage{messageService: messageService}
+func NewPluginIntoChatMessage(
+	eventManager *EventManager, messageService interfaces.MessageService, kbService interfaces.KnowledgeBaseService,
+) *PluginIntoChatMessage {
+	res := &PluginIntoChatMessage{messageService: messageService, kbService: kbService}
 	eventManager.Register(res)
 	return res
 }
@@ -41,17 +48,25 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	// Separate FAQ and document results when FAQ priority is enabled
 	var faqResults, docResults []*types.SearchResult
 	var hasHighConfidenceFAQ bool
+	// exactFAQ is the position in faqResults of the FAQ that cleared the
+	// direct-answer threshold; only that entry is marked as an exact match.
+	exactFAQ := -1
 
 	if chatManage.FAQPriorityEnabled {
 		for _, result := range chatManage.MergeResult {
 			if result.ChunkType == string(types.ChunkTypeFAQ) {
 				faqResults = append(faqResults, result)
-				// Check if this FAQ has high confidence (above direct answer threshold)
-				if result.Score >= chatManage.FAQDirectAnswerThreshold && !hasHighConfidenceFAQ {
+				// Check if this FAQ has high confidence (above direct answer
+				// threshold). Compare the score before boosts: the FAQ boost
+				// exists to rank FAQs above documents, and letting it (or the
+				// wiki/memory boosts) lift an FAQ over the threshold marked
+				// middling matches as exact.
+				if reranking.PreBoostScore(result) >= chatManage.FAQDirectAnswerThreshold && !hasHighConfidenceFAQ {
 					hasHighConfidenceFAQ = true
+					exactFAQ = len(faqResults) - 1
 					pipelineInfo(ctx, "IntoChatMessage", "high_confidence_faq", map[string]interface{}{
 						"chunk_id":  result.ID,
-						"score":     fmt.Sprintf("%.4f", result.Score),
+						"score":     fmt.Sprintf("%.4f", reranking.PreBoostScore(result)),
 						"threshold": chatManage.FAQDirectAnswerThreshold,
 					})
 				}
@@ -118,6 +133,9 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	}
 
 	var contextsBuilder strings.Builder
+	// Keep the result order for image selection; final model handles are
+	// assigned later, in prepareMessagesWithModelContext.
+	var contextOrder []*types.SearchResult
 
 	// Collect unique document metadata (title + description), once per knowledge
 	allResults := chatManage.MergeResult
@@ -135,7 +153,8 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 		contextsBuilder.WriteString("<source type=\"faq\" priority=\"high\">\n")
 		for i, result := range faqResults {
 			passage := getEnrichedPassageForChat(ctx, result)
-			if hasHighConfidenceFAQ && i == 0 {
+			contextOrder = append(contextOrder, result)
+			if i == exactFAQ {
 				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\" match=\"exact\">%s</context>\n", i+1, passage))
 			} else {
 				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"FAQ-%d\">%s</context>\n", i+1, passage))
@@ -147,6 +166,7 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 			contextsBuilder.WriteString("<source type=\"document\" priority=\"supplementary\">\n")
 			for i, result := range docResults {
 				passage := getEnrichedPassageForChat(ctx, result)
+				contextOrder = append(contextOrder, result)
 				contextsBuilder.WriteString(fmt.Sprintf("<context id=\"DOC-%d\">%s</context>\n", i+1, passage))
 			}
 			contextsBuilder.WriteString("</source>")
@@ -154,6 +174,7 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	} else {
 		for i, result := range chatManage.MergeResult {
 			passage := getEnrichedPassageForChat(ctx, result)
+			contextOrder = append(contextOrder, result)
 			if i > 0 {
 				contextsBuilder.WriteString("\n")
 			}
@@ -175,6 +196,7 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
 		userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
 	}
+	p.attachContextImages(ctx, chatManage, contextOrder)
 	if chatManage.QuotedContext != "" {
 		userContent += "\n\n" + chatManage.QuotedContext
 	}
@@ -196,6 +218,36 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 
 	p.persistRenderedContent(ctx, chatManage)
 	return next()
+}
+
+// attachContextImages reads, for a vision chat model, the images of the
+// contexts that rest on an image matched by its own vector: the caption a
+// context carries may leave out exactly what matched. It sets ContextImages
+// and durable chunk IDs; the final message renderer supplies their handles.
+func (p *PluginIntoChatMessage) attachContextImages(
+	ctx context.Context, chatManage *types.ChatManage, contexts []*types.SearchResult,
+) {
+	chatManage.ContextImages = nil
+	chatManage.ContextImageChunkIDs = nil
+	if !chatManage.ChatModelSupportsVision || p.kbService == nil {
+		return
+	}
+	images, positions := searchutil.ContextImages(
+		ctx, contexts, p.kbService.ReadChunkImage, searchutil.MaxContextImages)
+	if len(images) == 0 {
+		return
+	}
+	chatManage.ContextImages = images
+	named := make([]string, len(positions))
+	for i, pos := range positions {
+		named[i] = contexts[pos].ID
+	}
+	chatManage.ContextImageChunkIDs = named
+	pipelineInfo(ctx, "IntoChatMessage", "context_images", map[string]interface{}{
+		"session_id": chatManage.SessionID,
+		"count":      len(images),
+		"contexts":   named,
+	})
 }
 
 // persistRenderedContent asynchronously writes the RAG-augmented UserContent back
@@ -240,6 +292,7 @@ func buildDocumentHeader(results []*types.SearchResult) string {
 	type docMeta struct {
 		title       string
 		description string
+		metadata    string
 	}
 
 	seen := make(map[string]struct{})
@@ -265,6 +318,7 @@ func buildDocumentHeader(results []*types.SearchResult) string {
 		docs = append(docs, docMeta{
 			title:       title,
 			description: r.KnowledgeDescription,
+			metadata:    r.KnowledgeCustomMetadata,
 		})
 	}
 
@@ -276,9 +330,12 @@ func buildDocumentHeader(results []*types.SearchResult) string {
 	b.WriteString("<documents>\n")
 	for _, d := range docs {
 		b.WriteString("<document>\n")
-		b.WriteString(fmt.Sprintf("<title>%s</title>\n", d.title))
+		b.WriteString(fmt.Sprintf("<title>%s</title>\n", html.EscapeString(d.title)))
 		if d.description != "" {
-			b.WriteString(fmt.Sprintf("<description>%s</description>\n", d.description))
+			b.WriteString(fmt.Sprintf("<description>%s</description>\n", html.EscapeString(d.description)))
+		}
+		if d.metadata != "" {
+			b.WriteString(fmt.Sprintf("<metadata>%s</metadata>\n", html.EscapeString(d.metadata)))
 		}
 		b.WriteString("</document>\n")
 	}
@@ -304,5 +361,5 @@ func getEnrichedPassageForChat(ctx context.Context, result *types.SearchResult) 
 
 // enrichContentWithImageInfo delegates to the shared searchutil implementation.
 func enrichContentWithImageInfo(_ context.Context, content string, imageInfoJSON string) string {
-	return searchutil.EnrichContentWithImageInfo(content, imageInfoJSON)
+	return searchutil.EnrichContentWithImageInfoForChat(content, imageInfoJSON)
 }

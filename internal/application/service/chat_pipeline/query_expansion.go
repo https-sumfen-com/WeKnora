@@ -6,17 +6,30 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
 // runQueryExpansion performs query expansion when initial recall is low.
 // It generates query variants and runs concurrent retrieval across search targets.
+//
+// The variants are local rewrites of the query (stopwords dropped, words
+// reordered), so they only add recall on the keyword side: their embeddings
+// sit next to the original query's, and the vector half of each search
+// re-embedded the variant and repeated the main search. Expansion therefore
+// searches keywords only, and does nothing when keyword matching is off.
 func (p *PluginSearch) runQueryExpansion(ctx context.Context, chatManage *types.ChatManage) []*types.SearchResult {
 	pipelineInfo(ctx, "Search", "recall_low", map[string]interface{}{
 		"current":   len(chatManage.SearchResult),
 		"threshold": chatManage.EmbeddingTopK,
 	})
+	if chatManage.DisableKeywordsMatch {
+		pipelineInfo(ctx, "Search", "expansion_skip", map[string]interface{}{
+			"reason": "keyword_match_disabled",
+		})
+		return nil
+	}
 	expansions := p.expandQueries(ctx, chatManage)
 	if len(expansions) == 0 {
 		return nil
@@ -47,18 +60,26 @@ func (p *PluginSearch) runQueryExpansion(ctx context.Context, chatManage *types.
 	})
 	for _, q := range expansions {
 		for _, target := range chatManage.SearchTargets {
+			if target == nil || target.KnowledgeBaseID == "" {
+				continue
+			}
 			wgExp.Add(1)
 			go func(q string, t *types.SearchTarget) {
 				defer wgExp.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
+				vectorThreshold, keywordThreshold := t.RecallThresholds(
+					chatManage.VectorThreshold,
+					expKwTh,
+				)
 				paramsExp := types.SearchParams{
 					QueryText:             q,
-					VectorThreshold:       chatManage.VectorThreshold,
-					KeywordThreshold:      expKwTh,
+					VectorThreshold:       vectorThreshold,
+					KeywordThreshold:      keywordThreshold,
 					MatchCount:            expTopK,
-					DisableVectorMatch:    false,
-					DisableKeywordsMatch:  false,
+					TagIDs:                t.TagIDs,
+					ScopeTagIDs:           t.ScopeTagIDs,
+					DisableVectorMatch:    true,
 					SkipContextEnrichment: true, // Pipeline handles context assembly in merge stage
 				}
 				// Apply knowledge ID filter if this is a partial KB search
@@ -180,12 +201,17 @@ var stopwords = map[string]struct{}{
 // Question words in Chinese
 var questionWords = regexp.MustCompile(`^(什么是|什么|如何|怎么|怎样|为什么|为何|哪个|哪些|谁|何时|何地|请问|请告诉我|帮我|我想知道|我想了解)`)
 
+var (
+	quotedPhrasePattern = regexp.MustCompile(`["'"'「」『』]([^"'"'「」『』]+)["'"'「」『』]`)
+	delimiterPattern    = regexp.MustCompile(`[,，;；、。！？!?\s]+`)
+)
+
 func extractKeywords(text string) []string {
 	words := tokenize(text)
 	keywords := make([]string, 0, len(words))
 	for _, w := range words {
 		lower := strings.ToLower(w)
-		if _, isStop := stopwords[lower]; !isStop && len(w) > 1 {
+		if _, isStop := stopwords[lower]; !isStop && utf8.RuneCountInString(w) > 1 {
 			keywords = append(keywords, w)
 		}
 	}
@@ -195,8 +221,7 @@ func extractKeywords(text string) []string {
 func extractPhrases(text string) []string {
 	// Extract quoted content
 	var phrases []string
-	re := regexp.MustCompile(`["'"'「」『』]([^"'"'「」『』]+)["'"'「」『』]`)
-	matches := re.FindAllStringSubmatch(text, -1)
+	matches := quotedPhrasePattern.FindAllStringSubmatch(text, -1)
 	for _, m := range matches {
 		if len(m) > 1 && len(m[1]) > 2 {
 			phrases = append(phrases, m[1])
@@ -207,8 +232,7 @@ func extractPhrases(text string) []string {
 
 func splitByDelimiters(text string) []string {
 	// Split by common delimiters
-	re := regexp.MustCompile(`[,，;；、。！？!?\s]+`)
-	parts := re.Split(text, -1)
+	parts := delimiterPattern.Split(text, -1)
 	var result []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -226,28 +250,46 @@ func removeQuestionWords(text string) string {
 func tokenize(text string) []string {
 	var tokens []string
 	var current strings.Builder
+	currentIsHan := false
+
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+
+		if currentIsHan {
+			// Use the existing search-mode dictionary for continuous Chinese text.
+			for _, word := range types.Jieba.CutForSearch(current.String(), true) {
+				word = strings.TrimSpace(word)
+				if word != "" {
+					tokens = append(tokens, word)
+				}
+			}
+		} else {
+			tokens = append(tokens, current.String())
+		}
+
+		current.Reset()
+		currentIsHan = false
+	}
 
 	for _, r := range text {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if unicode.Is(unicode.Han, r) {
+			if current.Len() > 0 && !currentIsHan {
+				flush()
+			}
+			currentIsHan = true
 			current.WriteRune(r)
-		} else if unicode.Is(unicode.Han, r) {
-			// Flush current token
-			if current.Len() > 0 {
-				tokens = append(tokens, current.String())
-				current.Reset()
+		} else if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if current.Len() > 0 && currentIsHan {
+				flush()
 			}
-			// Chinese character as single token
-			tokens = append(tokens, string(r))
+			currentIsHan = false
+			current.WriteRune(r)
 		} else {
-			// Delimiter
-			if current.Len() > 0 {
-				tokens = append(tokens, current.String())
-				current.Reset()
-			}
+			flush()
 		}
 	}
-	if current.Len() > 0 {
-		tokens = append(tokens, current.String())
-	}
+	flush()
 	return tokens
 }

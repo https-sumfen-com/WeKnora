@@ -1,20 +1,24 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { defineComponent } from 'vue'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useUIStore } from '@/stores/ui'
-import { autoSetup, getCurrentUser, sumfenAutoLogin, userInfoFromApi } from '@/api/auth'
+import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
+import { useSettingsStore } from '@/stores/settings'
+import { autoSetup, sumfenAutoLogin, userInfoFromApi } from '@/api/auth'
+import type { DeploymentCapabilityKey } from '@/config/deploymentCapabilities'
+import { MessagePlugin } from 'tdesign-vue-next'
+import i18n from '@/i18n'
+import { normalizeSettingsSection } from '@/config/settingsRoute'
+import { isToolboxSection, toolboxLocation } from '@/config/toolbox'
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
 const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
-const AUTO_SETUP_FAILED_KEY = 'weknora_auto_setup_failed'
 
-function shouldTryAutoSetup() {
-  return localStorage.getItem(AUTO_SETUP_FAILED_KEY) !== 'true'
-}
-
-function markAutoSetupFailed() {
-  localStorage.setItem(AUTO_SETUP_FAILED_KEY, 'true')
-}
+// views/platform/index.vue always mounts the settings modal and opens it when
+// the path is /platform/settings, so this route only has to own the URL.
+// Rendering Settings.vue here would mount a second, independent copy.
+const SettingsRouteOutlet = defineComponent({ name: 'SettingsRouteOutlet', render: () => null })
 
 function isLiteEdition(authStore: ReturnType<typeof useAuthStore>) {
   return authStore.isLiteMode || localStorage.getItem('weknora_lite_mode') === 'true'
@@ -66,6 +70,7 @@ const router = createRouter({
       component: () => import("../views/auth/Login.vue"),
       meta: { requiresAuth: false, requiresInit: false }
     },
+    // Embed chat is a separate entry (embed.html + embed-main.ts), not this SPA.
     {
       path: "/register",
       name: "registerByInvite",
@@ -76,6 +81,12 @@ const router = createRouter({
       // surface for one extra field.
       component: () => import("../views/auth/Login.vue"),
       meta: { requiresAuth: false, requiresInit: false }
+    },
+    {
+      path: "/onboarding/workspace",
+      name: "workspaceOnboarding",
+      component: () => import("../views/auth/WorkspaceOnboarding.vue"),
+      meta: { requiresAuth: true, requiresInit: false, requiresTenant: false }
     },
     {
       path: "/join",
@@ -110,7 +121,7 @@ const router = createRouter({
         {
           path: "settings",
           name: "settings",
-          component: () => import("../views/settings/Settings.vue"),
+          component: SettingsRouteOutlet,
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
@@ -137,9 +148,44 @@ const router = createRouter({
           },
         },
         {
+          path: "artifacts",
+          name: "artifactLibrary",
+          component: () => import("../views/artifacts/ArtifactLibrary.vue"),
+          meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'settings.sandbox' }
+        },
+        {
+          path: "toolbox/:section?",
+          name: "toolbox",
+          component: () => import("../views/toolbox/Toolbox.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
+          path: "automations/:automationId?",
+          name: "automationList",
+          component: () => import("../views/automation/AutomationList.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "agents",
           name: "agentList",
           component: () => import("../views/agent/AgentList.vue"),
+          meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'agents' }
+        },
+        {
+          path: "integrations",
+          redirect: (to) => {
+            const tab = typeof to.query.tab === 'string' ? to.query.tab : undefined
+            const incoming = typeof to.query.section === 'string' ? to.query.section : 'integrations'
+            const rest = { ...to.query }
+            delete rest.tab
+            return {
+              path: '/platform/settings',
+              query: {
+                ...rest,
+                section: normalizeSettingsSection(incoming, tab),
+              },
+            }
+          },
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
@@ -164,13 +210,12 @@ const router = createRouter({
           path: "organizations",
           name: "organizationList",
           component: () => import("../views/organization/OrganizationList.vue"),
-          meta: { requiresInit: true, requiresAuth: true }
+          meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'organizations' }
         },
-        // Compatibility redirects for legacy /platform/system/* URLs.
-        // The whole system administration surface — global settings
-        // and the system-admin roster — now lives as a single section
-        // inside the standard Settings modal. We keep the routes
-        // around so old bookmarks / external links don't 404.
+        // Compatibility redirects for /platform/system/* URLs. System
+        // administration surfaces live as dedicated sections inside the
+        // standard Settings modal; keep stable URLs for bookmarks and
+        // external links.
         {
           path: "system",
           redirect: { path: "/platform/settings", query: { section: "system-global" } },
@@ -188,6 +233,12 @@ const router = createRouter({
           redirect: { path: "/platform/settings", query: { section: "system-global" } },
           meta: { requiresInit: true, requiresAuth: true, requiresSystemAdmin: true },
         },
+        {
+          path: "system/queues",
+          name: "systemQueues",
+          redirect: { path: "/platform/settings", query: { section: "runtime-queues" } },
+          meta: { requiresInit: true, requiresAuth: true, requiresSystemAdmin: true },
+        },
       ],
     },
     // Dev-only markdown rendering test page
@@ -203,21 +254,27 @@ const router = createRouter({
 // 持久化 auto-setup / login 返回的认证信息到 store
 function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, response: any) {
   const activeTenant = response.active_tenant || response.tenant
-
-  if (response.user && activeTenant && response.token) {
-    authStore.setUser(userInfoFromApi(response.user, activeTenant.id))
+  if (response.user && response.token) {
+    const homeTenantId = response.user.tenant_id ?? activeTenant?.id ?? ''
+    authStore.setUser(userInfoFromApi(response.user, homeTenantId))
     authStore.setToken(response.token)
     if (response.refresh_token) {
       authStore.setRefreshToken(response.refresh_token)
     }
-    authStore.setTenant({
-      id: String(activeTenant.id) || '',
-      name: activeTenant.name || '',
-      api_key: activeTenant.api_key || '',
-      owner_id: response.user.id || '',
-      created_at: activeTenant.created_at || new Date().toISOString(),
-      updated_at: activeTenant.updated_at || new Date().toISOString()
-    })
+    if (activeTenant) {
+      authStore.setTenant({
+        id: String(activeTenant.id) || '',
+        name: activeTenant.name || '',
+        owner_id: response.user.id || '',
+        created_at: activeTenant.created_at || new Date().toISOString(),
+        updated_at: activeTenant.updated_at || new Date().toISOString()
+      })
+    } else {
+      authStore.setTenant(null)
+    }
+    if (Array.isArray(response.memberships)) {
+      authStore.setMemberships(response.memberships)
+    }
   }
 }
 
@@ -234,46 +291,9 @@ async function hydrateSessionFromToken(authStore: ReturnType<typeof useAuthStore
     authStore.setRefreshToken(storedRefreshToken)
   }
 
-  try {
-    const response = await getCurrentUser()
-    const user = response.data?.user
-    if (!response.success || !user) {
-      return false
-    }
-
-    authStore.setUser(userInfoFromApi(user, response.data?.tenant?.id))
-
-    const tenant = response.data?.tenant
-    if (tenant) {
-      authStore.setTenant({
-        id: String(tenant.id) || '',
-        name: tenant.name || '',
-        api_key: tenant.api_key || '',
-        owner_id: tenant.owner_id || user.id || '',
-        description: tenant.description,
-        status: tenant.status,
-        business: tenant.business,
-        storage_quota: tenant.storage_quota,
-        storage_used: tenant.storage_used,
-        created_at: tenant.created_at || new Date().toISOString(),
-        updated_at: tenant.updated_at || new Date().toISOString(),
-      })
-    }
-
-    // Refresh memberships on every page load — same reason as
-    // App.vue's syncOIDCUserContext: without this the auth store
-    // would only ever see the snapshot from the original /auth/login
-    // call, so role changes (and tenant-switch role lookups) would
-    // be silently stale until the user logged out and back in.
-    const memberships = response.data?.memberships
-    if (Array.isArray(memberships)) {
-      authStore.setMemberships(memberships)
-    }
-
-    return true
-  } catch {
-    return false
-  }
+  // /auth/me 的落库逻辑只在 auth store 里维护一份（user / tenant / memberships /
+  // capabilities），这里只负责先把 token 放进 store。请求本身与启动、侧栏共用去重。
+  return authStore.refreshFromAuthMe()
 }
 
 let autoSetupAttempted = false
@@ -297,6 +317,13 @@ router.beforeEach(async (to, from, next) => {
     uiStore.setHideChatMode(true)
   }
 
+  // Preserve bookmarks for tools that have moved out of Settings.
+  if (to.path === '/platform/settings' && isToolboxSection(to.query.section)) {
+    next({ ...toolboxLocation(to.query.section,
+      typeof to.query.sandboxId === 'string' ? to.query.sandboxId : undefined), replace: true })
+    return
+  }
+
   // Lite：硬刷新后若落在默认首页，恢复本次会话中最后访问的 /platform 子路径
   if (!liteDeepLinkRestoreDone) {
     liteDeepLinkRestoreDone = true
@@ -311,11 +338,29 @@ router.beforeEach(async (to, from, next) => {
     }
   }
 
+  // Tenantless onboarding still requires a valid user token even though it
+  // deliberately skips the normal tenant/system-initialization gates.
+  if (to.path === '/onboarding/workspace') {
+    if (!authStore.isLoggedIn) {
+      const restored = await hydrateSessionFromToken(authStore)
+      if (!restored) {
+        next('/login')
+        return
+      }
+    }
+    if (authStore.hasValidTenant) {
+      next('/platform/knowledge-bases')
+    } else {
+      next()
+    }
+    return
+  }
+
   // 如果访问的是登录页面或初始化页面，直接放行
   if (to.meta.requiresAuth === false || to.meta.requiresInit === false) {
     // 如果已登录用户访问登录页面，重定向到知识库列表页面
     if (to.path === '/login' && authStore.isLoggedIn) {
-      next('/platform/knowledge-bases')
+      next(authStore.hasValidTenant ? '/platform/knowledge-bases' : '/onboarding/workspace')
       return
     }
     next()
@@ -352,12 +397,17 @@ router.beforeEach(async (to, from, next) => {
     if (!authStore.isLoggedIn) {
       const restored = await hydrateSessionFromToken(authStore)
       if (restored) {
-        next(to.fullPath)
+        next(
+          !authStore.hasValidTenant && to.meta.requiresTenant !== false
+            ? '/onboarding/workspace'
+            : to.fullPath,
+        )
         return
       }
 
-      if (!autoSetupAttempted && shouldTryAutoSetup()) {
+      if (!autoSetupAttempted) {
         autoSetupAttempted = true
+        localStorage.removeItem('weknora_auto_setup_failed')
         try {
           const response = await autoSetup()
           if (response.success) {
@@ -365,16 +415,30 @@ router.beforeEach(async (to, from, next) => {
             authStore.setLiteMode(true)
             next(to.fullPath)
             return
-          } else {
-            markAutoSetupFailed()
           }
         } catch {
-          markAutoSetupFailed()
+          // Auto-setup may be unavailable outside the native Lite shell.
         }
       }
       next('/login')
       return
     }
+  }
+
+  if (to.meta.requiresTenant !== false && !authStore.hasValidTenant) {
+    next('/onboarding/workspace')
+    return
+  }
+
+  // 部署能力只描述“后端是否提供该功能”，不反映服务健康或是否已配置。
+  // 探测失败时 Store 会 fail-open，真正的权限和可用性仍由后端接口校验。
+  const deploymentCapabilities = useDeploymentCapabilitiesStore()
+  await deploymentCapabilities.ensureLoaded()
+  const requiredCapability = to.meta.requiredCapability as DeploymentCapabilityKey | undefined
+  if (requiredCapability && !deploymentCapabilities.isSupported(requiredCapability)) {
+    MessagePlugin.warning(i18n.global.t('settings.capabilityUnavailable'))
+    next('/platform/knowledge-bases')
+    return
   }
 
   // SystemAdmin gate — checked AFTER auth so a non-admin who's logged
@@ -389,6 +453,15 @@ router.beforeEach(async (to, from, next) => {
   }
 
   next()
+})
+
+router.beforeResolve((to, from) => {
+  if ((to.name === 'globalCreatChat' || to.name === 'kbCreatChat') && to.fullPath !== from.fullPath) {
+    const settingsStore = useSettingsStore()
+    const references = settingsStore.consumeNewChatReferences()
+    if (references) settingsStore.setNewChatReferences(references.kbIds, references.fileIds)
+    else settingsStore.clearChatReferences()
+  }
 })
 
 router.afterEach((to) => {

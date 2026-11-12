@@ -68,9 +68,9 @@ func interpolateBuiltinModelEnv(s string) string {
 // with the file contents.
 //
 // Lifecycle contract:
-//   - YAML loader only ever reads/writes rows tagged managed_by="yaml". Rows
-//     created via UI/API/SQL (managed_by="") are invisible to the loader and
-//     are never modified.
+//   - YAML loader only ever writes rows tagged managed_by="yaml". Rows created
+//     or explicitly overridden via UI/API/SQL (managed_by="") are detected by
+//     id and preserved, and are never modified.
 //   - Each YAML entry is UPSERTed by id, with deleted_at force-reset to NULL
 //     (so a row that was soft-deleted previously is resurrected when it
 //     reappears in the file).
@@ -134,6 +134,25 @@ func LoadBuiltinModelsConfig(ctx context.Context, db *gorm.DB, configDir string)
 			continue
 		}
 		m := e.toModel()
+		warnOnUnresolvableParameters(&m)
+
+		// A system-admin edit clears managed_by to claim the row as a runtime
+		// override. Preserve that explicit override on subsequent starts rather
+		// than reclaiming and overwriting it from YAML. Unscoped is required so
+		// a manually managed soft-deleted collision is not resurrected either.
+		var existing Model
+		lookupErr := db.WithContext(ctx).Unscoped().
+			Select("id", "managed_by").
+			Where("id = ?", m.ID).
+			First(&existing).Error
+		if lookupErr == nil && existing.ManagedBy != BuiltinModelManagedBy {
+			log.Printf("[builtin-models] preserving runtime override: id=%s", m.ID)
+			continue
+		}
+		if lookupErr != nil && lookupErr != gorm.ErrRecordNotFound {
+			log.Printf("[builtin-models] WARN: inspect existing model %s failed: %v; skipping", m.ID, lookupErr)
+			continue
+		}
 
 		// Mirror the API path's "single default per (tenant_id, type)"
 		// invariant: clear other defaults before promoting this one.
@@ -236,6 +255,26 @@ var validBuiltinModelStatuses = map[ModelStatus]struct{}{
 // Source is intentionally NOT validated against a fixed list because the
 // provider matrix in internal/models/* keeps growing and a too-strict
 // check here would force changes in two places per new provider.
+// ValidateModelParameters is set at startup to runtime.ValidateRow. It is a
+// hook rather than a direct call because internal/models/catalog imports this
+// package, so the dependency can only run in this direction. A nil hook (unit
+// tests, tools that never build the container) simply skips the check.
+var ValidateModelParameters func(modelName string, modelType ModelType, params *ModelParameters) error
+
+// warnOnUnresolvableParameters reports a YAML row whose provider, protocol or
+// compat override the catalog cannot resolve. It only warns: refusing to load
+// the row would take a running deployment's model offline on restart, whereas
+// the request itself still fails loudly at first use with the same message.
+func warnOnUnresolvableParameters(m *Model) {
+	if ValidateModelParameters == nil {
+		return
+	}
+	if err := ValidateModelParameters(m.Name, m.Type, &m.Parameters); err != nil {
+		log.Printf("[builtin-models] WARN: id=%s name=%s has parameters the catalog cannot resolve: %v; "+
+			"the row is loaded but every call will fail until it is corrected", m.ID, m.Name, err)
+	}
+}
+
 func validateBuiltinModelEntry(e *BuiltinModelEntry, index int) error {
 	if e.ID == "" {
 		return errBuiltinModel("entry %d has empty id", index)

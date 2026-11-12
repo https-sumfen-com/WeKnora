@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/common"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/middleware/asynqdl"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
@@ -23,7 +25,16 @@ import (
 type AsynqTaskParams struct {
 	dig.In
 
-	Server               *asynq.Server
+	// Dedicated servers provide minimum capacity for parse, post-process,
+	// enrichment, maintenance, and Wiki work. SharedServer is the elastic tier:
+	// it also subscribes to core/enrichment queues so either stage can borrow
+	// otherwise-idle capacity without consuming the other stage's guarantee.
+	CoreServer           *asynq.Server `name:"coreAsynqServer"`
+	PostProcessServer    *asynq.Server `name:"postProcessAsynqServer"`
+	EnrichmentServer     *asynq.Server `name:"enrichmentAsynqServer"`
+	MaintenanceServer    *asynq.Server `name:"maintenanceAsynqServer"`
+	SharedServer         *asynq.Server `name:"sharedAsynqServer"`
+	WikiServer           *asynq.Server `name:"wikiAsynqServer"`
 	KnowledgeService     interfaces.KnowledgeService
 	KnowledgeBaseService interfaces.KnowledgeBaseService
 	TagService           interfaces.KnowledgeTagService
@@ -32,7 +43,11 @@ type AsynqTaskParams struct {
 	DataTableSummary     interfaces.TaskHandler `name:"dataTableSummary"`
 	ImageMultimodal      interfaces.TaskHandler `name:"imageMultimodal"`
 	KnowledgePostProcess interfaces.TaskHandler `name:"knowledgePostProcess"`
+	KnowledgeAutoTag     interfaces.TaskHandler `name:"knowledgeAutoTag"`
+	KnowledgeBaseProfile interfaces.TaskHandler `name:"knowledgeBaseProfile"`
 	WikiIngest           interfaces.TaskHandler `name:"wikiIngest"`
+	TemporaryDocument    interfaces.TemporaryDocumentService
+	MemoryService        interfaces.MemoryService
 	DeadLetterRepo       interfaces.TaskDeadLetterRepository
 	SpanTracker          service.SpanTracker
 }
@@ -73,6 +88,7 @@ func getAsynqRedisClientOpt() *asynq.RedisClientOpt {
 		// WriteTimeout slightly larger to absorb head-of-line stalls.
 		WriteTimeout: time.Duration(timeoutMs*2) * time.Millisecond,
 		DB:           db,
+		TLSConfig:    common.RedisTLSConfig(),
 	}
 	return opt
 }
@@ -110,43 +126,105 @@ func asynqRetryDelayFunc(n int, e error, t *asynq.Task) time.Duration {
 	return asynq.DefaultRetryDelayFunc(n, e, t)
 }
 
-// defaultAsynqConcurrency is the worker pool size used when
-// WEKNORA_ASYNQ_CONCURRENCY is unset. The asynq library defaults to
-// runtime.NumCPU(), which under-provisions during batch document uploads:
-// a single 4-core container can only process 4 documents in parallel even
-// when 100 are queued, so the queue wait time eats into each task's
-// DocumentProcessTimeout budget. 32 is a safer default for the I/O-bound
-// nature of doc parsing (most time is spent in DocReader / embedding RPCs,
-// not on local CPU).
-const defaultAsynqConcurrency = 32
+// Worker defaults live in types so server construction and runtime reporting
+// cannot drift. The upstream budget is divided without increasing historical
+// total capacity; Wiki remains separate because its model-heavy workload has a
+// different provider-capacity profile.
 
-func NewAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+// newAsynqServer builds an asynq server bound to a specific queue set and
+// concurrency. Every worker pool uses it so Redis options and retry-delay
+// policy stay consistent across the topology.
+func newAsynqServer(concurrency int, queues map[string]int) *asynq.Server {
 	opt := getAsynqRedisClientOpt()
-	concurrency := defaultAsynqConcurrency
-	if svc != nil {
-		n := svc.GetInt(context.Background(), "asynq.concurrency", "WEKNORA_ASYNQ_CONCURRENCY", defaultAsynqConcurrency)
-		if n > 0 {
-			concurrency = int(n)
-		}
-	}
-	log.Printf("asynq server starting with concurrency=%d redis_op_timeout=%dms",
-		concurrency, readRedisOpTimeoutMs())
-	srv := asynq.NewServer(
+	return asynq.NewServer(
 		opt,
 		asynq.Config{
-			Concurrency: concurrency,
-			Queues: map[string]int{
-				types.QueueCritical:   6, // Highest priority queue
-				types.QueueDefault:    3, // Default priority queue
-				types.QueueLow:        1, // Lowest priority queue
-				types.QueueMultimodal: 1, // Isolated lane for high-volume slow VLM image tasks
-				types.QueueGraph:      1, // Isolated lane for high-volume slow graph-extraction tasks
-				types.QueueQuestion:   1, // Isolated lane for high-volume slow question-generation tasks
-			},
+			Concurrency:    concurrency,
+			Queues:         queues,
 			RetryDelayFunc: asynqRetryDelayFunc,
 		},
 	)
-	return srv
+}
+
+// backgroundTaskMiddleware tags every task's context as a background worker
+// execution (types.WithBackgroundTask) so the per-model chat concurrency
+// governor applies to ingestion/enrichment LLM calls but not to interactive
+// user-facing chat.
+func backgroundTaskMiddleware() asynq.MiddlewareFunc {
+	return func(next asynq.Handler) asynq.Handler {
+		return asynq.HandlerFunc(func(ctx context.Context, t *asynq.Task) error {
+			return next.ProcessTask(types.WithBackgroundTask(ctx), t)
+		})
+	}
+}
+
+func resolveWorkerPoolConcurrency(svc interfaces.SystemSettingService) types.WorkerPoolConcurrency {
+	if svc == nil {
+		return types.DefaultWorkerPoolConcurrency()
+	}
+	ctx := context.Background()
+	return types.ResolveWorkerPoolConcurrency(func(key, env string, fallback int) int {
+		value := svc.GetInt(ctx, key, env, int64(fallback))
+		return int(value)
+	})
+}
+
+// NewCoreAsynqServer runs document and manual parsing with guaranteed capacity.
+func NewCoreAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq core-pool server starting with concurrency=%d total_upstream=%d redis_op_timeout=%dms",
+		allocation.Core, allocation.UpstreamTotal(), readRedisOpTimeoutMs())
+	return newAsynqServer(allocation.Core, types.QueueWeightsForPool(types.WorkerPoolCore))
+}
+
+// NewPostProcessAsynqServer reserves capacity for the lightweight but
+// latency-sensitive fan-out stage. It cannot be trapped behind a burst of
+// long-running document parses in QueueDefault.
+func NewPostProcessAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq postprocess-pool server starting with concurrency=%d total_upstream=%d",
+		allocation.PostProcess, allocation.UpstreamTotal())
+	return newAsynqServer(allocation.PostProcess, types.QueueWeightsForPool(types.WorkerPoolPostProcess))
+}
+
+// NewEnrichmentAsynqServer runs high-fanout summary, multimodal, graph, and
+// question generation without consuming core parsing capacity.
+func NewEnrichmentAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq enrichment-pool server starting with concurrency=%d total_upstream=%d",
+		allocation.Enrichment, allocation.UpstreamTotal())
+	return newAsynqServer(allocation.Enrichment, types.QueueWeightsForPool(types.WorkerPoolEnrichment))
+}
+
+// NewMaintenanceAsynqServer runs connector sync, cleanup, deletion, and batch
+// dispatch work. QueueMaintenance keeps the legacy Redis name "low", so old
+// tasks are drained safely during rolling upgrades.
+func NewMaintenanceAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq maintenance-pool server starting with concurrency=%d total_upstream=%d",
+		allocation.Maintenance, allocation.UpstreamTotal())
+	return newAsynqServer(allocation.Maintenance, types.QueueWeightsForPool(types.WorkerPoolMaintenance))
+}
+
+// NewSharedAsynqServer is the elastic tier. Asynq dequeue is atomic, so it is
+// safe for this server and the dedicated servers to subscribe to the same
+// queues: every task is still executed by exactly one worker.
+func NewSharedAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq shared-pool server starting with concurrency=%d total_upstream=%d",
+		allocation.Shared, allocation.UpstreamTotal())
+	return newAsynqServer(allocation.Shared, types.QueueWeightsForSharedPool())
+}
+
+// NewWikiAsynqServer builds the dedicated wiki pool: QueueWiki only. It runs
+// the shared handler mux but only ever pulls wiki tasks, so its concurrency
+// budget (WEKNORA_WIKI_ASYNQ_CONCURRENCY, default 8) is spent exclusively on
+// wiki generation. This is the hard capacity isolation that prevents the parse
+// pipeline from starving wiki (and vice-versa) during concurrent uploads.
+func NewWikiAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	concurrency := resolveWorkerPoolConcurrency(svc).Wiki
+	log.Printf("asynq wiki-pool server starting with concurrency=%d", concurrency)
+	return newAsynqServer(concurrency, types.QueueWeightsForPool(types.WorkerPoolWiki))
 }
 
 func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
@@ -168,6 +246,13 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// UI signal users actually see.
 	knowledgeFailer := newDeadLetterKnowledgeFailer(params.KnowledgeService, params.SpanTracker)
 	mux.Use(asynqdl.MiddlewareWithCallback(params.DeadLetterRepo, knowledgeFailer))
+	mux.Use(asynqdl.RecoverMiddleware())
+
+	// Mark every asynq worker execution as a background task so the chat
+	// concurrency governor throttles ingestion/enrichment LLM traffic while
+	// leaving user-facing interactive chat ungated. Installed early so all
+	// downstream handlers (and their model calls) inherit the flag.
+	mux.Use(backgroundTaskMiddleware())
 
 	// Install Langfuse middleware BEFORE handler registration so every task
 	// type is automatically wrapped. When Langfuse is disabled the middleware
@@ -183,6 +268,7 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register document processing handler
 	mux.HandleFunc(types.TypeDocumentProcess, params.KnowledgeService.ProcessDocument)
+	mux.HandleFunc(types.TypeTemporaryDocumentProcess, params.TemporaryDocument.Process)
 
 	// Register manual knowledge processing handler (cleanup + re-indexing)
 	mux.HandleFunc(types.TypeManualProcess, params.KnowledgeService.ProcessManualUpdate)
@@ -205,6 +291,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register knowledge list delete handler
 	mux.HandleFunc(types.TypeKnowledgeListDelete, params.KnowledgeService.ProcessKnowledgeListDelete)
 
+	// Register knowledge list reparse handler
+	mux.HandleFunc(types.TypeKnowledgeListReparse, params.KnowledgeService.ProcessKnowledgeListReparse)
+
 	// Register index delete handler
 	mux.HandleFunc(types.TypeIndexDelete, params.TagService.ProcessIndexDelete)
 
@@ -216,19 +305,36 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register knowledge post process handler
 	mux.HandleFunc(types.TypeKnowledgePostProcess, params.KnowledgePostProcess.Handle)
+	mux.HandleFunc(types.TypeKnowledgeAutoTag, params.KnowledgeAutoTag.Handle)
+	mux.HandleFunc(types.TypeKnowledgeBaseProfile, params.KnowledgeBaseProfile.Handle)
 
 	// Register data source sync handler
 	mux.HandleFunc(types.TypeDataSourceSync, params.DataSourceService.ProcessSync)
 
-	// Register wiki ingest handler
+	// Register wiki ingest handler + the debounced KB-global finalize handler.
+	// Both route to the same dispatch (WikiIngest.Handle switches on task type)
+	// and both land on QueueWiki, so the dedicated wiki pool serves them.
 	mux.HandleFunc(types.TypeWikiIngest, params.WikiIngest.Handle)
+	mux.HandleFunc(types.TypeWikiFinalize, params.WikiIngest.Handle)
 
-	go func() {
-		// Start the server
-		if err := params.Server.Run(mux); err != nil {
-			log.Fatalf("could not run server: %v", err)
-		}
-	}()
+	// Register long-term memory distillation handler
+	mux.HandleFunc(types.TypeMemoryExtract, params.MemoryService.Handle)
+
+	// Run the same mux on every pool. Shared and dedicated servers intentionally
+	// overlap, but Redis dequeue is atomic, so each task still executes once.
+	runPool := func(name string, srv *asynq.Server) {
+		go func() {
+			if err := srv.Run(mux); err != nil {
+				log.Fatalf("could not run %s asynq server: %v", name, err)
+			}
+		}()
+	}
+	runPool("core-pool", params.CoreServer)
+	runPool("postprocess-pool", params.PostProcessServer)
+	runPool("enrichment-pool", params.EnrichmentServer)
+	runPool("maintenance-pool", params.MaintenanceServer)
+	runPool("shared-pool", params.SharedServer)
+	runPool("wiki-pool", params.WikiServer)
 	return mux
 }
 
@@ -236,7 +342,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 // document-related asynq payload. Kept narrow so we don't accidentally
 // depend on the full payload schema and survive future field churn.
 type deadLetterKnowledgePayload struct {
-	KnowledgeID string `json:"knowledge_id,omitempty"`
+	TenantID        uint64 `json:"tenant_id"`
+	KnowledgeBaseID string `json:"knowledge_base_id"`
+	KnowledgeID     string `json:"knowledge_id,omitempty"`
 	// Attempt threads through DocumentProcess / ManualProcess /
 	// KnowledgePostProcess payloads (added when span tracking shipped)
 	// — extracted here so the dead-letter callback can also close the
@@ -285,29 +393,51 @@ func newDeadLetterKnowledgeFailer(ks interfaces.KnowledgeService, tracker servic
 		return nil
 	}
 	return func(ctx context.Context, t *asynq.Task, taskErr error) {
-		if t == nil {
+		if t == nil || taskErr == nil || errors.Is(taskErr, asynq.SkipRetry) {
+			return
+		}
+		if t.Type() == types.TypeKnowledgeListDelete {
+			markKnowledgeListDeleteFailed(ctx, repo, t, taskErr)
 			return
 		}
 		if _, ok := taskTypesAffectingKnowledgeStatus[t.Type()]; !ok {
 			return
 		}
 		var probe deadLetterKnowledgePayload
-		if err := json.Unmarshal(t.Payload(), &probe); err != nil || probe.KnowledgeID == "" {
+		if err := json.Unmarshal(t.Payload(), &probe); err != nil || probe.KnowledgeID == "" ||
+			probe.KnowledgeBaseID == "" ||
+			probe.TenantID == 0 {
 			return
 		}
-		errMsg := "task " + t.Type() + " exhausted retries: " + taskErr.Error()
-		// 8KB is the same cap the dead-letter row uses for last_error.
-		if len(errMsg) > 8192 {
-			errMsg = errMsg[:8192]
+		row, err := repo.GetKnowledgeByID(ctx, probe.TenantID, probe.KnowledgeID)
+		if err != nil || row == nil || row.ID != probe.KnowledgeID || row.TenantID != probe.TenantID ||
+			row.KnowledgeBaseID != probe.KnowledgeBaseID {
+			return
 		}
-		// Single UPDATE so we never end up with parse_status=failed but
-		// stale error_message (or vice versa) when the second write
-		// fails.
-		if err := repo.UpdateKnowledgeColumns(ctx, probe.KnowledgeID, map[string]interface{}{
-			"parse_status":  types.ParseStatusFailed,
-			"error_message": errMsg,
-		}); err != nil {
-			logger.Warnf(ctx, "dead-letter callback: failed to mark knowledge %s as failed: %v", probe.KnowledgeID, err)
+		switch row.ParseStatus {
+		case types.ParseStatusPending, types.ParseStatusProcessing, types.ParseStatusFinalizing:
+		default:
+			return
+		}
+		// The row belongs to a newer run (a reparse cancelled this task or
+		// raced it): failing it would kill a run that is still healthy.
+		if tracker != nil && probe.Attempt > 0 &&
+			tracker.LatestAttempt(ctx, probe.KnowledgeID) > probe.Attempt {
+			logger.Infof(ctx, "dead-letter callback: attempt %d of knowledge %s superseded, leaving row alone",
+				probe.Attempt, probe.KnowledgeID)
+			return
+		}
+		errMsg := truncateKnowledgeErrorMessage("task " + t.Type() + " exhausted retries: " + taskErr.Error())
+		before, after := *row, *row
+		after.ParseStatus = types.ParseStatusFailed
+		after.ErrorMessage = errMsg
+		if err := repo.UpdateKnowledgeForTransfer(ctx, &before, &after); err != nil {
+			logger.Warnf(
+				ctx,
+				"dead-letter callback: knowledge %s changed or failed to update: %v",
+				probe.KnowledgeID,
+				err,
+			)
 			return
 		}
 		// Close the matching root span so the timeline stops showing
@@ -318,5 +448,77 @@ func newDeadLetterKnowledgeFailer(ks interfaces.KnowledgeService, tracker servic
 				types.SpanStatusFailed, nil, "TASK_TIMEOUT", errMsg)
 		}
 		logger.Infof(ctx, "dead-letter callback: marked knowledge %s as failed (task=%s)", probe.KnowledgeID, t.Type())
+	}
+}
+
+// truncateKnowledgeErrorMessage caps msg at 8KB, the same cap the dead-letter
+// row uses for last_error. The cut backs off to a rune boundary because a
+// partial multi-byte rune is invalid UTF-8, which PostgreSQL rejects, leaving
+// the knowledge stuck in its in-flight status.
+func truncateKnowledgeErrorMessage(msg string) string {
+	const maxLen = 8192
+	if len(msg) <= maxLen {
+		return msg
+	}
+	cut := maxLen
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
+}
+
+func markKnowledgeListDeleteFailed(
+	ctx context.Context,
+	repo interfaces.KnowledgeRepository,
+	t *asynq.Task,
+	taskErr error,
+) {
+	// A rejected scope must not gain a side effect through the failure path.
+	if errors.Is(taskErr, asynq.SkipRetry) {
+		return
+	}
+	var payload types.KnowledgeListDeletePayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil || payload.TenantID == 0 ||
+		len(payload.KnowledgeIDs) == 0 {
+		return
+	}
+	if payload.KnowledgeBaseID == "" {
+		rows, err := repo.GetKnowledgeBatch(ctx, payload.TenantID, payload.KnowledgeIDs)
+		if err != nil || len(rows) == 0 {
+			return
+		}
+		for _, row := range rows {
+			if row == nil || row.TenantID != payload.TenantID || row.KnowledgeBaseID == "" ||
+				(payload.KnowledgeBaseID != "" && payload.KnowledgeBaseID != row.KnowledgeBaseID) {
+				return
+			}
+			payload.KnowledgeBaseID = row.KnowledgeBaseID
+		}
+	}
+
+	errMsg := truncateKnowledgeErrorMessage("delete task exhausted retries: " + taskErr.Error())
+	for _, knowledgeID := range payload.KnowledgeIDs {
+		if knowledgeID == "" {
+			continue
+		}
+		updated, err := repo.UpdateActiveDeletingKnowledgeColumns(
+			ctx,
+			payload.TenantID,
+			payload.KnowledgeBaseID,
+			knowledgeID,
+			map[string]interface{}{
+				"parse_status":  types.ParseStatusFailed,
+				"error_message": errMsg,
+			},
+		)
+		if err != nil {
+			logger.Warnf(ctx, "dead-letter callback: failed to mark delete failure for knowledge %s: %v", knowledgeID, err)
+			continue
+		}
+		if !updated {
+			logger.Infof(ctx, "dead-letter callback: skipped marking knowledge %s after delete task exhaustion because it is no longer active deleting", knowledgeID)
+			continue
+		}
+		logger.Infof(ctx, "dead-letter callback: marked knowledge %s as failed after delete task exhausted retries", knowledgeID)
 	}
 }

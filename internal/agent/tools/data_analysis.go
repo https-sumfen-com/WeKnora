@@ -1,26 +1,45 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/Tencent/WeKnora/internal/utils"
+	pg_query "github.com/pganalyze/pg_query_go/v6"
 )
+
+// DataAnalysisTableName is the only table name the model needs to know when
+// querying a CSV/Excel document through data_analysis. Each document is loaded
+// into a physical DuckDB table named after its knowledge ID; that name is
+// never shown to the model. Every query runs on a private connection where
+// "dataset" is a temporary view over the selected document, so the model
+// references the same fixed identifier for every document and the knowledge
+// ID never has to appear inside SQL text.
+const DataAnalysisTableName = "dataset"
 
 var dataAnalysisTool = BaseTool{
 	name: ToolDataAnalysis,
-	description: "Use this tool when the knowledge is CSV or Excel files. It loads the data into memory and executes SQL for data analysis. " +
-		"For Excel files with multiple sheets, every sheet is loaded into the same table and the source sheet name is exposed as a '__sheet_name' column so you can filter/aggregate per sheet. " +
+	description: "Use this tool when the knowledge is CSV or Excel files. It loads the document into DuckDB " +
+		"and executes a read-only SQL query for data analysis. The selected document is always exposed as " +
+		"the single table \"" + DataAnalysisTableName + "\"; write SQL against that table name and never put " +
+		"the document ID inside the SQL. For Excel files with multiple sheets, non-empty sheets are loaded into " +
+		"the same table and the source sheet name is exposed as a '__sheet_name' column so you can " +
+		"filter/aggregate per sheet. A legacy binary .xls is converted to .xlsx before it is read; " +
+		"if that conversion fails, re-save the workbook as .xlsx or export the sheet as .csv. " +
 		"If the user's question requires data statistics, convert the question into SQL and execute it.",
 	schema: utils.GenerateSchema[DataAnalysisInput](),
 }
@@ -28,6 +47,47 @@ var dataAnalysisTool = BaseTool{
 // excelSheetNameColumn is the name of the synthetic column that identifies
 // which Excel sheet a row came from when multiple sheets are unioned together.
 const excelSheetNameColumn = "__sheet_name"
+
+// legacyXLSMagic is the OLE2/CFB compound-document signature that binary BIFF
+// .xls workbooks start with ("D0 CF 11 E0 A1 B1 1A E1").
+//
+// DuckDB's excel extension only reads the ZIP-based OOXML container
+// (.xlsx/.xlsm). A genuine .xls is converted before read_xlsx; if that
+// conversion fails, the caller gets an actionable error instead of
+// "No xl/workbook.xml found in xlsx file".
+var legacyXLSMagic = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+
+// hasLegacyXLSContainer reports whether path holds an OLE2 compound document,
+// i.e. a binary BIFF .xls workbook.
+//
+// The sniff is by content, not by extension: a .xls that is really a renamed
+// .xlsx is a ZIP archive and returns false, so it keeps loading through the
+// normal read_xlsx path. Unreadable or truncated files also return false and
+// are left to DuckDB to report.
+func hasLegacyXLSContainer(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	head := make([]byte, len(legacyXLSMagic))
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false
+	}
+	return bytes.Equal(head, legacyXLSMagic)
+}
+
+// errLegacyBinaryXLS is returned when a binary .xls workbook cannot be
+// converted to .xlsx. Naming the conversion the caller can still do beats
+// DuckDB's "No xl/workbook.xml found in xlsx file".
+func errLegacyBinaryXLS() error {
+	return fmt.Errorf(
+		"legacy binary .xls workbooks are not supported by data analysis: " +
+			"only the ZIP-based .xlsx format can be read; " +
+			"re-save the workbook as .xlsx (or export the sheet as .csv) and upload it again",
+	)
+}
 
 // sqlSingleQuoteEscape escapes single quotes in a string so it can be safely
 // embedded inside a single-quoted SQL literal.
@@ -58,19 +118,33 @@ func reconcileSQLColumnsWithSchema(sqlText string, schema *TableSchema) (string,
 		}
 	}
 
-	quotedIdentifierPattern := regexp.MustCompile(`"([^"]+)"`)
+	// Use the same SQL lexer as validation so quoted text in literals and
+	// comments is never mistaken for an identifier. Leave invalid SQL to validation.
+	tokens, err := pg_query.Scan(sqlText)
+	if err != nil {
+		return sqlText, nil
+	}
 	fixes := make([]string, 0)
-	rewritten := quotedIdentifierPattern.ReplaceAllStringFunc(sqlText, func(token string) string {
-		name := strings.Trim(token, "\"")
+	var rewritten strings.Builder
+	previous := 0
+	for _, token := range tokens.Tokens {
+		raw := sqlText[token.Start:token.End]
+		if token.Token != pg_query.Token_IDENT || !strings.HasPrefix(raw, `"`) {
+			continue
+		}
+		name := strings.ReplaceAll(raw[1:len(raw)-1], `""`, `"`)
 		canonical, ok := normalizedToCanonical[normalizeIdentifierForMatch(name)]
 		if !ok || canonical == name {
-			return token
+			continue
 		}
 		fixes = append(fixes, fmt.Sprintf("%q -> %q", name, canonical))
-		return fmt.Sprintf(`"%s"`, canonical)
-	})
+		rewritten.WriteString(sqlText[previous:token.Start])
+		fmt.Fprintf(&rewritten, `"%s"`, strings.ReplaceAll(canonical, `"`, `""`))
+		previous = int(token.End)
+	}
+	rewritten.WriteString(sqlText[previous:])
 
-	return rewritten, fixes
+	return rewritten.String(), fixes
 }
 
 func buildMissingColumnSuggestion(sqlErr error, schema *TableSchema) string {
@@ -103,8 +177,8 @@ func buildMissingColumnSuggestion(sqlErr error, schema *TableSchema) string {
 }
 
 type DataAnalysisInput struct {
-	KnowledgeID string `json:"knowledge_id" jsonschema:"id of the knowledge to query"`
-	Sql         string `json:"sql" jsonschema:"SQL to be executed on knowledge"`
+	KnowledgeID string `json:"knowledge_id" jsonschema:"doc://N document handle to query"`
+	SQL         string `json:"sql" jsonschema:"Read-only SELECT executed on the document. Reference the document as the table \"dataset\" (for example SELECT COUNT(*) FROM dataset); it is the only table available"` //nolint:lll // jsonschema tag
 }
 
 type DataAnalysisTool struct {
@@ -115,14 +189,29 @@ type DataAnalysisTool struct {
 	tenantService        interfaces.TenantService
 	db                   *sql.DB
 	sessionID            string
-	createdTables        []string // Track tables created in this session
+	createdTables        []string        // Cleanup candidates, including failed CREATE attempts
+	loadedTables         map[string]bool // CREATE succeeded, even if a subsequent schema read failed
 	// localBaseDir is the LOCAL_STORAGE_BASE_DIR value captured at construction
 	// time so resolveFileServiceForKnowledge uses the same base path that was
 	// used when the local FileService was initialised by DI.  Re-reading the
 	// env var at request time can produce a different (or empty) value if the
 	// variable was not exported to the sub-process or was set programmatically
 	// after startup, causing GetFile to look in the wrong directory (#1040).
-	localBaseDir         string
+	localBaseDir    string
+	storageResolver interfaces.StorageBackendResolver
+	searchTargets   types.SearchTargets
+	scopeEnforced   bool
+}
+
+// WithSearchTargets enables the Agent-only authorization boundary. Other
+// internal data-analysis callers retain their existing service-owned scope.
+// The flag is set independently of the slice length: an Agent turn that ended
+// up with no search target must reject every document, not fall back to
+// unrestricted access.
+func (t *DataAnalysisTool) WithSearchTargets(searchTargets types.SearchTargets) *DataAnalysisTool {
+	t.searchTargets = searchTargets
+	t.scopeEnforced = true
+	return t
 }
 
 func NewDataAnalysisTool(
@@ -132,8 +221,9 @@ func NewDataAnalysisTool(
 	fileService interfaces.FileService,
 	db *sql.DB,
 	sessionID string,
+	storageResolvers ...interfaces.StorageBackendResolver,
 ) *DataAnalysisTool {
-	return &DataAnalysisTool{
+	tool := &DataAnalysisTool{
 		BaseTool:             dataAnalysisTool,
 		knowledgeBaseService: knowledgeBaseService,
 		knowledgeService:     knowledgeService,
@@ -145,20 +235,29 @@ func NewDataAnalysisTool(
 		// call to resolveFileServiceForKnowledge uses the same base path.  The
 		// env var is guaranteed to be set (or empty == "/data/files" fallback)
 		// when the application starts and the DI container is assembled.
-		localBaseDir:         strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR")),
+		localBaseDir: strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR")),
 	}
+	if len(storageResolvers) > 0 {
+		tool.storageResolver = storageResolvers[0]
+	}
+	return tool
 }
 
-// recordCreatedTable records a table name for cleanup, ensuring uniqueness
-// Returns true if the table was newly recorded, false if it already existed
-func (t *DataAnalysisTool) recordCreatedTable(tableName string) bool {
+// recordCreatedTable records a cleanup candidate, not proof that CREATE succeeded.
+func (t *DataAnalysisTool) recordCreatedTable(tableName string) {
 	for _, name := range t.createdTables {
 		if name == tableName {
-			return false
+			return
 		}
 	}
 	t.createdTables = append(t.createdTables, tableName)
-	return true
+}
+
+func (t *DataAnalysisTool) markTableLoaded(tableName string) {
+	if t.loadedTables == nil {
+		t.loadedTables = make(map[string]bool)
+	}
+	t.loadedTables[tableName] = true
 }
 
 // Cleanup cleans up the session-specific schema
@@ -170,9 +269,12 @@ func (t *DataAnalysisTool) Cleanup(ctx context.Context) {
 
 	logger.Infof(ctx, "[Tool][DataAnalysis] Cleaning up %d tables for session: %s", len(t.createdTables), t.sessionID)
 
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
 	for _, tableName := range t.createdTables {
 		dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS \"%s\"", tableName)
-		if _, err := t.db.ExecContext(ctx, dropSQL); err != nil {
+		if _, err := t.db.ExecContext(cleanupCtx, dropSQL); err != nil {
 			logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to drop table '%s': %v", tableName, err)
 			// Continue to drop other tables even if one fails
 			continue
@@ -180,8 +282,9 @@ func (t *DataAnalysisTool) Cleanup(ctx context.Context) {
 		logger.Infof(ctx, "[Tool][DataAnalysis] Successfully dropped table '%s'", tableName)
 	}
 
-	// Clear the list after cleanup
+	// Reset both cleanup tracking and successful-load state.
 	t.createdTables = nil
+	t.loadedTables = nil
 }
 
 // Execute executes the SQL query on DuckDB (only read-only queries are allowed)
@@ -195,6 +298,11 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 			Error:   fmt.Sprintf("Failed to parse input args: %v", err),
 		}, err
 	}
+	if t.scopeEnforced {
+		if _, err := authorizeKnowledgeInSearchTargets(ctx, t.searchTargets, input.KnowledgeID, t.knowledgeService); err != nil {
+			return &types.ToolResult{Success: false, Error: err.Error()}, err
+		}
+	}
 
 	schema, err := t.LoadFromKnowledgeID(ctx, input.KnowledgeID)
 	if err != nil {
@@ -205,48 +313,36 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 		}, err
 	}
 
-	// Replace knowledge ID with table name
-	input.Sql = strings.ReplaceAll(input.Sql, input.KnowledgeID, schema.TableName)
-	if rewrittenSQL, fixes := reconcileSQLColumnsWithSchema(input.Sql, schema); len(fixes) > 0 {
+	if rewrittenSQL, fixes := reconcileSQLColumnsWithSchema(input.SQL, schema); len(fixes) > 0 {
 		logger.Infof(ctx, "[Tool][DataAnalysis] Auto-rewrote SQL identifiers for session %s: %v", t.sessionID, fixes)
-		input.Sql = rewrittenSQL
+		input.SQL = rewrittenSQL
 	}
 
 	// Check if this is a read-only query
-	normalizedSQL := strings.TrimSpace(strings.ToLower(input.Sql))
-	isReadOnly := strings.HasPrefix(normalizedSQL, "select") ||
-		strings.HasPrefix(normalizedSQL, "show") ||
-		strings.HasPrefix(normalizedSQL, "describe") ||
-		strings.HasPrefix(normalizedSQL, "explain") ||
-		strings.HasPrefix(normalizedSQL, "pragma")
+	normalizedSQL := strings.TrimSpace(strings.ToLower(input.SQL))
+	isReadOnly := strings.HasPrefix(normalizedSQL, "select")
 
 	if !isReadOnly {
 		// Reject modification queries
-		logger.Warnf(ctx, "[Tool][DataAnalysis] Modification query rejected for session %s: %s", t.sessionID, input.Sql)
+		logger.Warnf(ctx, "[Tool][DataAnalysis] Modification query rejected for session %s: %s", t.sessionID, input.SQL)
 		return &types.ToolResult{
 			Success: false,
-			Error:   "DuckDB tool only supports read-only queries (SELECT, SHOW, DESCRIBE, EXPLAIN, PRAGMA). Modification operations (INSERT, UPDATE, DELETE, CREATE, DROP, etc.) are not allowed.",
+			Error: "DuckDB tool only supports read-only SELECT queries. " +
+				"Modification operations and configuration statements are not allowed.",
 		}, fmt.Errorf("modification queries are not allowed")
 	}
 
-	// Validate SQL with comprehensive security checks
-	// IMPORTANT: Must enable validateSelectStmt to block RangeFunction attacks
-	_, validation := utils.ValidateSQL(input.Sql,
-		utils.WithAllowedTables(schema.TableName),
-		utils.WithSingleStatement(),      // Block multiple statements
-		utils.WithNoDangerousFunctions(), // Block dangerous functions
-	)
-	if !validation.Valid {
-		logger.Warnf(ctx, "[Tool][DataAnalysis] SQL validation failed for session %s: %v", t.sessionID, validation.Errors)
+	if err := validateDataAnalysisSQL(input.SQL, schema); err != nil {
+		logger.Warnf(ctx, "[Tool][DataAnalysis] SQL validation failed for session %s: %v", t.sessionID, err)
 		return &types.ToolResult{
 			Success: false,
-			Error:   fmt.Sprintf("SQL validation failed: %v", validation.Errors),
-		}, fmt.Errorf("SQL validation failed: %v", validation.Errors)
+			Error:   err.Error(),
+		}, err
 	}
 
-	logger.Infof(ctx, "[Tool][DataAnalysis] Received SQL query for session %s: %s", t.sessionID, input.Sql)
+	logger.Infof(ctx, "[Tool][DataAnalysis] Received SQL query for session %s: %s", t.sessionID, input.SQL)
 	// Execute single query and get results
-	results, err := t.executeSingleQuery(ctx, input.Sql)
+	results, err := t.executeSingleQuery(ctx, input.SQL, schema.TableName)
 	if err != nil {
 		if suggestion := buildMissingColumnSuggestion(err, schema); suggestion != "" {
 			return &types.ToolResult{
@@ -260,7 +356,7 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 		}, err
 	}
 
-	queryOutput := t.formatQueryResults(results, input.Sql)
+	queryOutput := t.formatQueryResults(results, input.SQL)
 	logger.Infof(ctx, "[Tool][DataAnalysis] Completed execution query, total %d rows for session %s", len(results), t.sessionID)
 	return &types.ToolResult{
 		Success: true,
@@ -268,7 +364,7 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 		Data: map[string]interface{}{
 			"rows":         results,
 			"row_count":    len(results),
-			"query":        input.Sql,
+			"query":        input.SQL,
 			"display_type": ToolDataAnalysis,
 			"session_id":   t.sessionID,
 		},
@@ -285,8 +381,68 @@ func (t *DataAnalysisTool) Execute(ctx context.Context, args json.RawMessage) (*
 //   - []string: merged column names (existing + new columns, deduplicated)
 //   - []map[string]string: query results
 //   - error: any error that occurred during execution
-func (t *DataAnalysisTool) executeSingleQuery(ctx context.Context, sqlQuery string) ([]map[string]string, error) {
-	rows, err := t.db.QueryContext(ctx, sqlQuery)
+//
+// validateDataAnalysisSQL enforces the read-only, single-table contract. The
+// model-facing DataAnalysisTableName and the physical table are both accepted
+// so that internal callers (ingest sampling, older stored schema summaries)
+// keep working; a query against anything else is rejected with an error that
+// names the table the model should have used.
+func validateDataAnalysisSQL(sqlQuery string, schema *TableSchema) error {
+	// IMPORTANT: Must enable validateSelectStmt to block RangeFunction attacks
+	_, validation := utils.ValidateSQL(sqlQuery,
+		utils.WithAllowedTables(DataAnalysisTableName, schema.TableName),
+		utils.WithSelectOnly(),
+		utils.WithSingleStatement(),      // Block multiple statements
+		utils.WithNoDangerousFunctions(), // Block dangerous functions
+	)
+	if validation.Valid {
+		return nil
+	}
+	for _, validationErr := range validation.Errors {
+		if validationErr.Type == "table_not_allowed" {
+			return fmt.Errorf(
+				"SQL validation failed: %s. The selected document is exposed as the single table %q; "+
+					"write the query against that table name and pass the document only through knowledge_id",
+				validationErr.Message, DataAnalysisTableName,
+			)
+		}
+	}
+	return fmt.Errorf("SQL validation failed: %v", validation.Errors)
+}
+
+// executeSingleQuery runs a validated query on a dedicated connection where
+// DataAnalysisTableName is a temporary view over the document's physical
+// table. Temporary objects are connection-local in DuckDB, so concurrent
+// sessions analysing different documents never observe each other's view; the
+// view is replaced on entry and dropped on exit so a pooled connection carries
+// nothing over to its next user.
+func (t *DataAnalysisTool) executeSingleQuery(
+	ctx context.Context, sqlQuery string, physicalTable string,
+) ([]map[string]string, error) {
+	conn, err := t.db.Conn(ctx)
+	if err != nil {
+		logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to acquire connection: %v", err)
+		return nil, fmt.Errorf("failed to acquire database connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	viewSQL := fmt.Sprintf(
+		`CREATE OR REPLACE TEMPORARY VIEW "%s" AS SELECT * FROM "%s"`,
+		DataAnalysisTableName, physicalTable,
+	)
+	if _, err := conn.ExecContext(ctx, viewSQL); err != nil {
+		logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to expose table '%s' as %s: %v",
+			physicalTable, DataAnalysisTableName, err)
+		return nil, fmt.Errorf("failed to expose document table: %w", err)
+	}
+	defer func() {
+		dropSQL := fmt.Sprintf(`DROP VIEW IF EXISTS "%s"`, DataAnalysisTableName)
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), dropSQL); err != nil {
+			logger.Warnf(ctx, "[Tool][DataAnalysis] Failed to drop temporary view %s: %v", DataAnalysisTableName, err)
+		}
+	}()
+
+	rows, err := conn.QueryContext(ctx, sqlQuery)
 	if err != nil {
 		logger.Errorf(ctx, "[Tool][DataAnalysis] Query execution failed: %v", err)
 		return nil, fmt.Errorf("query execution failed: %w", err)
@@ -392,8 +548,10 @@ type ColumnInfo struct {
 func (t *DataAnalysisTool) LoadFromCSV(ctx context.Context, filename string, tableName string) (*TableSchema, error) {
 	logger.Infof(ctx, "[Tool][DataAnalysis] Loading CSV file '%s' into table '%s' for session %s", filename, tableName, t.sessionID)
 
-	// Record the created table for cleanup. If already exists, skip creation
-	if t.recordCreatedTable(tableName) {
+	if !t.loadedTables[tableName] {
+		// Keep cleanup tracking even if CREATE fails; only successful creation
+		// makes the table reusable by a later call.
+		t.recordCreatedTable(tableName)
 		// Create table from CSV using DuckDB's read_csv_auto function
 		// with explicit header detection and VARCHAR coercion to align with
 		// Excel loading behavior.
@@ -408,6 +566,7 @@ func (t *DataAnalysisTool) LoadFromCSV(ctx context.Context, filename string, tab
 			logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to create table from CSV: %v", err)
 			return nil, fmt.Errorf("failed to create table from CSV: %w", err)
 		}
+		t.markTableLoaded(tableName)
 
 		logger.Infof(ctx, "[Tool][DataAnalysis] Successfully created table '%s' from CSV file in session %s", tableName, t.sessionID)
 	}
@@ -418,11 +577,11 @@ func (t *DataAnalysisTool) LoadFromCSV(ctx context.Context, filename string, tab
 
 // LoadFromExcel loads data from an Excel file into a DuckDB table and returns the table schema.
 //
-// Multi-sheet workbooks are fully supported: every sheet in the workbook is
-// loaded and the rows from all sheets are unioned (UNION ALL BY NAME) into a
+// Multi-sheet workbooks are supported: XLSX sheets containing only formatting
+// are skipped; rows from the remaining sheets are unioned (UNION ALL BY NAME) into a
 // single table. A synthetic '__sheet_name' column is added so downstream SQL
-// can filter / aggregate per sheet. If sheet enumeration fails for any
-// reason, we fall back to reading just the first sheet (original behavior).
+// can filter / aggregate per sheet. If spatial metadata is unavailable, sheet
+// names are read from the workbook itself rather than silently omitting sheets.
 //
 // Parameters:
 //   - ctx: context for cancellation and timeout
@@ -433,19 +592,51 @@ func (t *DataAnalysisTool) LoadFromCSV(ctx context.Context, filename string, tab
 //   - *TableSchema: schema information of the created table
 //   - error: any error that occurred during the operation
 //
-// Note: requires the DuckDB 'excel' extension (for read_xlsx) and the
-// 'spatial' extension (for st_read_meta used to enumerate sheets).
+// Note: requires the DuckDB 'excel' extension (for read_xlsx). Sheet discovery
+// uses 'spatial' (st_read_meta) when available, with OOXML metadata as a fallback.
+//
+// Binary BIFF .xls workbooks are converted to a temporary .xlsx before DuckDB
+// is touched. The excel extension only reads the ZIP-based OOXML container, so
+// a real .xls would otherwise surface as "No xl/workbook.xml found in xlsx
+// file". A workbook that cannot be converted returns an actionable error.
 func (t *DataAnalysisTool) LoadFromExcel(ctx context.Context, filename string, tableName string) (*TableSchema, error) {
 	logger.Infof(ctx, "[Tool][DataAnalysis] Loading Excel file '%s' into table '%s' for session %s", filename, tableName, t.sessionID)
 
-	// Record the created table for cleanup. If already exists, skip creation.
-	if t.recordCreatedTable(tableName) {
+	if !t.loadedTables[tableName] {
+		if hasLegacyXLSContainer(filename) {
+			prepared, cleanup, err := prepareExcelForDuckDB(filename)
+			if err != nil {
+				logger.Warnf(ctx,
+					"[Tool][DataAnalysis] Could not convert legacy binary .xls workbook '%s' (session=%s): %v",
+					filename, t.sessionID, err,
+				)
+				return nil, errLegacyBinaryXLS()
+			}
+			defer cleanup()
+			filename = prepared
+		}
+
+		t.recordCreatedTable(tableName)
 		sheetNames, enumErr := t.listExcelSheets(ctx, filename)
 		if enumErr != nil {
-			logger.Warnf(ctx,
-				"[Tool][DataAnalysis] Could not enumerate sheets for '%s' (session=%s): %v. Falling back to first sheet only.",
-				filename, t.sessionID, enumErr,
-			)
+			return nil, fmt.Errorf("failed to enumerate Excel worksheets: %w", enumErr)
+		}
+		if len(sheetNames) > 0 && strings.EqualFold(filepath.Ext(filename), ".xlsx") {
+			filtered, err := filterEmptyExcelSheets(ctx, filename, sheetNames)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				return nil, fmt.Errorf("inspect Excel worksheets: %w", err)
+			case err != nil:
+				// The preflight is best-effort: keep loading every sheet as before.
+				logger.Warnf(ctx,
+					"[Tool][DataAnalysis] Could not inspect worksheets of '%s' (session=%s): %v. Keeping all sheets.",
+					filename, t.sessionID, err,
+				)
+			case len(filtered) == 0:
+				return nil, fmt.Errorf("excel workbook contains no non-empty worksheets")
+			default:
+				sheetNames = filtered
+			}
 		}
 
 		createTableSQL := buildExcelCreateTableSQL(tableName, filename, sheetNames)
@@ -454,6 +645,7 @@ func (t *DataAnalysisTool) LoadFromExcel(ctx context.Context, filename string, t
 			logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to create table from Excel (sheets=%v): %v", sheetNames, err)
 			return nil, fmt.Errorf("failed to create table from Excel file (sheets=%v): %w", sheetNames, err)
 		}
+		t.markTableLoaded(tableName)
 
 		logger.Infof(ctx,
 			"[Tool][DataAnalysis] Successfully created table '%s' from Excel file in session %s (sheets=%v)",
@@ -465,14 +657,36 @@ func (t *DataAnalysisTool) LoadFromExcel(ctx context.Context, filename string, t
 	return t.LoadFromTable(ctx, tableName)
 }
 
-// listExcelSheets returns the names of every sheet (layer) inside the given
-// Excel workbook by querying DuckDB's spatial st_read_meta table function.
-// The returned slice preserves the on-disk order of sheets.
+// listExcelSheets preserves workbook order and recovers from unavailable or
+// empty spatial metadata by reading sheet names from the OOXML container.
+func (t *DataAnalysisTool) listExcelSheets(ctx context.Context, filename string) ([]string, error) {
+	names, metaErr := t.listExcelSheetsFromSpatial(ctx, filename)
+	if metaErr == nil && len(names) > 0 {
+		return names, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if metaErr == nil {
+		metaErr = fmt.Errorf("spatial metadata contains no worksheets")
+	}
+	names, err := listExcelSheetsFromWorkbook(ctx, filename)
+	if err != nil {
+		return nil, fmt.Errorf("spatial metadata: %v; workbook metadata: %w", metaErr, err)
+	}
+	logger.Warnf(ctx,
+		"[Tool][DataAnalysis] Using workbook metadata for '%s' after spatial enumeration failed: %v",
+		filename, metaErr,
+	)
+	return names, nil
+}
+
+// listExcelSheetsFromSpatial queries DuckDB's spatial st_read_meta function.
 //
 // st_read_meta returns a single row whose `layers` column is a LIST of
 // STRUCTs (one per layer / sheet). We UNNEST that list and project the
 // struct's `name` field to get a flat list of sheet names.
-func (t *DataAnalysisTool) listExcelSheets(ctx context.Context, filename string) ([]string, error) {
+func (t *DataAnalysisTool) listExcelSheetsFromSpatial(ctx context.Context, filename string) ([]string, error) {
 	metaSQL := fmt.Sprintf(
 		"SELECT UNNEST(layers).name FROM st_read_meta('%s')",
 		sqlSingleQuoteEscape(filename),
@@ -507,7 +721,7 @@ func (t *DataAnalysisTool) listExcelSheets(ctx context.Context, filename string)
 func buildExcelCreateTableSQL(tableName, filename string, sheetNames []string) string {
 	escFile := sqlSingleQuoteEscape(filename)
 
-	// No sheet info (enumeration failed or empty): read the first sheet only.
+	// Without an explicit sheet selection, retain the default read_xlsx SQL form.
 	if len(sheetNames) == 0 {
 		return fmt.Sprintf(
 			"CREATE TABLE \"%s\" AS SELECT * FROM read_xlsx('%s', header=true, all_varchar=true)",
@@ -653,7 +867,10 @@ func (t *DataAnalysisTool) materializeKnowledgeFile(ctx context.Context, knowled
 func (t *DataAnalysisTool) LoadFromKnowledgeID(ctx context.Context, knowledgeID string) (*TableSchema, error) {
 	// Use GetKnowledgeByIDOnly to support cross-tenant shared KB
 	knowledge, err := t.knowledgeService.GetKnowledgeByIDOnly(ctx, knowledgeID)
-	if err != nil {
+	if err != nil || knowledge == nil {
+		if err == nil {
+			err = fmt.Errorf("knowledge service returned an empty result")
+		}
 		logger.Errorf(ctx, "[Tool][DataAnalysis] Failed to get knowledge by ID '%s': %v", knowledgeID, err)
 		return nil, fmt.Errorf("failed to get knowledge by ID: %w", err)
 	}
@@ -741,10 +958,12 @@ func (t *DataAnalysisTool) TableName(knowledge *types.Knowledge) string {
 	return "k_" + strings.ReplaceAll(knowledge.ID, "-", "_")
 }
 
-// buildSchemaDescription builds a formatted schema description
+// Description builds the model-facing schema description. It names the table
+// as DataAnalysisTableName, the identifier the model must use in SQL; the
+// physical TableName stays internal.
 func (t *TableSchema) Description() string {
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("Table name: %s\n", t.TableName))
+	fmt.Fprintf(&builder, "Table name: %s\n", DataAnalysisTableName)
 	builder.WriteString(fmt.Sprintf("Columns: %d\n", len(t.Columns)))
 	builder.WriteString(fmt.Sprintf("Rows: %d\n\n", t.RowCount))
 	builder.WriteString("Column info:\n")
@@ -782,8 +1001,12 @@ func (t *DataAnalysisTool) resolveFileServiceForKnowledge(ctx context.Context, k
 	}
 
 	provider := ""
+	backendID, _, _ := types.ParseStorageBackendPath(knowledge.FilePath)
 	if kb != nil {
 		provider = kb.GetStorageProvider()
+		if backendID == "" && kb.StorageBackendID != nil {
+			backendID = strings.TrimSpace(*kb.StorageBackendID)
+		}
 	}
 	tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
 	if tenant == nil {
@@ -808,6 +1031,19 @@ func (t *DataAnalysisTool) resolveFileServiceForKnowledge(ctx context.Context, k
 	}
 	if provider == "" && tenant != nil && tenant.StorageEngineConfig != nil {
 		provider = strings.ToLower(strings.TrimSpace(tenant.StorageEngineConfig.DefaultProvider))
+	}
+	// The resolver also handles workspace defaults without a legacy provider.
+	if t.storageResolver != nil && tenant != nil {
+		resolvedSvc, resolvedProvider, err := t.storageResolver.ResolveFileService(
+			ctx, tenant, backendID, provider, t.localBaseDir,
+		)
+		if err == nil {
+			logger.Infof(ctx, "[Tool][DataAnalysis][storage] resolved storage backend: session_id=%s knowledge_id=%s kb_id=%s backend_id=%s provider=%s",
+				t.sessionID, knowledge.ID, kbID, backendID, resolvedProvider)
+			return resolvedSvc
+		}
+		logger.Warnf(ctx, "[Tool][DataAnalysis][storage] resolve storage backend failed, trying legacy config: session_id=%s knowledge_id=%s kb_id=%s backend_id=%s provider=%s err=%v",
+			t.sessionID, knowledge.ID, kbID, backendID, provider, err)
 	}
 
 	if provider == "" || tenant == nil || tenant.StorageEngineConfig == nil {

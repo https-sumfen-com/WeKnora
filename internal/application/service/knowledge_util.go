@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,27 +14,68 @@ import (
 	"time"
 
 	filesvc "github.com/Tencent/WeKnora/internal/application/service/file"
+	werrors "github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 )
 
-// isValidFileType checks if a file type is supported
+// unknownFileType is returned by getFileType when a name carries no extension.
+const unknownFileType = "unknown"
+
+// dataTableFileExtensions are the spreadsheet formats that get an extra
+// table-summary task after their document-process task.
+var dataTableFileExtensions = map[string]struct{}{
+	"csv": {}, "xlsx": {}, "xls": {},
+}
+
+// normalizeFileExtension delegates to the shared helper; kept so the many
+// package-private call sites stay untouched.
+func normalizeFileExtension(ext string) string {
+	return secutils.NormalizeImportExtension(ext)
+}
+
+// isSupportedImportExtension delegates to the shared set in internal/utils so
+// data source connectors filter on the same extensions as direct upload and
+// URL import. The "unknown" sentinel from getFileType is not in the set.
+func isSupportedImportExtension(ext string) bool {
+	return secutils.IsSupportedImportExtension(ext)
+}
+
+// isValidFileType checks if a filename's extension is supported for import.
 func isValidFileType(filename string) bool {
-	switch strings.ToLower(getFileType(filename)) {
-	case "pdf", "txt", "docx", "doc", "md", "markdown", "png", "jpg", "jpeg", "gif", "csv", "xlsx", "xls", "pptx", "ppt", "json",
-		"mp3", "wav", "m4a", "flac", "ogg":
-		return true
-	default:
-		return false
+	return isSupportedImportExtension(getFileType(filename))
+}
+
+// isDataTableFileType reports whether an extension is a spreadsheet format.
+func isDataTableFileType(ext string) bool {
+	_, ok := dataTableFileExtensions[normalizeFileExtension(ext)]
+	return ok
+}
+
+// validateImportFileType applies the extension constraints shared by every
+// file import path and reports a user-facing reason when one is violated.
+func validateImportFileType(fileType string) error {
+	fileType = normalizeFileExtension(fileType)
+	if fileType == "" || fileType == unknownFileType {
+		return werrors.NewBadRequestError("无法确定文件类型")
 	}
+	if IsVideoType(fileType) {
+		return werrors.NewBadRequestError("暂不支持上传视频文件")
+	}
+	if !isSupportedImportExtension(fileType) {
+		return werrors.NewBadRequestError(fmt.Sprintf("不支持的文件类型: %s", fileType))
+	}
+	return nil
 }
 
 // getFileType extracts the file extension from a filename
 func getFileType(filename string) string {
 	ext := strings.Split(filename, ".")
 	if len(ext) < 2 {
-		return "unknown"
+		return unknownFileType
 	}
 	return ext[len(ext)-1]
 }
@@ -45,6 +87,44 @@ func isValidURL(url string) bool {
 		return true
 	}
 	return false
+}
+
+// readMultipartFileContent reads the full upload payload. Each Open() returns a
+// fresh reader, so callers that hash or SaveFile later open again themselves.
+func readMultipartFileContent(file *multipart.FileHeader) ([]byte, error) {
+	f, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}
+
+// ValidateJSONUploadContent rejects malformed .json uploads before they are
+// stored and queued. Shares the same validity gate as the simple JSON reader.
+// Call this from HTTP upload / replace handlers only — CreateKnowledgeFromFile
+// itself must not, so datasource sync and IM can still create a knowledge row
+// that fails in async parse (delete-then-create must not leave a gap).
+func ValidateJSONUploadContent(fileName string, file *multipart.FileHeader) error {
+	if normalizeFileExtension(getFileType(fileName)) != "json" {
+		return nil
+	}
+	data, err := readMultipartFileContent(file)
+	if err != nil {
+		return err
+	}
+	// The upload queue shows this message verbatim, so localize it here rather
+	// than in docparser, whose error text is shared with the async JSON reader.
+	switch err := docparser.ValidateJSONContent(data); {
+	case err == nil:
+		return nil
+	case errors.Is(err, docparser.ErrEmptyJSONContent):
+		return werrors.NewBadRequestError("JSON 文件内容为空")
+	case errors.Is(err, docparser.ErrInvalidJSONContent):
+		return werrors.NewBadRequestError("JSON 文件内容无效，请检查格式")
+	default:
+		return werrors.NewBadRequestError(err.Error())
+	}
 }
 
 // calculateFileHash calculates MD5 hash of a file
@@ -114,6 +194,19 @@ func (s *knowledgeService) getVLMConfig(ctx context.Context, kb *types.Knowledge
 
 func (s *knowledgeService) buildStorageConfig(ctx context.Context, kb *types.KnowledgeBase) *types.DocParserStorageConfig {
 	provider := kb.GetStorageProvider()
+	tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+	backendID := ""
+	if kb.StorageBackendID != nil {
+		backendID = *kb.StorageBackendID
+	}
+	if s.storageResolver != nil && tenant != nil {
+		if backend, err := s.storageResolver.ResolveBackend(ctx, tenant, backendID, provider); err == nil && backend != nil {
+			provider = backend.Provider
+			tenantCopy := *tenant
+			tenantCopy.StorageEngineConfig = backend.ToStorageEngineConfig()
+			tenant = &tenantCopy
+		}
+	}
 	if provider == "" {
 		provider = "local"
 	}
@@ -130,7 +223,7 @@ func (s *knowledgeService) buildStorageConfig(ctx context.Context, kb *types.Kno
 		hasKBFull = sc.SecretID != "" && sc.BucketName != ""
 	case "minio":
 		hasKBFull = sc.BucketName != ""
-	case "local", "tos", "s3", "oss", "ks3":
+	case "local", "tos", "s3", "oss", "ks3", "obs":
 		hasKBFull = false
 	}
 
@@ -152,7 +245,6 @@ func (s *knowledgeService) buildStorageConfig(ctx context.Context, kb *types.Kno
 	var out types.DocParserStorageConfig
 	out.Provider = strings.ToUpper(provider)
 
-	tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
 	if tenant != nil && tenant.StorageEngineConfig != nil {
 		sec := tenant.StorageEngineConfig
 		if sec.DefaultProvider != "" && provider == "" {
@@ -227,6 +319,15 @@ func (s *knowledgeService) buildStorageConfig(ctx context.Context, kb *types.Kno
 				out.BucketName = sec.KS3.BucketName
 				out.PathPrefix = sec.KS3.PathPrefix
 			}
+		case "obs":
+			if sec.OBS != nil {
+				out.Endpoint = sec.OBS.Endpoint
+				out.Region = sec.OBS.Region
+				out.AccessKeyID = sec.OBS.AccessKey
+				out.SecretAccessKey = sec.OBS.SecretKey
+				out.BucketName = sec.OBS.BucketName
+				out.PathPrefix = sec.OBS.PathPrefix
+			}
 		}
 	}
 
@@ -247,6 +348,21 @@ func (s *knowledgeService) resolveFileService(ctx context.Context, kb *types.Kno
 	provider := kb.GetStorageProvider()
 
 	tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+	backendID := ""
+	if kb.StorageBackendID != nil {
+		backendID = strings.TrimSpace(*kb.StorageBackendID)
+	}
+	if s.storageResolver != nil && tenant != nil {
+		baseDir := strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR"))
+		svc, resolvedProvider, err := s.storageResolver.ResolveFileService(ctx, tenant, backendID, provider, baseDir)
+		if err == nil && svc != nil {
+			logger.Infof(ctx, "[storage] resolveFileService selected instance: kb=%s backend=%s provider=%s", kb.ID, backendID, resolvedProvider)
+			return svc
+		}
+		if err != nil {
+			logger.Errorf(ctx, "Failed to resolve storage backend for kb=%s: %v", kb.ID, err)
+		}
+	}
 	if provider == "" && tenant != nil && tenant.StorageEngineConfig != nil {
 		provider = strings.ToLower(strings.TrimSpace(tenant.StorageEngineConfig.DefaultProvider))
 	}
@@ -273,6 +389,36 @@ func (s *knowledgeService) resolveFileService(ctx context.Context, kb *types.Kno
 // the provider inferred from the file path. This protects historical data when
 // tenant/KB config changes but files were stored under the old provider.
 func (s *knowledgeService) resolveFileServiceForPath(ctx context.Context, kb *types.KnowledgeBase, filePath string) interfaces.FileService {
+	// A resource:// reference belongs to the tenant that registered it. Shared
+	// KB requests use the viewer's effective tenant in ctx, which can otherwise
+	// select the wrong storage backend and pass the resource URL to local disk.
+	if _, ok := types.ParseResourcePath(filePath); ok && s.resourceCatalog != nil && s.storageResolver != nil && s.tenantRepo != nil {
+		resource, err := s.resourceCatalog.Resolve(ctx, filePath)
+		if err == nil && resource != nil {
+			ownerTenant, tenantErr := s.tenantRepo.GetTenantByID(ctx, resource.TenantID)
+			if tenantErr == nil && ownerTenant != nil {
+				baseDir := strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR"))
+				if resolved, _, resolveErr := s.storageResolver.ResolveFileService(ctx, ownerTenant, resource.StorageBackendID, resource.Provider, baseDir); resolveErr == nil && resolved != nil {
+					return resolved
+				} else if resolveErr != nil {
+					logger.Warnf(ctx, "[storage] failed to resolve resource owner backend: resource=%s tenant=%d err=%v", resource.Handle, resource.TenantID, resolveErr)
+				}
+			}
+		}
+	}
+
+	if backendID, inner, ok := types.ParseStorageBackendPath(filePath); ok && s.storageResolver != nil {
+		tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+		if tenant != nil {
+			provider := types.ParseProviderScheme(inner)
+			baseDir := strings.TrimSpace(os.Getenv("LOCAL_STORAGE_BASE_DIR"))
+			if resolved, _, err := s.storageResolver.ResolveFileService(ctx, tenant, backendID, provider, baseDir); err == nil {
+				return resolved
+			} else {
+				logger.Warnf(ctx, "[storage] failed to resolve backend from file path: backend=%s err=%v", backendID, err)
+			}
+		}
+	}
 	svc := s.resolveFileService(ctx, kb)
 	if filePath == "" {
 		return svc
@@ -336,7 +482,10 @@ func IsVideoType(fileType string) bool {
 // the function resolves the value from Content-Disposition / URL path and writes it back.
 // It does NOT perform SSRF validation — callers are responsible for that.
 func downloadFileFromURL(ctx context.Context, fileURL string, payloadFileName, payloadFileType *string) ([]byte, error) {
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	httpClient := secutils.NewSSRFSafeHTTPClient(secutils.SSRFSafeHTTPClientConfig{
+		Timeout:      60 * time.Second,
+		MaxRedirects: 10,
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request for file URL: %w", err)

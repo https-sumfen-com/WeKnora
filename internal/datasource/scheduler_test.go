@@ -53,6 +53,10 @@ func (r *fakeDataSourceRepo) Update(_ context.Context, ds *types.DataSource) err
 	return nil
 }
 
+func (r *fakeDataSourceRepo) UpdateSyncState(ctx context.Context, ds *types.DataSource) error {
+	return r.Update(ctx, ds)
+}
+
 func (r *fakeDataSourceRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -117,6 +121,10 @@ func (r *fakeSyncLogRepo) Update(_ context.Context, log *types.SyncLog) error {
 	return nil
 }
 
+func (r *fakeSyncLogRepo) UpdateResult(ctx context.Context, log *types.SyncLog) error {
+	return r.Update(ctx, log)
+}
+
 func (r *fakeSyncLogRepo) CancelPendingByDataSource(_ context.Context, dsID string) error {
 	return nil
 }
@@ -138,11 +146,19 @@ func (r *fakeSyncLogRepo) HasRunningSync(_ context.Context, dsID string) (bool, 
 
 // fakeTaskEnqueuer counts how many tasks are enqueued.
 type fakeTaskEnqueuer struct {
-	count atomic.Int64
+	count     atomic.Int64
+	lastQueue atomic.Value
 }
 
 func (e *fakeTaskEnqueuer) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
 	e.count.Add(1)
+	for _, opt := range opts {
+		if opt.Type() == asynq.QueueOpt {
+			if queue, ok := opt.Value().(string); ok {
+				e.lastQueue.Store(queue)
+			}
+		}
+	}
 	return &asynq.TaskInfo{ID: "task-fake"}, nil
 }
 
@@ -201,6 +217,9 @@ func TestScheduler_CronFires(t *testing.T) {
 
 	if enqueuer.count.Load() == 0 {
 		t.Error("expected at least 1 enqueue, got 0")
+	}
+	if queue, _ := enqueuer.lastQueue.Load().(string); queue != types.QueueSync {
+		t.Errorf("scheduled sync queue = %q, want %q", queue, types.QueueSync)
 	}
 }
 
@@ -326,6 +345,92 @@ func TestScheduler_InvalidCron(t *testing.T) {
 	}
 }
 
+func TestScheduler_InvalidReplacementPreservesSchedule(t *testing.T) {
+	repo := newFakeDataSourceRepo()
+	enqueuer := &fakeTaskEnqueuer{}
+	s := NewScheduler(repo, newFakeSyncLogRepo(), enqueuer)
+	ds := &types.DataSource{ID: "replace", Status: types.DataSourceStatusActive, SyncSchedule: "* * * * * *"}
+	if err := repo.Create(context.Background(), ds); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddOrUpdate(ds); err != nil {
+		t.Fatal(err)
+	}
+	invalid := *ds
+	invalid.SyncSchedule = "not-a-cron"
+	if err := s.AddOrUpdate(&invalid); err == nil {
+		t.Fatal("expected invalid schedule to be rejected")
+	}
+	if got := s.EntryCount(); got != 1 {
+		t.Fatalf("invalid replacement removed existing schedule: entries=%d", got)
+	}
+	s.cron.Start()
+	defer s.Stop()
+	deadline := time.Now().Add(3 * time.Second)
+	for enqueuer.count.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if enqueuer.count.Load() == 0 {
+		t.Fatal("preserved schedule did not enqueue a task")
+	}
+}
+
+func TestValidateSyncSchedule(t *testing.T) {
+	for _, schedule := range []string{"", "0 0 */6 * * *", "@hourly", "@every 6h", "CRON_TZ=UTC 0 0 * * * *"} {
+		t.Run(schedule, func(t *testing.T) {
+			if err := ValidateSyncSchedule(schedule); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, schedule := range []string{"not-a-cron", "0 0 * * *", "60 * * * * *", "CRON_TZ=Invalid/Zone 0 0 * * * *"} {
+		t.Run(schedule, func(t *testing.T) {
+			if err := ValidateSyncSchedule(schedule); err == nil {
+				t.Fatal("expected invalid schedule to be rejected")
+			}
+		})
+	}
+}
+
+func TestScheduler_ConcurrentReplacements(t *testing.T) {
+	s := NewScheduler(nil, nil, nil)
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			schedule := "0 0 * * * *"
+			if i%2 == 0 {
+				schedule = "invalid"
+			}
+			ds := &types.DataSource{ID: "concurrent", Status: types.DataSourceStatusActive, SyncSchedule: schedule}
+			if err := s.AddOrUpdate(ds); (err != nil) != (i%2 == 0) {
+				t.Errorf("unexpected result for schedule %q: %v", schedule, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := s.EntryCount(); got != 1 {
+		t.Fatalf("concurrent replacements left %d entries, want 1", got)
+	}
+}
+
+func TestScheduler_PauseRemovesEntryWithInvalidStoredSchedule(t *testing.T) {
+	s := NewScheduler(nil, nil, nil)
+	ds := &types.DataSource{ID: "pause", Status: types.DataSourceStatusActive, SyncSchedule: "0 0 * * * *"}
+	if err := s.AddOrUpdate(ds); err != nil {
+		t.Fatal(err)
+	}
+	ds.Status = types.DataSourceStatusPaused
+	ds.SyncSchedule = "invalid"
+	if err := s.AddOrUpdate(ds); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.EntryCount(); got != 0 {
+		t.Fatalf("pause left %d entries", got)
+	}
+}
+
 func TestScheduler_TriggerSync_InactiveSkipped(t *testing.T) {
 	repo := newFakeDataSourceRepo()
 	// Create a data source that is paused
@@ -357,4 +462,8 @@ func TestScheduler_TriggerSync_NotFound(t *testing.T) {
 	if enqueuer.count.Load() != 0 {
 		t.Error("should not enqueue for non-existent data source")
 	}
+}
+
+func (*fakeDataSourceRepo) PatchSyncSettings(context.Context, *types.DataSource, types.JSON, []string) error {
+	panic("unexpected PatchSyncSettings call")
 }

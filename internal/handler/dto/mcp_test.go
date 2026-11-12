@@ -25,7 +25,7 @@ func TestMCPServiceResponse_OmitsSecrets(t *testing.T) {
 			CustomHeaders: map[string]string{"X-Trace": "abc"},
 		},
 	}
-	body, err := json.Marshal(NewMCPServiceResponse(svc))
+	body, err := json.Marshal(NewMCPServiceResponse(adminContext(), svc))
 	assert.NoError(t, err)
 	s := string(body)
 	assert.NotContains(t, s, "sk-real-api-key-do-not-leak",
@@ -63,7 +63,7 @@ func TestMCPServiceResponse_BuiltinStripsTenantConfig(t *testing.T) {
 			APIKey: "should-not-leak-via-builtin",
 		},
 	}
-	resp := NewMCPServiceResponse(svc)
+	resp := NewMCPServiceResponse(adminContext(), svc)
 	assert.Nil(t, resp.URL, "builtin must not leak per-tenant URL")
 	assert.Nil(t, resp.Headers, "builtin must not leak per-tenant headers")
 	assert.Nil(t, resp.AuthConfig, "builtin must not leak auth config")
@@ -73,7 +73,67 @@ func TestMCPServiceResponse_BuiltinStripsTenantConfig(t *testing.T) {
 	assert.False(t, strings.Contains(string(body), "X-Tenant-Secret"))
 }
 
+func TestMCPServiceResponse_ViewerStripsIntegrationDetail(t *testing.T) {
+	url := "https://tenant-private.example.com"
+	svc := &types.MCPService{
+		ID:      "svc-2",
+		URL:     &url,
+		Headers: types.MCPHeaders{"Authorization": "Bearer secret"},
+		EnvVars: types.MCPEnvVars{"TOKEN": "secret"},
+		StdioConfig: &types.MCPStdioConfig{
+			Command: "npx",
+			Args:    []string{"-y", "mcp-server"},
+		},
+		AdvancedConfig: &types.MCPAdvancedConfig{},
+		AuthConfig: &types.MCPAuthConfig{
+			CustomHeaders: map[string]string{"X-Auth": "secret"},
+		},
+	}
+	resp := NewMCPServiceResponse(viewerContext(), svc)
+	assert.Nil(t, resp.URL)
+	assert.Nil(t, resp.Headers)
+	assert.Nil(t, resp.EnvVars)
+	assert.Nil(t, resp.StdioConfig)
+	assert.Nil(t, resp.AdvancedConfig)
+	assert.NotNil(t, resp.AuthConfig)
+	assert.Nil(t, resp.AuthConfig.CustomHeaders)
+}
+
 func TestMCPServiceResponse_NilSafe(t *testing.T) {
-	assert.Nil(t, NewMCPServiceResponse(nil))
-	assert.Equal(t, []*MCPServiceResponse{}, NewMCPServiceResponses(nil))
+	assert.Nil(t, NewMCPServiceResponse(adminContext(), nil))
+	assert.Equal(t, []*MCPServiceResponse{}, NewMCPServiceResponses(adminContext(), nil))
+}
+
+func TestAttachMCPCatalogs_MarksStaleWithoutCopyingTools(t *testing.T) {
+	svc := &types.MCPService{ID: "svc-1", TransportType: types.MCPTransportSSE}
+	resp := NewMCPServiceResponses(adminContext(), []*types.MCPService{svc})
+	AttachMCPCatalogs(resp, []*types.MCPService{svc}, map[string]*types.MCPMetadataSummary{
+		"svc-1": {ServiceID: "svc-1", ToolCount: 3, ConfigFingerprint: "old"},
+	})
+	require := assert.New(t)
+	require.NotNil(resp[0].Catalog)
+	require.Equal(3, resp[0].Catalog.ToolCount)
+	require.True(resp[0].Catalog.Stale)
+	body, err := json.Marshal(resp[0])
+	require.NoError(err)
+	require.NotContains(string(body), `"tools"`)
+	require.Contains(string(body), `"tool_count":3`)
+}
+
+func TestMCPServiceResponse_EchoesClientIDButNotItsSecret(t *testing.T) {
+	svc := &types.MCPService{
+		ID:   "svc-1",
+		Name: "svc",
+		AuthConfig: &types.MCPAuthConfig{
+			AuthType:     types.MCPAuthOAuth,
+			ClientID:     "pre-registered",
+			ClientSecret: "client-secret-do-not-leak",
+		},
+	}
+	body, err := json.Marshal(NewMCPServiceResponse(adminContext(), svc))
+	assert.NoError(t, err)
+	s := string(body)
+	assert.NotContains(t, s, "client-secret-do-not-leak")
+	assert.Contains(t, s, `"client_id":"pre-registered"`)
+	assert.Contains(t, s, `"client_secret":{"configured":true}`)
 }

@@ -3,12 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
-	"github.com/Tencent/WeKnora/internal/utils"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -85,12 +83,16 @@ func (r *tenantRepository) SearchTenants(ctx context.Context, keyword string, te
 	// Build search conditions
 	if tenantID > 0 && keyword != "" {
 		escaped := escapeLikeKeyword(keyword)
-		query = query.Where("id = ? OR name LIKE ? OR description LIKE ?", tenantID, "%"+escaped+"%", "%"+escaped+"%")
+		query = query.Where(
+			"id = ? OR name LIKE ? ESCAPE ? OR description LIKE ? ESCAPE ?",
+			tenantID, "%"+escaped+"%", likeEscapeChar, "%"+escaped+"%", likeEscapeChar)
 	} else if tenantID > 0 {
 		query = query.Where("id = ?", tenantID)
 	} else if keyword != "" {
 		escaped := escapeLikeKeyword(keyword)
-		query = query.Where("name LIKE ? OR description LIKE ?", "%"+escaped+"%", "%"+escaped+"%")
+		query = query.Where(
+			"name LIKE ? ESCAPE ? OR description LIKE ? ESCAPE ?",
+			"%"+escaped+"%", likeEscapeChar, "%"+escaped+"%", likeEscapeChar)
 	}
 
 	// Count total
@@ -116,32 +118,47 @@ func (r *tenantRepository) SearchTenants(ctx context.Context, keyword string, te
 }
 
 // UpdateTenant updates tenant.
-// Handles api_key carefully because db.Updates() does not trigger the BeforeSave
-// GORM hook. Without this guard, AfterFind-decrypted plaintext would silently
-// overwrite the encrypted value in the database.
-//
-// Strategy:
-//   - enc:v1:… (pre-encrypted by CreateTenant / UpdateAPIKey): write as-is.
-//   - plaintext (decrypted by AfterFind): blank it so GORM skips the column.
-//   - SYSTEM_AES_KEY not set: write as-is (encryption disabled).
-//
-// The caller's in-memory struct is always restored after the write.
 func (r *tenantRepository) UpdateTenant(ctx context.Context, tenant *types.Tenant) error {
-	origAPIKey := tenant.APIKey
-	if key := utils.GetAESKey(); key != nil && tenant.APIKey != "" &&
-		!strings.HasPrefix(tenant.APIKey, utils.EncPrefix) {
-		// Plaintext from AfterFind — do not write back; let the DB keep its
-		// existing encrypted value untouched.
-		tenant.APIKey = ""
-	}
-	err := r.db.WithContext(ctx).Model(&types.Tenant{}).Where("id = ?", tenant.ID).Updates(tenant).Error
-	tenant.APIKey = origAPIKey
-	return err
+	// Settings handlers may carry an older snapshot of the whole tenant.
+	// Never let an unrelated update restore a cleared KB generation or
+	// re-enable indexing outside MessageService's history lock.
+	return r.db.WithContext(ctx).Model(&types.Tenant{}).Where("id = ?", tenant.ID).
+		Omit("ChatHistoryConfig").Updates(tenant).Error
 }
 
-// DeleteTenant deletes tenant
+func (r *tenantRepository) SetChatHistoryConfig(
+	ctx context.Context, tenantID uint64, cfg *types.ChatHistoryConfig,
+) error {
+	return r.db.WithContext(ctx).Model(&types.Tenant{}).Where("id = ?", tenantID).
+		Update("chat_history_config", cfg).Error
+}
+
+func (r *tenantRepository) UpdateTenantProfile(ctx context.Context, id uint64, name, description *string) error {
+	fields := map[string]interface{}{}
+	if name != nil {
+		fields["name"] = *name
+	}
+	if description != nil {
+		fields["description"] = *description
+	}
+	if id == 0 || len(fields) == 0 {
+		return errors.New("workspace id and profile fields are required")
+	}
+	result := r.db.WithContext(ctx).Model(&types.Tenant{}).Where("id = ?", id).Updates(fields)
+	return result.Error
+}
+
+// DeleteTenant soft-deletes the tenant and every active membership row
+// for that tenant in one transaction. Without the membership purge,
+// /auth/me still lists the defunct tenant (name lookup fails → UI shows
+// "#<id>").
 func (r *tenantRepository) DeleteTenant(ctx context.Context, id uint64) error {
-	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&types.Tenant{}).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("tenant_id = ?", id).Delete(&types.TenantMember{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&types.Tenant{}).Error
+	})
 }
 
 func (r *tenantRepository) AdjustStorageUsed(ctx context.Context, tenantID uint64, delta int64) error {

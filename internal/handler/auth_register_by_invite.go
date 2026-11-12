@@ -6,7 +6,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Tencent/WeKnora/internal/application/service"
+	"github.com/Tencent/WeKnora/internal/config"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/handler/dto"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
@@ -48,7 +51,7 @@ type invitationLookupRequest struct {
 
 // LookupInvitationByToken godoc
 // @Summary      解析共享邀请链接 token
-// @Description  根据邀请链接中的 token 返回邀请上下文（租户名 / 角色 / 过期时间），
+// @Description  根据邀请链接中的 token 返回邀请上下文（空间名 / 角色 / 过期时间），
 // @Description  供注册页展示。无认证；token 无效或被撤销返回 410。
 // @Description  使用 POST + body 而非 GET + path，避免 token 落入访问日志 / 浏览器历史 / tracing。
 // @Tags         认证
@@ -105,23 +108,28 @@ func (h *AuthHandler) LookupInvitationByToken(c *gin.Context) {
 
 // RegisterByInvite godoc
 // @Summary      使用共享链接注册
-// @Description  通过 Owner 生成的共享邀请链接 token 完成注册，绕过 invite_only 模式拦截。
-// @Description  注册者自填邮箱（与 token 不绑定）；注册成功后自动加入对应租户。
+// @Description  通过共享邀请链接 token 完成注册，仅 self_serve / invite_register 模式允许。
+// @Description  注册者自填邮箱（与 token 不绑定）；注册成功后自动加入对应空间。
 // @Tags         认证
 // @Accept       json
 // @Produce      json
 // @Param        request  body      registerByInviteRequest  true  "邀请注册请求"
 // @Success      201      {object}  types.LoginResponse
 // @Failure      400      {object}  apperrors.AppError  "请求参数错误"
+// @Failure      403      {object}  apperrors.AppError  "注册功能已禁用"
 // @Failure      409      {object}  apperrors.AppError  "邮箱已注册"
 // @Failure      410      {object}  apperrors.AppError  "链接无效或已撤销"
 // @Router       /auth/register-by-invite [post]
 //
-// RegisterByInvite is intentionally NOT subject to the invite_only gate:
-// the gate suppresses public registration, while this endpoint requires
-// a valid token issued by an Owner. The token IS the authorisation.
+// RegisterByInvite requires both an enabled registration mode and a valid token.
 func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 	ctx := c.Request.Context()
+
+	mode := h.resolveRegistrationMode(ctx)
+	if mode != config.AuthRegistrationModeSelfServe && mode != config.AuthRegistrationModeInviteRegister {
+		_ = c.Error(apperrors.NewForbiddenError("Registration is disabled"))
+		return
+	}
 
 	if h.invitationSvc == nil {
 		c.Error(apperrors.NewInternalServerError("invitation service unavailable"))
@@ -168,10 +176,17 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 		return
 	}
 
+	if err := service.ValidatePasswordPolicy(req.Password, h.complexPasswordEnabled(ctx)); err != nil {
+		logger.Error(ctx, "Invalid password policy")
+		_ = c.Error(apperrors.NewValidationError(err.Error()))
+		return
+	}
+
 	user, err := h.userService.Register(ctx, &types.RegisterRequest{
-		Username: req.Username,
-		Email:    req.Email,
-		Password: req.Password,
+		Username:           req.Username,
+		Email:              req.Email,
+		Password:           req.Password,
+		TenantProvisioning: types.TenantProvisioningTenantless,
 	})
 	if err != nil {
 		logger.Errorf(ctx, "register-by-invite: user create failed for %s: %v",
@@ -180,10 +195,26 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 		return
 	}
 
+	// The invited tenant becomes the user's initial/default tenant. No
+	user.TenantID = inv.TenantID
+	if err := h.userService.UpdateUser(ctx, user); err != nil {
+		logger.Errorf(ctx, "register-by-invite: failed to set home tenant for user %s: %v", user.ID, err)
+		_ = h.userService.DeleteUser(ctx, user.ID)
+		c.Error(apperrors.NewInternalServerError("failed to finalise invited account").WithDetails(err.Error()))
+		return
+	}
+
 	if _, err := h.invitationSvc.AcceptByToken(ctx, req.Token, user.ID); err != nil {
-		// Race: link was revoked between Lookup and Accept. The user
-		// account is created either way — they can still log in.
+		// Race: link was revoked between Lookup and Accept. Keep the new
+		// account, but restore it to tenantless so it does not point at a
+		// tenant for which no membership was created. If even that repair
+		// fails, remove the half-provisioned identity.
 		logger.Errorf(ctx, "register-by-invite: accept failed for user %s: %v", user.ID, err)
+		user.TenantID = 0
+		if rollbackErr := h.userService.UpdateUser(ctx, user); rollbackErr != nil {
+			logger.Errorf(ctx, "register-by-invite: failed to restore tenantless user %s: %v", user.ID, rollbackErr)
+			_ = h.userService.DeleteUser(ctx, user.ID)
+		}
 		c.Error(&apperrors.AppError{
 			Code:     apperrors.ErrNotFound,
 			Message:  "invitation link is no longer valid; please log in to your new account",
@@ -200,7 +231,7 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 	}
 
 	tenant, _ := h.tenantService.GetTenantByID(ctx, inv.TenantID)
-	c.JSON(http.StatusCreated, &types.LoginResponse{
+	c.JSON(http.StatusCreated, dto.NewAuthLoginResponse(&types.LoginResponse{
 		Success:      true,
 		Message:      "Registration successful",
 		User:         user,
@@ -212,5 +243,5 @@ func (h *AuthHandler) RegisterByInvite(c *gin.Context) {
 		}},
 		Token:        accessToken,
 		RefreshToken: refreshToken,
-	})
+	}))
 }

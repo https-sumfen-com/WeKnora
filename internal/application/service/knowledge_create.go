@@ -3,12 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/url"
-	"os"
 	"path"
-	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -25,15 +25,35 @@ import (
 
 // CreateKnowledgeFromFile creates a knowledge entry from an uploaded file
 func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
-	kbID string, file *multipart.FileHeader, metadata map[string]string, enableMultimodel *bool, customFileName string, tagID string, channel string,
+	kbID string, file *multipart.FileHeader, metadata map[string]string, enableMultimodel *bool,
+	customFileName string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides,
+) (*types.Knowledge, error) {
+	return s.createKnowledgeFromFile(ctx, kbID, file, metadata, enableMultimodel, customFileName,
+		tagIDs, channel, processOverrides, nil)
+}
+
+func (s *knowledgeService) createKnowledgeFromFile(ctx context.Context,
+	kbID string, file *multipart.FileHeader, metadata map[string]string, enableMultimodel *bool,
+	customFileName string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides,
+	replacement *knowledgeReplacement,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from file")
 
-	// Use custom filename if provided, otherwise use original filename
+	// Use custom filename if provided, otherwise use original filename. Folder
+	// uploads pass a path-qualified name ("docs/spec/design.md"): the directory
+	// part becomes the knowledge's folder_path and only the base name is kept as
+	// the display / storage file name.
 	fileName := file.Filename
+	folderPath := ""
 	if customFileName != "" {
-		fileName = customFileName
-		logger.Infof(ctx, "Using custom filename: %s (original: %s)", customFileName, file.Filename)
+		folderPath, fileName = types.SplitKnowledgeRelativePath(customFileName)
+		if fileName == "" {
+			fileName = file.Filename
+		}
+		logger.Infof(ctx, "Using custom filename: %s (original: %s, folder: %s)",
+			fileName, file.Filename, folderPath)
 	}
 
 	logger.Infof(ctx, "Knowledge base ID: %s, file: %s", kbID, fileName)
@@ -60,68 +80,18 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return nil, err
 	}
 
-	// 检查多模态配置完整性 - 只在图片文件时校验
-	if !IsImageType(getFileType(fileName)) {
-		logger.Info(ctx, "Non-image file with multimodal enabled, skipping COS/VLM validation")
-	} else {
-		// 解析有效 provider：优先 KB 级别（新字段 > 旧字段），其次租户默认
-		provider := kb.GetStorageProvider()
-		tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-		if provider == "" && tenant != nil && tenant.StorageEngineConfig != nil {
-			provider = strings.ToLower(strings.TrimSpace(tenant.StorageEngineConfig.DefaultProvider))
-		}
-
-		// 根据 provider 校验租户级存储引擎配置
-		switch provider {
-		case "cos":
-			if tenant == nil || tenant.StorageEngineConfig == nil || tenant.StorageEngineConfig.COS == nil ||
-				tenant.StorageEngineConfig.COS.SecretID == "" || tenant.StorageEngineConfig.COS.SecretKey == "" ||
-				tenant.StorageEngineConfig.COS.Region == "" || tenant.StorageEngineConfig.COS.BucketName == "" {
-				logger.Error(ctx, "COS configuration incomplete for image multimodal processing")
-				return nil, werrors.NewBadRequestError("上传图片文件需要完整的对象存储配置信息, 请前往知识库存储设置或系统设置页面进行补全")
-			}
-		case "minio":
-			ok := false
-			if tenant != nil && tenant.StorageEngineConfig != nil && tenant.StorageEngineConfig.MinIO != nil {
-				m := tenant.StorageEngineConfig.MinIO
-				if m.Mode == "remote" {
-					ok = m.Endpoint != "" && m.AccessKeyID != "" && m.SecretAccessKey != "" && m.BucketName != ""
-				} else {
-					ok = os.Getenv("MINIO_ENDPOINT") != "" && os.Getenv("MINIO_ACCESS_KEY_ID") != "" &&
-						os.Getenv("MINIO_SECRET_ACCESS_KEY") != "" &&
-						(m.BucketName != "" || os.Getenv("MINIO_BUCKET_NAME") != "")
-				}
-			}
-			if !ok {
-				logger.Error(ctx, "MinIO configuration incomplete for image multimodal processing")
-				return nil, werrors.NewBadRequestError("上传图片文件需要完整的对象存储配置信息, 请前往知识库存储设置或系统设置页面进行补全")
-			}
-		}
-
-		// 检查VLM配置
-		if !kb.VLMConfig.Enabled || kb.VLMConfig.ModelID == "" {
-			logger.Error(ctx, "VLM model is not configured")
-			return nil, werrors.NewBadRequestError("上传图片文件需要设置VLM模型")
-		}
-
-		logger.Info(ctx, "Image multimodal configuration validation passed")
-	}
-
-	// 检查音频ASR配置完整性 - 只在音频文件时校验
-	if IsAudioType(getFileType(fileName)) {
-		if !kb.ASRConfig.IsASREnabled() {
-			logger.Error(ctx, "ASR model is not configured")
-			return nil, werrors.NewBadRequestError("上传音频文件需要设置ASR语音识别模型")
-		}
-		logger.Info(ctx, "Audio ASR configuration validation passed")
-	}
-
-	// Validate file type
+	// Early reject before the whole-file hash below. resolveFileImportProcessConfig
+	// gates the same extension set, but this path must keep returning
+	// ErrInvalidFileType rather than the shared gate's localized message.
 	logger.Infof(ctx, "Checking file type: %s", fileName)
 	if !isValidFileType(fileName) {
 		logger.Error(ctx, "Invalid file type")
 		return nil, ErrInvalidFileType
 	}
+
+	// Fresh imports keep JSON validation in the HTTP upload handler (IM needs
+	// a failed row for asynchronous parse errors). Replacement entry points
+	// validate JSON before retiring the previous source.
 
 	// Calculate file hash for deduplication
 	logger.Info(ctx, "Calculating file hash")
@@ -134,12 +104,21 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	// Check if file already exists
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	logger.Infof(ctx, "Checking if file exists, tenant ID: %d", tenantID)
-	exists, existingKnowledge, err := s.repo.CheckKnowledgeExists(ctx, tenantID, kbID, &types.KnowledgeCheckParams{
+	checkParams := &types.KnowledgeCheckParams{
 		Type:     "file",
 		FileName: fileName,
+		FileType: getFileType(fileName),
 		FileSize: file.Size,
 		FileHash: hash,
-	})
+	}
+	// Same-bytes files from different source identities are still distinct
+	// documents (GitLab README templates, copied Confluence pages). Scope the
+	// hash check to datasource_id + external_id so retries stay idempotent.
+	if usesSourceIdentityDuplicateCheck(channel) {
+		checkParams.DataSourceID = metadata["datasource_id"]
+		checkParams.ExternalID = metadata["external_id"]
+	}
+	exists, existingKnowledge, err := s.checkKnowledgeForCreation(ctx, tenantID, kbID, replacement, checkParams)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to check knowledge existence: %v", err)
 		return nil, err
@@ -156,7 +135,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 
 	// Check storage quota
 	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-	if tenantInfo.StorageQuota > 0 && tenantInfo.StorageUsed >= tenantInfo.StorageQuota {
+	if tenantInfo.StorageQuota > 0 && knowledgeCreationStorageUsed(tenantInfo, replacement) >= tenantInfo.StorageQuota {
 		logger.Error(ctx, "Storage quota exceeded")
 		return nil, types.NewStorageQuotaExceededError()
 	}
@@ -179,17 +158,33 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		return nil, werrors.NewValidationError("文件名包含非法字符")
 	}
 
+	// The folder path is rendered as sidebar tree labels, so it goes through the
+	// same input validation as the file name before it is stored.
+	if folderPath != "" {
+		safeFolderPath, folderValid := secutils.ValidateInput(folderPath)
+		if !folderValid {
+			logger.Errorf(ctx, "Invalid folder path: %s", folderPath)
+			return nil, werrors.NewValidationError("文件夹路径包含非法字符")
+		}
+		folderPath = types.NormalizeKnowledgeFolderPath(safeFolderPath)
+	}
+
+	eff, err := resolveFileImportProcessConfig(ctx, kb, getFileType(safeFilename), processOverrides, enableMultimodel)
+	if err != nil {
+		return nil, err
+	}
+
 	// Prepare knowledge record
 	logger.Info(ctx, "Preparing knowledge record")
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
 		KnowledgeBaseID:  kbID,
-		TagID:            tagID, // 设置分类ID，用于知识分类管理
 		Type:             "file",
 		Channel:          defaultChannel(channel),
 		Title:            safeFilename,
 		FileName:         safeFilename,
+		FolderPath:       folderPath,
 		FileType:         getFileType(safeFilename),
 		FileSize:         file.Size,
 		FileHash:         hash,
@@ -199,6 +194,13 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		UpdatedAt:        time.Now(),
 		EmbeddingModelID: kb.EmbeddingModelID,
 		Metadata:         metadataJSON,
+	}
+
+	if processOverrides != nil {
+		if err := knowledge.SetProcessOverrides(processOverrides); err != nil {
+			logger.Errorf(ctx, "Failed to set process overrides: %v", err)
+			return nil, err
+		}
 	}
 
 	// Save the file to storage (use KB-level storage engine if configured)
@@ -213,34 +215,33 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 
 	// Save knowledge record to database after the file is safely stored.
 	logger.Info(ctx, "Saving knowledge record to database")
-	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
+	if err := s.persistKnowledgeForCreation(ctx, knowledge, replacement); err != nil {
 		logger.Errorf(ctx, "Failed to create knowledge record, ID: %s, error: %v", knowledge.ID, err)
-		if deleteErr := fileSvc.DeleteFile(ctx, filePath); deleteErr != nil {
-			logger.Errorf(ctx, "Failed to delete saved file after knowledge creation failed, path: %s, error: %v", filePath, deleteErr)
+		if replacement == nil || !replacement.keepFile {
+			if deleteErr := fileSvc.DeleteFile(context.WithoutCancel(ctx), filePath); deleteErr != nil {
+				logger.Errorf(ctx, "Failed to delete saved file after knowledge creation failed, path: %s, error: %v",
+					filePath, deleteErr)
+			}
 		}
+		return nil, err
+	}
+	// Set tag relations
+	if err := s.attachCreationTags(ctx, knowledge, tagIDs, replacement); err != nil {
+		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
 	}
 
 	// Enqueue document processing task to Asynq
 	logger.Info(ctx, "Enqueuing document processing task to Asynq")
-	enableMultimodelValue := false
-	if enableMultimodel != nil {
-		enableMultimodelValue = *enableMultimodel
-	} else {
-		enableMultimodelValue = kb.IsMultimodalEnabled()
+	enableMultimodelValue := eff.EnableMultimodel
+
+	enableQuestionGeneration := eff.QuestionGenerationConfig.Enabled
+	questionCount := eff.QuestionGenerationConfig.QuestionCount
+	if questionCount <= 0 {
+		questionCount = 3
 	}
 
-	// Check question generation config
-	enableQuestionGeneration := false
-	questionCount := 3 // default
-	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
-		enableQuestionGeneration = true
-		if kb.QuestionGenerationConfig.QuestionCount > 0 {
-			questionCount = kb.QuestionGenerationConfig.QuestionCount
-		}
-	}
-
-	lang, _ := types.LanguageFromContext(ctx)
+	lang := types.LanguageFromContextOrDefault(ctx)
 	taskPayload := types.DocumentProcessPayload{
 		TenantID:                 tenantID,
 		KnowledgeID:              knowledge.ID,
@@ -258,6 +259,12 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	payloadBytes, err := json.Marshal(taskPayload)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to marshal document process task payload: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "file", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		// 即使入队失败，也返回knowledge，因为文件已保存
 		return knowledge, nil
 	}
@@ -270,9 +277,20 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue document process task: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "file", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		// 即使入队失败，也返回knowledge，因为文件已保存
 		return knowledge, nil
 	}
+	recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+		"knowledge", knowledge.ID, types.AuditOutcomeAccepted, map[string]any{
+			"title": knowledge.Title, "source_type": "file", "file_type": knowledge.FileType,
+			"processing_status": "pending", "task_id": info.ID, "trigger": kbActivityTrigger(ctx),
+		})
 	logger.Infof(
 		ctx,
 		"Enqueued document process task: id=%s queue=%s knowledge_id=%s",
@@ -281,9 +299,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		knowledge.ID,
 	)
 
-	if slices.Contains([]string{"csv", "xlsx", "xls"}, getFileType(safeFilename)) {
-		NewDataTableSummaryTask(ctx, s.task, tenantID, knowledge.ID, kb.SummaryModelID, kb.EmbeddingModelID)
-	}
+	enqueueDataTableSummaryIfNeeded(ctx, s.task, tenantID, knowledge.ID, safeFilename, getFileType(safeFilename), kb.SummaryModelID, kb.EmbeddingModelID)
 
 	logger.Infof(ctx, "Knowledge from file created successfully, ID: %s", knowledge.ID)
 	return knowledge, nil
@@ -297,7 +313,7 @@ func isFileURL(rawURL, fileName, fileType string) bool {
 	u, err := url.Parse(rawURL)
 	if err == nil {
 		ext := strings.ToLower(strings.TrimPrefix(path.Ext(u.Path), "."))
-		if ext != "" && allowedFileURLExtensions[ext] {
+		if ext != "" && isSupportedImportExtension(ext) {
 			return true
 		}
 	}
@@ -306,14 +322,29 @@ func isFileURL(rawURL, fileName, fileType string) bool {
 }
 
 func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
-	kbID string, rawURL string, fileName string, fileType string, enableMultimodel *bool, title string, tagID string, channel string,
+	kbID string, rawURL string, fileName string, fileType string, enableMultimodel *bool,
+	title string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides,
+) (*types.Knowledge, error) {
+	return s.createKnowledgeFromURL(ctx, kbID, rawURL, fileName, fileType, enableMultimodel,
+		title, tagIDs, channel, processOverrides, nil)
+}
+
+func (s *knowledgeService) createKnowledgeFromURL(ctx context.Context,
+	kbID string, rawURL string, fileName string, fileType string, enableMultimodel *bool,
+	title string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides,
+	replacement *knowledgeReplacement,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from URL")
 	logger.Infof(ctx, "Knowledge base ID: %s, URL: %s", kbID, rawURL)
 
 	// Route to file_url logic when the URL points to a downloadable file
 	if isFileURL(rawURL, fileName, fileType) {
-		return s.createKnowledgeFromFileURL(ctx, kbID, rawURL, fileName, fileType, enableMultimodel, title, tagID, channel)
+		return s.createKnowledgeFromFileURLWithReplacement(
+			ctx, kbID, rawURL, fileName, fileType, enableMultimodel,
+			title, tagIDs, channel, processOverrides, replacement,
+		)
 	}
 
 	url := rawURL
@@ -347,11 +378,12 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	logger.Infof(ctx, "Checking if URL exists, tenant ID: %d", tenantID)
 	fileHash := calculateStr(url)
-	exists, existingKnowledge, err := s.repo.CheckKnowledgeExists(ctx, tenantID, kbID, &types.KnowledgeCheckParams{
-		Type:     "url",
-		URL:      url,
-		FileHash: fileHash,
-	})
+	exists, existingKnowledge, err := s.checkKnowledgeForCreation(ctx, tenantID, kbID, replacement,
+		&types.KnowledgeCheckParams{
+			Type:     "url",
+			URL:      url,
+			FileHash: fileHash,
+		})
 	if err != nil {
 		logger.Errorf(ctx, "Failed to check knowledge existence: %v", err)
 		return nil, err
@@ -370,7 +402,7 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 
 	// Check storage quota
 	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-	if tenantInfo.StorageQuota > 0 && tenantInfo.StorageUsed >= tenantInfo.StorageQuota {
+	if tenantInfo.StorageQuota > 0 && knowledgeCreationStorageUsed(tenantInfo, replacement) >= tenantInfo.StorageQuota {
 		logger.Error(ctx, "Storage quota exceeded")
 		return nil, types.NewStorageQuotaExceededError()
 	}
@@ -392,36 +424,35 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 		EmbeddingModelID: kb.EmbeddingModelID,
-		TagID:            tagID, // 设置分类ID，用于知识分类管理
 	}
 
 	// Save knowledge record
 	logger.Infof(ctx, "Saving knowledge record to database, ID: %s", knowledge.ID)
-	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
+	eff, err := ApplyKnowledgeProcessOverrides(ctx, kb, knowledge, processOverrides, []string{"html"}, enableMultimodel)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.persistKnowledgeForCreation(ctx, knowledge, replacement); err != nil {
 		logger.Errorf(ctx, "Failed to create knowledge record: %v", err)
+		return nil, err
+	}
+	// Set tag relations
+	if err := s.attachCreationTags(ctx, knowledge, tagIDs, replacement); err != nil {
+		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
 	}
 
 	// Enqueue URL processing task to Asynq
 	logger.Info(ctx, "Enqueuing URL processing task to Asynq")
-	enableMultimodelValue := false
-	if enableMultimodel != nil {
-		enableMultimodelValue = *enableMultimodel
-	} else {
-		enableMultimodelValue = kb.IsMultimodalEnabled()
+	enableMultimodelValue := eff.EnableMultimodel
+	enableQuestionGeneration := eff.QuestionGenerationConfig.Enabled
+	questionCount := eff.QuestionGenerationConfig.QuestionCount
+	if questionCount <= 0 {
+		questionCount = 3
 	}
 
-	// Check question generation config
-	enableQuestionGeneration := false
-	questionCount := 3 // default
-	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
-		enableQuestionGeneration = true
-		if kb.QuestionGenerationConfig.QuestionCount > 0 {
-			questionCount = kb.QuestionGenerationConfig.QuestionCount
-		}
-	}
-
-	lang, _ := types.LanguageFromContext(ctx)
+	lang := types.LanguageFromContextOrDefault(ctx)
 	taskPayload := types.DocumentProcessPayload{
 		TenantID:                 tenantID,
 		KnowledgeID:              knowledge.ID,
@@ -437,6 +468,12 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 	payloadBytes, err := json.Marshal(taskPayload)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to marshal URL process task payload: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "url", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		return knowledge, nil
 	}
 
@@ -448,26 +485,23 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue URL process task: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "url", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		return knowledge, nil
 	}
+	recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+		"knowledge", knowledge.ID, types.AuditOutcomeAccepted, map[string]any{
+			"title": knowledge.Title, "source_type": "url", "file_type": knowledge.FileType,
+			"processing_status": "pending", "task_id": info.ID, "trigger": kbActivityTrigger(ctx),
+		})
 	logger.Infof(ctx, "Enqueued URL process task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, knowledge.ID)
 
 	logger.Infof(ctx, "Knowledge from URL created successfully, ID: %s", knowledge.ID)
 	return knowledge, nil
-}
-
-// allowedFileURLExtensions defines the supported file extensions for file URL import
-var allowedFileURLExtensions = map[string]bool{
-	"txt":  true,
-	"md":   true,
-	"pdf":  true,
-	"docx": true,
-	"doc":  true,
-	"mp3":  true,
-	"wav":  true,
-	"m4a":  true,
-	"flac": true,
-	"ogg":  true,
 }
 
 // maxFileURLSize is the maximum allowed file size for file URL import (10MB)
@@ -504,17 +538,20 @@ func extractFileNameFromContentDisposition(header string) string {
 }
 
 // createKnowledgeFromFileURL is the internal implementation for file URL knowledge creation.
-// Called by CreateKnowledgeFromURL when the URL is detected as a direct file download.
+// The replacement-aware variant shares the pipeline for datasource updates.
 func (s *knowledgeService) createKnowledgeFromFileURL(
-	ctx context.Context,
-	kbID string,
-	fileURL string,
-	fileName string,
-	fileType string,
-	enableMultimodel *bool,
-	title string,
-	tagID string,
-	channel string,
+	ctx context.Context, kbID, fileURL, fileName, fileType string,
+	enableMultimodel *bool, title string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides,
+) (*types.Knowledge, error) {
+	return s.createKnowledgeFromFileURLWithReplacement(ctx, kbID, fileURL, fileName, fileType,
+		enableMultimodel, title, tagIDs, channel, processOverrides, nil)
+}
+
+func (s *knowledgeService) createKnowledgeFromFileURLWithReplacement(
+	ctx context.Context, kbID, fileURL, fileName, fileType string,
+	enableMultimodel *bool, title string, tagIDs []string, channel string,
+	processOverrides *types.KnowledgeProcessOverrides, replacement *knowledgeReplacement,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from file URL")
 	logger.Infof(ctx, "Knowledge base ID: %s, file URL: %s", kbID, fileURL)
@@ -524,6 +561,10 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base: %v", err)
 		return nil, err
+	}
+
+	if kb.Type == types.KnowledgeBaseTypeFAQ {
+		return nil, werrors.NewBadRequestError("FAQ 知识库不支持文件上传，请使用 FAQ 导入功能")
 	}
 
 	if err := s.checkStorageEngineConfigured(ctx, kb); err != nil {
@@ -544,19 +585,22 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	if fileName == "" {
 		fileName = extractFileNameFromURL(fileURL)
 	}
+	if fileName != "" {
+		safeFilename, ok := secutils.ValidateInput(fileName)
+		if !ok {
+			logger.Errorf(ctx, "Invalid filename: %s", fileName)
+			return nil, werrors.NewValidationError("文件名包含非法字符")
+		}
+		fileName = safeFilename
+	}
 
-	// Resolve fileType: user-provided > inferred from fileName
-	if fileType == "" && fileName != "" {
+	// Resolve fileType: user-provided > inferred from fileName (which already
+	// falls back to the URL path above). getFileType never returns empty, so an
+	// undeterminable type surfaces as "unknown" and is rejected below.
+	if fileType == "" {
 		fileType = getFileType(fileName)
 	}
-
-	// Validate file extension against whitelist (if we can determine it)
-	if fileType != "" {
-		if !allowedFileURLExtensions[strings.ToLower(fileType)] {
-			logger.Errorf(ctx, "Unsupported file type for file URL import: %s", fileType)
-			return nil, werrors.NewBadRequestError(fmt.Sprintf("不支持的文件类型: %s，仅支持 txt, md, pdf, docx, doc", fileType))
-		}
-	}
+	fileType = normalizeFileExtension(fileType)
 
 	// Use title as display name if fileName is still empty
 	displayName := fileName
@@ -574,11 +618,12 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	// Check for duplicate (by URL hash)
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	fileHash := calculateStr(fileURL)
-	exists, existingKnowledge, err := s.repo.CheckKnowledgeExists(ctx, tenantID, kbID, &types.KnowledgeCheckParams{
-		Type:     "file_url",
-		URL:      fileURL,
-		FileHash: fileHash,
-	})
+	exists, existingKnowledge, err := s.checkKnowledgeForCreation(ctx, tenantID, kbID, replacement,
+		&types.KnowledgeCheckParams{
+			Type:     "file_url",
+			URL:      fileURL,
+			FileHash: fileHash,
+		})
 	if err != nil {
 		logger.Errorf(ctx, "Failed to check knowledge existence: %v", err)
 		return nil, err
@@ -596,7 +641,7 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 
 	// Check storage quota
 	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-	if tenantInfo.StorageQuota > 0 && tenantInfo.StorageUsed >= tenantInfo.StorageQuota {
+	if tenantInfo.StorageQuota > 0 && knowledgeCreationStorageUsed(tenantInfo, replacement) >= tenantInfo.StorageQuota {
 		logger.Error(ctx, "Storage quota exceeded")
 		return nil, types.NewStorageQuotaExceededError()
 	}
@@ -618,35 +663,41 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 		EmbeddingModelID: kb.EmbeddingModelID,
-		TagID:            tagID,
 	}
 	if knowledge.Title == "" {
 		knowledge.Title = displayName
 	}
 
-	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
+	eff, err := resolveFileImportProcessConfig(ctx, kb, fileType, processOverrides, enableMultimodel)
+	if err != nil {
+		return nil, err
+	}
+	if processOverrides != nil {
+		if err := knowledge.SetProcessOverrides(processOverrides); err != nil {
+			logger.Errorf(ctx, "Failed to set process overrides: %v", err)
+			return nil, err
+		}
+	}
+
+	if err := s.persistKnowledgeForCreation(ctx, knowledge, replacement); err != nil {
 		logger.Errorf(ctx, "Failed to create knowledge record: %v", err)
+		return nil, err
+	}
+	// Set tag relations
+	if err := s.attachCreationTags(ctx, knowledge, tagIDs, replacement); err != nil {
+		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
 	}
 
 	// Build async task payload
-	enableMultimodelValue := false
-	if enableMultimodel != nil {
-		enableMultimodelValue = *enableMultimodel
-	} else {
-		enableMultimodelValue = kb.IsMultimodalEnabled()
+	enableMultimodelValue := eff.EnableMultimodel
+	enableQuestionGeneration := eff.QuestionGenerationConfig.Enabled
+	questionCount := eff.QuestionGenerationConfig.QuestionCount
+	if questionCount <= 0 {
+		questionCount = 3
 	}
 
-	enableQuestionGeneration := false
-	questionCount := 3
-	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
-		enableQuestionGeneration = true
-		if kb.QuestionGenerationConfig.QuestionCount > 0 {
-			questionCount = kb.QuestionGenerationConfig.QuestionCount
-		}
-	}
-
-	lang, _ := types.LanguageFromContext(ctx)
+	lang := types.LanguageFromContextOrDefault(ctx)
 	taskPayload := types.DocumentProcessPayload{
 		TenantID:                 tenantID,
 		KnowledgeID:              knowledge.ID,
@@ -664,6 +715,12 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	payloadBytes, err := json.Marshal(taskPayload)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to marshal file URL process task payload: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "file_url", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		return knowledge, nil
 	}
 
@@ -675,9 +732,22 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue file URL process task: %v", err)
+		s.markKnowledgeEnqueueFailed(ctx, knowledge)
+		recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": knowledge.Title, "source_type": "file_url", "file_type": knowledge.FileType,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		return knowledge, nil
 	}
+	recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+		"knowledge", knowledge.ID, types.AuditOutcomeAccepted, map[string]any{
+			"title": knowledge.Title, "source_type": "file_url", "file_type": knowledge.FileType,
+			"processing_status": "pending", "task_id": info.ID, "trigger": kbActivityTrigger(ctx),
+		})
 	logger.Infof(ctx, "Enqueued file URL process task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, knowledge.ID)
+
+	enqueueDataTableSummaryIfNeeded(ctx, s.task, tenantID, knowledge.ID, fileName, fileType, kb.SummaryModelID, kb.EmbeddingModelID)
 
 	logger.Infof(ctx, "Knowledge from file URL created successfully, ID: %s", knowledge.ID)
 	return knowledge, nil
@@ -763,7 +833,6 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 		EmbeddingModelID: kb.EmbeddingModelID,
 		FileName:         fileName,
 		FileType:         types.KnowledgeTypeManual,
-		TagID:            payload.TagID, // 设置分类ID，用于知识分类管理
 	}
 	if err := knowledge.SetManualMetadata(meta); err != nil {
 		logger.Errorf(ctx, "Failed to set manual metadata: %v", err)
@@ -775,20 +844,53 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 		knowledge.ParseStatus = "pending"
 	}
 
+	if status == types.ManualKnowledgeStatusPublish {
+		if _, err := ApplyKnowledgeProcessOverrides(ctx, kb, knowledge, payload.ProcessConfig, nil, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.repo.CreateKnowledge(ctx, knowledge); err != nil {
 		logger.Errorf(ctx, "Failed to create manual knowledge record: %v", err)
 		return nil, err
 	}
+	// Set tag relations
+	if err := s.setAndAttachKnowledgeTags(ctx, tenantID, kbID, knowledge, payload.TagIDs); err != nil {
+		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
+		return nil, err
+	}
+
+	// Claim the body's files immediately, before publishing. A draft saved from
+	// a chat answer must already own them: the message it came from could be
+	// deleted while the draft is still unpublished.
+	s.bindContentResources(ctx, tenantID, knowledge.ID, cleanContent)
 
 	if status == types.ManualKnowledgeStatusPublish {
 		logger.Infof(ctx, "Manual knowledge created, enqueuing async processing task, ID: %s", knowledge.ID)
-		if err := s.enqueueManualProcessing(ctx, knowledge, cleanContent, false); err != nil {
+		taskID, err := s.enqueueManualProcessing(ctx, knowledge, cleanContent, false)
+		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue manual processing task for new knowledge: %v", err)
 			// Non-fatal: mark as failed so user can retry
 			knowledge.ParseStatus = "failed"
 			knowledge.ErrorMessage = "Failed to enqueue processing task"
 			s.repo.UpdateKnowledge(ctx, knowledge)
+			recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+				"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+					"title": knowledge.Title, "source_type": "manual", "status": status,
+					"processing_status": "failed", "failure_stage": "enqueue",
+				})
+		} else {
+			recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+				"knowledge", knowledge.ID, types.AuditOutcomeAccepted, map[string]any{
+					"title": knowledge.Title, "source_type": "manual", "status": status,
+					"processing_status": "pending", "task_id": taskID, "trigger": kbActivityTrigger(ctx),
+				})
 		}
+	} else {
+		recordKBActivity(ctx, s.audit, tenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeSuccess, map[string]any{
+				"title": knowledge.Title, "source_type": "manual", "status": status,
+			})
 	}
 
 	return knowledge, nil
@@ -850,11 +952,14 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 		logger.Errorf(ctx, "Failed to create knowledge record: %v", err)
 		return nil, err
 	}
-
 	// Process passages
 	if syncMode {
 		logger.Info(ctx, "Processing passage synchronously")
 		s.processDocumentFromPassage(ctx, kb, knowledge, safePassages)
+		recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeSuccess, map[string]any{
+				"title": knowledge.Title, "source_type": "passage", "processing_status": knowledge.ParseStatus,
+			})
 		logger.Infof(ctx, "Knowledge from passage created successfully (sync), ID: %s", knowledge.ID)
 	} else {
 		// Enqueue passage processing task to Asynq
@@ -871,7 +976,7 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 			}
 		}
 
-		lang, _ := types.LanguageFromContext(ctx)
+		lang := types.LanguageFromContextOrDefault(ctx)
 		taskPayload := types.DocumentProcessPayload{
 			TenantID:                 tenantID,
 			KnowledgeID:              knowledge.ID,
@@ -887,6 +992,12 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 		payloadBytes, err := json.Marshal(taskPayload)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to marshal passage process task payload: %v", err)
+			s.markKnowledgeEnqueueFailed(ctx, knowledge)
+			recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+				"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+					"title": knowledge.Title, "source_type": "passage",
+					"processing_status": "failed", "failure_stage": "enqueue",
+				})
 			// 即使入队失败，也返回knowledge
 			return knowledge, nil
 		}
@@ -899,8 +1010,19 @@ func (s *knowledgeService) createKnowledgeFromPassageInternal(ctx context.Contex
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue passage process task: %v", err)
+			s.markKnowledgeEnqueueFailed(ctx, knowledge)
+			recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+				"knowledge", knowledge.ID, types.AuditOutcomeFailed, map[string]any{
+					"title": knowledge.Title, "source_type": "passage",
+					"processing_status": "failed", "failure_stage": "enqueue",
+				})
 			return knowledge, nil
 		}
+		recordKBActivity(ctx, s.audit, knowledge.TenantID, kbID, types.AuditActionKnowledgeCreated,
+			"knowledge", knowledge.ID, types.AuditOutcomeAccepted, map[string]any{
+				"title": knowledge.Title, "source_type": "passage", "processing_status": "pending",
+				"task_id": info.ID, "trigger": kbActivityTrigger(ctx),
+			})
 		logger.Infof(ctx, "Enqueued passage process task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, knowledge.ID)
 		logger.Infof(ctx, "Knowledge from passage created successfully, ID: %s", knowledge.ID)
 	}
@@ -939,21 +1061,18 @@ func (s *knowledgeService) UpdateManualKnowledge(ctx context.Context,
 		return nil, werrors.NewValidationError("状态仅支持 draft 或 publish")
 	}
 
-	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
-	existing, err := s.repo.GetKnowledgeByID(ctx, tenantID, knowledgeID)
+	existing, kb, err := loadKnowledgeWrite(ctx, s.repo, s.kbService, knowledgeID)
 	if err != nil {
-		logger.Errorf(ctx, "Failed to load knowledge: %v", err)
 		return nil, err
 	}
 	if !existing.IsManual() {
 		return nil, werrors.NewBadRequestError("仅支持手工知识的在线编辑")
 	}
-
-	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, existing.KnowledgeBaseID)
+	ctx, err = withKBWriteTenantInfo(ctx, kb, s.tenantRepo)
 	if err != nil {
-		logger.Errorf(ctx, "Failed to get knowledge base for manual update: %v", err)
 		return nil, err
 	}
+	tenantID := existing.TenantID
 
 	var version int
 	if meta, err := existing.ManualMetadata(); err == nil && meta != nil {
@@ -990,6 +1109,11 @@ func (s *knowledgeService) UpdateManualKnowledge(ctx context.Context,
 			logger.Errorf(ctx, "Failed to persist manual draft: %v", err)
 			return nil, err
 		}
+		s.bindContentResources(ctx, tenantID, existing.ID, cleanContent)
+		recordKBActivity(ctx, s.audit, tenantID, existing.KnowledgeBaseID, types.AuditActionKnowledgeUpdated,
+			"knowledge", existing.ID, types.AuditOutcomeSuccess, map[string]any{
+				"title": existing.Title, "status": status,
+			})
 		return existing, nil
 	}
 
@@ -998,27 +1122,42 @@ func (s *knowledgeService) UpdateManualKnowledge(ctx context.Context,
 	existing.Description = ""
 	existing.ProcessedAt = nil
 
+	if _, err := ApplyKnowledgeProcessOverrides(ctx, kb, existing, payload.ProcessConfig, nil, nil); err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.UpdateKnowledge(ctx, existing); err != nil {
 		logger.Errorf(ctx, "Failed to persist manual knowledge before indexing: %v", err)
 		return nil, err
 	}
 
 	logger.Infof(ctx, "Manual knowledge updated, enqueuing async processing task, ID: %s", existing.ID)
-	if err := s.enqueueManualProcessing(ctx, existing, cleanContent, true); err != nil {
+	taskID, err := s.enqueueManualProcessing(ctx, existing, cleanContent, true)
+	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue manual processing task: %v", err)
 		// Non-fatal: mark as failed so user can retry
 		existing.ParseStatus = "failed"
 		existing.ErrorMessage = "Failed to enqueue processing task"
 		s.repo.UpdateKnowledge(ctx, existing)
+		recordKBActivity(ctx, s.audit, tenantID, existing.KnowledgeBaseID, types.AuditActionKnowledgeUpdated,
+			"knowledge", existing.ID, types.AuditOutcomeFailed, map[string]any{
+				"title": existing.Title, "status": status,
+				"processing_status": "failed", "failure_stage": "enqueue",
+			})
 		return nil, werrors.NewInternalServerError("Failed to submit processing task")
 	}
+	recordKBActivity(ctx, s.audit, tenantID, existing.KnowledgeBaseID, types.AuditActionKnowledgeUpdated,
+		"knowledge", existing.ID, types.AuditOutcomeAccepted, map[string]any{
+			"title": existing.Title, "status": status, "processing_status": "pending",
+			"task_id": taskID, "trigger": kbActivityTrigger(ctx),
+		})
 	return existing, nil
 }
 
 // enqueueManualProcessing enqueues a manual:process Asynq task for async cleanup + re-indexing.
 func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
-	knowledge *types.Knowledge, content string, needCleanup bool,
-) error {
+	knowledge *types.Knowledge, content string, needCleanup bool, options ...asynq.Option,
+) (string, error) {
 	requestID, _ := types.RequestIDFromContext(ctx)
 	payload := types.ManualProcessPayload{
 		RequestId:       requestID,
@@ -1031,16 +1170,40 @@ func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
 	langfuse.InjectTracing(ctx, &payload)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal manual process payload: %w", err)
+		return "", fmt.Errorf("failed to marshal manual process payload: %w", err)
 	}
 
-	task := asynq.NewTask(types.TypeManualProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
-	info, err := s.task.Enqueue(task)
+	task := asynq.NewTask(types.TypeManualProcess, payloadBytes,
+		asynq.Queue(types.QueueDefault), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute))
+	info, err := s.task.Enqueue(task, options...)
 	if err != nil {
-		return fmt.Errorf("failed to enqueue manual process task: %w", err)
+		return "", fmt.Errorf("failed to enqueue manual process task: %w", err)
 	}
 	logger.Infof(ctx, "Enqueued manual process task: knowledge_id=%s, asynq_id=%s", knowledge.ID, info.ID)
-	return nil
+	return info.ID, nil
+}
+
+// markKnowledgeEnqueueFailed prevents a durable knowledge row from remaining
+// indefinitely "pending" when its background processing task was never
+// created. The API may still return the row so callers can retry it.
+func (s *knowledgeService) markKnowledgeEnqueueFailed(ctx context.Context, knowledge *types.Knowledge) {
+	if knowledge == nil {
+		return
+	}
+	knowledge.ParseStatus = "failed"
+	knowledge.ErrorMessage = "Failed to enqueue processing task"
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		logger.Errorf(ctx, "Failed to mark knowledge as failed after enqueue error: %v", err)
+	}
+}
+
+func usesSourceIdentityDuplicateCheck(channel string) bool {
+	switch channel {
+	case types.ConnectorTypeGitLab, types.ChannelConfluence, types.ChannelSeafile, types.ChannelNextcloud:
+		return true
+	default:
+		return false
+	}
 }
 
 func ensureManualFileName(title string) string {
@@ -1071,25 +1234,174 @@ func sanitizeManualDownloadFilename(title string) string {
 	return safeName
 }
 
+// bindContentResources claims every stored file the body references on behalf
+// of a knowledge entry.
+//
+// A manual document routinely points at files it did not upload: an answer saved
+// from a chat carries the very `resource://` handles the assistant message still
+// shows. Claiming them is what makes that copy safe — no bytes are duplicated,
+// and neither the message nor the document can delete a file the other still
+// needs. Handles belonging to another workspace are skipped, so a pasted
+// reference cannot pull in a file the caller may not read.
+//
+// Best-effort by design: the document is already saved, and a missed claim
+// degrades to the old behaviour rather than failing the save.
+func (s *knowledgeService) bindContentResources(
+	ctx context.Context, tenantID uint64, knowledgeID, content string,
+) {
+	if s.resourceCatalog == nil || knowledgeID == "" {
+		return
+	}
+	for _, ref := range types.ScanResourceReferences(content) {
+		resource, err := s.resourceCatalog.Resolve(ctx, ref)
+		if err != nil || resource == nil {
+			logger.Warnf(ctx, "Skip binding unknown resource %s to knowledge %s: %v", ref, knowledgeID, err)
+			continue
+		}
+		if resource.TenantID != tenantID {
+			logger.Warnf(ctx, "Skip binding cross-workspace resource %s to knowledge %s", ref, knowledgeID)
+			continue
+		}
+		if err := s.resourceCatalog.Bind(
+			ctx, ref, types.ResourceOwnerKnowledge, knowledgeID, types.ResourceRelationAttachment,
+		); err != nil {
+			logger.Warnf(ctx, "Failed to bind resource %s to knowledge %s: %v", ref, knowledgeID, err)
+		}
+	}
+}
+
+// bindStoredImages claims the images a document parse extracted and stored,
+// so file authorization can later prove which knowledge owns each image. The
+// KB- and message-scoped file proxies only serve resources with a live
+// binding (#3342): an extracted image without one stays invisible to
+// cross-workspace viewers no matter what the retrieving chunk text says.
+//
+// Best-effort by design, mirroring bindContentResources: a parse is expensive
+// to redo, and a missed claim degrades to same-workspace rendering instead of
+// failing the document.
+func (s *knowledgeService) bindStoredImages(
+	ctx context.Context, knowledge *types.Knowledge, images []docparser.StoredImage,
+) {
+	if s.resourceCatalog == nil || knowledge == nil || len(images) == 0 {
+		return
+	}
+	bound := 0
+	for _, img := range images {
+		ref := strings.TrimSpace(img.ServingURL)
+		if ref == "" {
+			continue
+		}
+		resource, err := s.resourceCatalog.Resolve(ctx, ref)
+		if err != nil || resource == nil {
+			logger.Warnf(ctx, "Skip binding unknown stored image %s to knowledge %s: %v", ref, knowledge.ID, err)
+			continue
+		}
+		if resource.TenantID != knowledge.TenantID {
+			logger.Warnf(ctx, "Skip binding cross-workspace stored image %s to knowledge %s", ref, knowledge.ID)
+			continue
+		}
+		if err := s.resourceCatalog.Bind(
+			ctx, ref, types.ResourceOwnerKnowledge, knowledge.ID, types.ResourceRelationExtractedImage,
+		); err != nil {
+			logger.Warnf(ctx, "Failed to bind stored image %s to knowledge %s: %v", ref, knowledge.ID, err)
+			continue
+		}
+		bound++
+	}
+	if bound > 0 {
+		logger.Infof(ctx, "Bound %d/%d stored images to knowledge %s", bound, len(images), knowledge.ID)
+	}
+}
+
+func (s *knowledgeService) bindChunkResources(
+	ctx context.Context, tenantID uint64, knowledgeID string, chunks []*types.Chunk,
+) {
+	if len(chunks) == 0 {
+		return
+	}
+	var b strings.Builder
+	for _, chunk := range chunks {
+		if chunk == nil {
+			continue
+		}
+		b.WriteString(chunk.Content)
+		b.WriteByte('\n')
+		b.WriteString(chunk.ImageInfo)
+		b.WriteByte('\n')
+	}
+	s.bindContentResources(ctx, tenantID, knowledgeID, b.String())
+}
+
 func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 	kb *types.KnowledgeBase, knowledge *types.Knowledge, content string, doSync bool,
-) {
+) error {
 	clean := strings.TrimSpace(content)
 	if clean == "" {
-		return
+		// The caller already marked the row processing; with nothing to
+		// index no later stage would ever move it on.
+		if err := s.repo.UpdateKnowledgeColumns(ctx, knowledge.ID, map[string]interface{}{
+			"parse_status":  types.ParseStatusFailed,
+			"error_message": "manual knowledge content is empty",
+			"updated_at":    time.Now(),
+		}); err != nil {
+			return fmt.Errorf("mark empty manual knowledge %s failed: %w", knowledge.ID, err)
+		}
+		return nil
 	}
 
 	// Resolve embedded data:base64 images and remote http(s) images → storage, replace URLs.
 	// Runs before chunking so chunks contain stable provider:// URLs.
 	var resolvedImages []docparser.StoredImage
+	var fileSvc interfaces.FileService
+	var inlineParseErr error
 	if s.imageResolver != nil {
-		fileSvc := s.resolveFileService(ctx, kb)
-		afterDataURI, fromDataURI, _ := s.imageResolver.ResolveDataURIImages(ctx, clean, fileSvc, knowledge.TenantID)
-		if len(fromDataURI) > 0 {
-			logger.Infof(ctx, "Resolved %d data-URI images for manual knowledge %s", len(fromDataURI), knowledge.ID)
-			clean = afterDataURI
-			resolvedImages = append(resolvedImages, fromDataURI...)
+		fileSvc = s.resolveFileService(ctx, kb)
+		updatedMarkdown, inlineImages, resolveErr := s.imageResolver.ResolveAndStore(ctx,
+			&types.ReadResult{MarkdownContent: clean}, fileSvc, knowledge.TenantID)
+		if errors.Is(resolveErr, docparser.ErrAmbiguousInlineImage) {
+			inlineParseErr = resolveErr
+			inlineImages = nil // ResolveAndStore already rolled back this attempt's uploads.
+		} else if resolveErr != nil {
+			retryCount, _ := asynq.GetRetryCount(ctx)
+			maxRetry, _ := asynq.GetMaxRetry(ctx)
+			if retried, limit, ok := types.TaskRetryMetadataFromContext(ctx); ok {
+				retryCount, maxRetry = retried, limit
+			}
+			if retryCount >= maxRetry {
+				knowledge.ParseStatus = types.ParseStatusFailed
+				knowledge.ErrorMessage = fmt.Sprintf("store manual inline image: %v", resolveErr)
+				knowledge.UpdatedAt = time.Now()
+				if updateErr := s.updateKnowledgeUnlessSourceReplaced(ctx, knowledge); updateErr != nil {
+					logger.Errorf(ctx,
+						"Failed to persist manual inline image failure for %s: %v", knowledge.ID, updateErr)
+				}
+			}
+			return fmt.Errorf("store manual inline image: %w", resolveErr)
 		}
+		if len(inlineImages) > 0 {
+			logger.Infof(ctx, "Resolved %d inline images for manual knowledge %s", len(inlineImages), knowledge.ID)
+		}
+		clean = updatedMarkdown
+		resolvedImages = append(resolvedImages, inlineImages...)
+	}
+	if inlineParseErr != nil || docparser.HasUnresolvedInlineImagePayload(clean) {
+		message := "unresolved inline image base64 payload remains before manual chunking"
+		if inlineParseErr != nil {
+			message = inlineParseErr.Error()
+		}
+		cleanupUnboundInlineImages(ctx, fileSvc, resolvedImages)
+		knowledge.ParseStatus = types.ParseStatusFailed
+		knowledge.ErrorMessage = message
+		knowledge.UpdatedAt = time.Now()
+		s.beginStage(ctx, knowledge.ID, types.StageChunking, nil)
+		s.failStage(ctx, knowledge.ID, types.StageChunking, werrors.ErrCodeChunkingFailed, message, nil)
+		if err := s.updateKnowledgeUnlessSourceReplaced(ctx, knowledge); err != nil {
+			return fmt.Errorf("%w: persist manual inline image failure: %v", asynq.SkipRetry, err)
+		}
+		return fmt.Errorf("%s: %w", message, asynq.SkipRetry)
+	}
+
+	if s.imageResolver != nil {
 		updatedContent, storedImages, resolveErr := s.imageResolver.ResolveRemoteImages(ctx, clean, fileSvc, knowledge.TenantID)
 		if resolveErr != nil {
 			logger.Warnf(ctx, "Remote image resolution partially failed: %v", resolveErr)
@@ -1101,26 +1413,46 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 		}
 	}
 
+	// Re-claim the body's stored files. This runs after cleanupKnowledgeResources
+	// released the previous run's claims, so a republished document keeps the
+	// files its new body still references.
+	s.bindContentResources(ctx, knowledge.TenantID, knowledge.ID, clean)
+	// bindContentResources only sees resource:// handles in the final text;
+	// freshly resolved images may still carry provider:// URLs, so claim them
+	// from the resolver's own list as well.
+	s.bindStoredImages(ctx, knowledge, resolvedImages)
+
+	// Keep manually entered CRLF text aligned with the LF values sent by the
+	// chunking preview endpoint.
+	clean = chunker.NormalizeLineEndings(clean)
+
+	processOverrides, _ := knowledge.ProcessOverrides()
+	eff := ResolveProcessConfig(kb, processOverrides)
+
+	// Normalize inline HTML tables before chunking, for the same reason as the
+	// file-processing path: parser/OCR output may embed raw <table> blocks that
+	// the chunker cannot split. Fenced code examples are left untouched.
+	clean = docparser.NormalizeHTMLTables(clean)
+
 	// Manual content is markdown - chunk directly with Go chunker
-	chunkCfg := buildSplitterConfig(kb)
+	chunkCfg := buildSplitterConfigFromChunking(eff.ChunkingConfig)
 
 	var parsed []types.ParsedChunk
+	multimodalImages := imagesForMultimodal(resolvedImages)
 	opts := ProcessChunksOptions{
-		// When the KB has VLM enabled and we resolved remote images, pass them
-		// through so processChunks will enqueue image:multimodal tasks (OCR + caption).
-		EnableMultimodel: kb.IsMultimodalEnabled() && len(resolvedImages) > 0,
-		StoredImages:     resolvedImages,
+		EnableMultimodel: eff.EnableMultimodel && len(multimodalImages) > 0,
+		StoredImages:     multimodalImages,
 	}
-	if kb.QuestionGenerationConfig != nil && kb.QuestionGenerationConfig.Enabled {
+	if eff.QuestionGenerationConfig.Enabled {
 		opts.EnableQuestionGeneration = true
-		opts.QuestionCount = kb.QuestionGenerationConfig.QuestionCount
+		opts.QuestionCount = eff.QuestionGenerationConfig.QuestionCount
 		if opts.QuestionCount <= 0 {
 			opts.QuestionCount = 3
 		}
 	}
 
-	if kb.ChunkingConfig.EnableParentChild {
-		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
+	if eff.ChunkingConfig.EnableParentChild {
+		parentCfg, childCfg := buildParentChildConfigs(eff.ChunkingConfig, chunkCfg)
 		pcResult := chunker.SplitParentChild(clean, parentCfg, childCfg)
 		parsed = make([]types.ParsedChunk, len(pcResult.Children))
 		for i, c := range pcResult.Children {
@@ -1153,10 +1485,14 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 	}
 
 	if doSync {
-		s.processChunks(ctx, kb, knowledge, parsed, opts)
-		return
+		return s.processChunks(ctx, kb, knowledge, parsed, opts)
 	}
 
 	newCtx := logger.CloneContext(ctx)
-	go s.processChunks(newCtx, kb, knowledge, parsed, opts)
+	go func() {
+		if err := s.processChunks(newCtx, kb, knowledge, parsed, opts); err != nil {
+			logger.Warnf(newCtx, "manual processing for knowledge %s: %v", knowledge.ID, err)
+		}
+	}()
+	return nil
 }

@@ -2,6 +2,7 @@ package embedding
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -36,6 +37,9 @@ func (e *batchEmbedder) BatchEmbedWithPool(ctx context.Context, model Embedder, 
 	if err != nil {
 		return nil, err
 	}
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("BATCH_EMBED_SIZE must be greater than 0")
+	}
 	textEmbeddings := utils.MapSlice(texts, func(text string) *textEmbedding {
 		return &textEmbedding{text: text}
 	})
@@ -44,8 +48,16 @@ func (e *batchEmbedder) BatchEmbedWithPool(ctx context.Context, model Embedder, 
 	processChunk := func(texts []*textEmbedding) func() {
 		return func() {
 			defer wg.Done()
-			// If an error has already occurred, don't continue processing
-			if firstErr != nil {
+			// If an error has already occurred, don't continue processing. The
+			// read takes mu for the same reason the writes below do: every pool
+			// worker evaluates this guard, so an unsynchronised read races with
+			// another worker's write. Beyond the detector, a worker that misses
+			// the write bills another provider request after the run has already
+			// failed, which is exactly what this guard exists to prevent.
+			mu.Lock()
+			aborted := firstErr != nil
+			mu.Unlock()
+			if aborted {
 				return
 			}
 			// Embed text
@@ -56,6 +68,14 @@ func (e *batchEmbedder) BatchEmbedWithPool(ctx context.Context, model Embedder, 
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			if len(embedding) != len(texts) {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("embedding model returned %d embeddings for %d inputs", len(embedding), len(texts))
 				}
 				mu.Unlock()
 				return

@@ -3,9 +3,13 @@ package handler
 import (
 	"net/http"
 
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/gin-gonic/gin"
 )
+
+// Keeps types imported so swag can resolve WeKnoraCloudStatusResult.
+var _ types.WeKnoraCloudStatusResult
 
 // WeKnoraCloudHandler 处理 WeKnoraCloud 凭证管理
 type WeKnoraCloudHandler struct {
@@ -23,16 +27,16 @@ type weKnoraCloudCredentialsRequest struct {
 }
 
 // SaveCredentials POST /api/v1/weknoracloud/credentials
-// 仅保存 APPID/APPSECRET 凭证到租户配置，不自动创建模型
+// 仅保存 APPID/APPSECRET 凭证到空间配置，不自动创建模型
 //
 // SaveCredentials godoc
 // @Summary      保存 WeKnoraCloud 凭证
-// @Description  保存 APPID/APPSECRET 到当前租户配置（不自动创建模型）
+// @Description  保存 APPID/APPSECRET 到当前空间配置（不自动创建模型）
 // @Tags         WeKnoraCloud
 // @Accept       json
 // @Produce      json
 // @Param        request  body      map[string]interface{}  true  "{app_id, app_secret}"
-// @Success      200      {object}  map[string]interface{}  "success: true"
+// @Success      200      {object}  handler.MessageResponse  "success: true"
 // @Failure      400      {object}  map[string]interface{}  "请求参数错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth
@@ -53,14 +57,14 @@ func (h *WeKnoraCloudHandler) SaveCredentials(c *gin.Context) {
 }
 
 // Status GET /api/v1/models/weknoracloud/status
-// 检查当前租户的 WeKnoraCloud 凭证是否完好，如需重新初始化则返回 needs_reinit=true
+// 检查当前空间的 WeKnoraCloud 凭证是否完好，如需重新初始化则返回 needs_reinit=true
 //
 // Status godoc
 // @Summary      检查 WeKnoraCloud 凭证状态
-// @Description  检查当前租户的 WeKnoraCloud 凭证是否完好；needs_reinit=true 表示需要重新保存
+// @Description  检查当前空间的 WeKnoraCloud 凭证是否完好；needs_reinit=true 表示需要重新保存
 // @Tags         WeKnoraCloud
 // @Produce      json
-// @Success      200  {object}  map[string]interface{}  "凭证状态"
+// @Success      200  {object}  types.WeKnoraCloudStatusResult  "凭证状态"
 // @Failure      500  {object}  map[string]interface{}  "服务器错误"
 // @Security     Bearer
 // @Security     ApiKeyAuth

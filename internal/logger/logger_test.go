@@ -1,12 +1,103 @@
 package logger
 
 import (
+	"context"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/sirupsen/logrus"
 )
+
+func TestResolveLogFormatFromEnv(t *testing.T) {
+	const preferred = "%level | %msg"
+	const legacy = "legacy: %msg"
+	cases := []struct {
+		name      string
+		preferred string
+		setNew    bool
+		legacy    string
+		want      string
+		warning   string
+	}{
+		{name: "default"},
+		{name: "preferred", setNew: true, preferred: preferred, want: preferred},
+		{name: "preferred overrides legacy", setNew: true, preferred: preferred, legacy: legacy, want: preferred},
+		{
+			name: "preferred overrides inherited json", setNew: true,
+			preferred: preferred, legacy: "json", want: preferred,
+		},
+		{name: "empty disables legacy", setNew: true, legacy: legacy},
+		{name: "whitespace disables legacy", setNew: true, preferred: " \t ", legacy: "json"},
+		{name: "trim template", setNew: true, preferred: "  " + preferred + "\n", want: preferred},
+		{
+			name: "legacy compatibility", legacy: legacy, want: legacy,
+			warning: "LOG_FORMAT is deprecated; use WEKNORA_LOG_FORMAT instead",
+		},
+		{name: "legacy json preserves messages", legacy: "json", warning: "LOG_FORMAT must contain %msg"},
+		{
+			name: "preferred json preserves messages", setNew: true, preferred: "json", legacy: legacy,
+			warning: "WEKNORA_LOG_FORMAT must contain %msg",
+		},
+		{
+			name: "metadata only preserves messages", setNew: true, preferred: "%d %level",
+			warning: "WEKNORA_LOG_FORMAT must contain %msg",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LOG_FORMAT", tc.legacy)
+			t.Setenv("WEKNORA_LOG_FORMAT", tc.preferred)
+			if !tc.setNew {
+				if err := os.Unsetenv("WEKNORA_LOG_FORMAT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Capture startup diagnostics independently of the configured logger.
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			defer func() { _ = w.Close() }()
+			originalStderr := os.Stderr
+			os.Stderr = w
+			defer func() { os.Stderr = originalStderr }()
+			got := resolveLogFormatFromEnv()
+			os.Stderr = originalStderr
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			warning, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("template = %q, want %q", got, tc.want)
+			}
+			if tc.warning == "" && len(warning) != 0 {
+				t.Errorf("unexpected warning: %s", warning)
+			} else if tc.warning != "" && !strings.Contains(string(warning), tc.warning) {
+				t.Errorf("warning = %q, want %q", warning, tc.warning)
+			}
+			formatter := &CustomFormatter{Template: got}
+			entry := newEntry(logrus.WarnLevel, "partial retrieve failure", logrus.Fields{"kb_count": 2})
+			out, err := formatter.Format(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"partial retrieve failure", "kb_count=2"} {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("log output lost %q: %s", want, out)
+				}
+			}
+		})
+	}
+}
 
 func newEntry(level logrus.Level, msg string, data logrus.Fields) *logrus.Entry {
 	e := logrus.NewEntry(logrus.New())
@@ -15,6 +106,22 @@ func newEntry(level logrus.Level, msg string, data logrus.Fields) *logrus.Entry 
 	e.Message = msg
 	e.Data = data
 	return e
+}
+
+func TestAnsiStripWriter(t *testing.T) {
+	var buf strings.Builder
+	w := &ansiStripWriter{w: &buf}
+	in := []byte("\x1b[32mINFO\x1b[0m hello \x1b[31mERROR\x1b[0m")
+	n, err := w.Write(in)
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	if n != len(in) {
+		t.Fatalf("Write n = %d, want %d", n, len(in))
+	}
+	if got := buf.String(); got != "INFO hello ERROR" {
+		t.Fatalf("stripped output = %q, want %q", got, "INFO hello ERROR")
+	}
 }
 
 func TestFormat_DefaultModeUnchanged(t *testing.T) {
@@ -162,5 +269,125 @@ func TestLevelColorFor(t *testing.T) {
 		if got := levelColorFor(lvl); got != want {
 			t.Errorf("levelColorFor(%v) = %q, want %q", lvl, got, want)
 		}
+	}
+}
+
+func TestCloneContextPreservesPrincipal(t *testing.T) {
+	t.Parallel()
+
+	ctx := types.WithPrincipal(context.Background(), types.EmbedSessionPrincipal(10000, "ch1", "sess1"))
+	cloned := CloneContext(ctx)
+
+	if got := types.SessionOwnerIDFromContext(cloned); got != "embed_session:10000:ch1:sess1" {
+		t.Fatalf("SessionOwnerIDFromContext(cloned) = %q", got)
+	}
+}
+
+func TestCloneContextPreservesTenantAPIKeyScope(t *testing.T) {
+	t.Parallel()
+
+	want := types.TenantAPIKeyScope{
+		KeyID:            7,
+		KnowledgeBaseIDs: types.StringArray{"kb-1"},
+	}
+	ctx := types.WithTenantAPIKeyScope(context.Background(), want)
+	cloned := CloneContext(ctx)
+
+	got, ok := types.TenantAPIKeyScopeFromContext(cloned)
+	if !ok {
+		t.Fatal("TenantAPIKeyScopeFromContext(cloned) = false, want true")
+	}
+	if got.KeyID != want.KeyID || !got.AllowsKnowledgeBase("kb-1") || got.AllowsKnowledgeBase("kb-2") {
+		t.Fatalf("cloned scope = %#v, want key_id=7 scoped to kb-1", got)
+	}
+}
+
+// setupSSEStream builds its async context through CloneContext, so dropping
+// this key here would silently re-key every session→sandbox binding onto the
+// tenant a shared agent borrowed — stranding the MicroVM at session deletion.
+func TestCloneContextPreservesSandboxTenantID(t *testing.T) {
+	t.Parallel()
+
+	const sessionOwner, agentOwner = uint64(7), uint64(99)
+
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, agentOwner)
+	ctx = types.WithSandboxTenantID(ctx, sessionOwner)
+	cloned := CloneContext(ctx)
+
+	got, ok := types.SandboxTenantIDFromContext(cloned)
+	if !ok || got != sessionOwner {
+		t.Fatalf("SandboxTenantIDFromContext(cloned) = (%d, %v), want (%d, true)",
+			got, ok, sessionOwner)
+	}
+}
+
+// The agent-level memory opt-out is set before setupSSEStream clones, while
+// extraction and the explicit remember route run after. Losing the key here
+// would leave an agent that cannot read memory still writing to it.
+func TestCloneContextPreservesTheAgentMemoryOptOut(t *testing.T) {
+	t.Parallel()
+
+	optedOut := CloneContext(types.WithMemoryDisabled(context.Background()))
+	if types.MemoryAllowedForAgent(optedOut) {
+		t.Fatal("MemoryAllowedForAgent(cloned) = true, want the opt-out to survive the clone")
+	}
+
+	// The absence of the marker still has to read as allowed, so agents that
+	// never touched the switch keep their memory.
+	if !types.MemoryAllowedForAgent(CloneContext(context.Background())) {
+		t.Fatal("MemoryAllowedForAgent(cloned) = false for an unmarked context, want true")
+	}
+}
+
+// Document ingestion detaches mid-flight: knowledge_create hands processChunks
+// to a goroutine on a cloned context, and processChunks vectorises every chunk.
+// If the background mark does not survive, that work stops being visible to the
+// per-model concurrency governor and the ingestion storm it exists to contain
+// runs past it, starving interactive chat.
+func TestCloneContextKeepsBackgroundWorkThrottled(t *testing.T) {
+	t.Parallel()
+
+	if !types.IsBackgroundTask(CloneContext(types.WithBackgroundTask(context.Background()))) {
+		t.Fatal("IsBackgroundTask(cloned) = false, want background work to stay throttled across a detach")
+	}
+	if types.IsBackgroundTask(CloneContext(context.Background())) {
+		t.Fatal("IsBackgroundTask(cloned) = true for an unmarked context, want interactive work left ungated")
+	}
+}
+
+// An IM bot has no live client to click "Authorize", so losing this mark makes
+// the agent block on the OAuth wait for every unauthorized service instead of
+// replying with its one-shot notice.
+func TestCloneContextKeepsTheNonInteractiveOAuthMark(t *testing.T) {
+	t.Parallel()
+
+	if !types.IsMCPOAuthNonInteractive(CloneContext(types.WithMCPOAuthNonInteractive(context.Background()))) {
+		t.Fatal("IsMCPOAuthNonInteractive(cloned) = false, want the mark to survive a detach")
+	}
+	if types.IsMCPOAuthNonInteractive(CloneContext(context.Background())) {
+		t.Fatal("IsMCPOAuthNonInteractive(cloned) = true for an unmarked context, want interactive prompts to stay possible")
+	}
+}
+
+func TestCloneContextWithoutTraceDropsTheChatTrace(t *testing.T) {
+	t.Parallel()
+
+	const tenantID uint64 = 42
+	ctx := context.WithValue(context.Background(), types.TenantIDContextKey, tenantID)
+	ctx = context.WithValue(ctx, types.LangfuseTraceContextKey, "trace-handle")
+
+	kept := CloneContext(ctx)
+	if kept.Value(types.LangfuseTraceContextKey) != "trace-handle" {
+		t.Fatal("CloneContext must keep the Langfuse trace so same-request work stays nested")
+	}
+
+	detached := CloneContextWithoutTrace(ctx)
+	if detached.Value(types.LangfuseTraceContextKey) != nil {
+		t.Fatal("CloneContextWithoutTrace must drop the Langfuse trace so " +
+			"background sandbox RPCs do not join the chat tree")
+	}
+	got, _ := detached.Value(types.TenantIDContextKey).(uint64)
+	if got != tenantID {
+		t.Fatalf("TenantID = %d, want %d (identity must survive the detach)", got, tenantID)
 	}
 }

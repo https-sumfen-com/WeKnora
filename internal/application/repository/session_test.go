@@ -161,3 +161,187 @@ func TestSessionRepositoryDeleteAllHonorsUserScope(t *testing.T) {
 	require.Zero(t, countActiveSessionsForTest(t, db, legacySession.ID))
 	require.EqualValues(t, 1, countActiveSessionsForTest(t, db, otherTenantSession.ID))
 }
+
+// im_channel_sessions row for QueryPaged source-filter tests. Mirrors the columns
+// the LEFT JOIN projects; kept local to avoid importing internal/im.
+type testIMChannelSession struct {
+	ID          string `gorm:"primaryKey"`
+	SessionID   string
+	Platform    string
+	ChatID      string
+	ThreadID    string
+	UserID      string
+	AgentID     string
+	IMChannelID string `gorm:"column:im_channel_id"`
+	TenantID    uint64
+	DeletedAt   gorm.DeletedAt
+}
+
+func (testIMChannelSession) TableName() string { return "im_channel_sessions" }
+
+func listItemIDsForTest(items []*types.SessionListItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	return ids
+}
+
+// A /clear (or session recycling) soft-deletes the IM mapping and starts a fresh
+// session. The old session must stay under its IM platform, not leak into "web"
+// (which would happen if the source-filter join excluded soft-deleted mappings).
+func TestSessionRepositoryQueryPagedKeepsClearedIMSessionsOutOfWeb(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	web := createSessionForTest(t, db, 1, "alice")     // never bound to IM -> web
+	active := createSessionForTest(t, db, 1, "alice")  // active IM mapping
+	cleared := createSessionForTest(t, db, 1, "alice") // IM mapping soft-deleted by /clear
+
+	require.NoError(t, db.Create(&testIMChannelSession{
+		ID: "m-active", SessionID: active.ID, Platform: "wecom", TenantID: 1,
+	}).Error)
+	clearedMapping := &testIMChannelSession{
+		ID: "m-cleared", SessionID: cleared.ID, Platform: "wecom", TenantID: 1,
+	}
+	require.NoError(t, db.Create(clearedMapping).Error)
+	require.NoError(t, db.Delete(clearedMapping).Error) // soft-delete, as /clear does
+
+	webItems, _, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "alice", Source: "web", Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{web.ID}, listItemIDsForTest(webItems),
+		"web must exclude sessions that ever had an IM mapping, including cleared ones")
+
+	wecomItems, _, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "alice", Source: "wecom", Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{active.ID, cleared.ID}, listItemIDsForTest(wecomItems),
+		"wecom must include both the active and the cleared IM session")
+}
+
+func TestSessionRepositoryQueryPagedSplitsWebAndEmbedSessions(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	web := createSessionForTest(t, db, 1, "alice")
+	embed := createSessionForTest(t, db, 1, "alice")
+	require.NoError(t, db.Model(&types.Session{}).Where("id = ?", embed.ID).
+		Update("description", types.EmbedSessionMarkerPrefix+"ch-1").Error)
+
+	webItems, _, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "alice", Source: "web", Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{web.ID}, listItemIDsForTest(webItems))
+
+	embedItems, _, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "alice", Source: "embed:ch-1", Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{embed.ID}, listItemIDsForTest(embedItems))
+}
+
+// The "web" source is user chats only; API-key sessions live in the
+// admin-only "api" bucket and must never leak into a tenant-wide web listing.
+// Legacy tenant-level rows (user_id "") must still show up in web.
+func TestSessionRepositoryQueryPagedWebExcludesAPIKeySessions(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	legacy := createSessionForTest(t, db, 1, "") // legacy tenant web row
+	_ = createSessionForTest(t, db, 1, types.SessionOwnerAPITenantKeyPrefix+"1:10")
+	_ = createSessionForTest(t, db, 1, types.SessionOwnerAPIExternalUserPrefix+"1:alice")
+
+	items, _, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "", Source: "web", Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{legacy.ID}, listItemIDsForTest(items),
+		"web must keep legacy tenant rows but exclude API-key sessions")
+}
+
+func TestSessionRepositoryGetIMPlatform(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	imSession := createSessionForTest(t, db, 1, "alice")
+	require.NoError(t, db.Create(&testIMChannelSession{
+		ID: "ics-1", SessionID: imSession.ID, Platform: "feishu",
+	}).Error)
+	webSession := createSessionForTest(t, db, 1, "alice")
+
+	platform, err := repo.GetIMPlatform(ctx, 1, imSession.ID)
+	require.NoError(t, err)
+	require.Equal(t, "feishu", platform)
+
+	platform, err = repo.GetIMPlatform(ctx, 1, webSession.ID)
+	require.NoError(t, err)
+	require.Equal(t, "", platform)
+
+	// Cross-tenant lookup must not leak the mapping.
+	platform, err = repo.GetIMPlatform(ctx, 2, imSession.ID)
+	require.NoError(t, err)
+	require.Equal(t, "", platform)
+}
+
+func TestSessionRepositoryQueryPagedAPISourceReturnsAllTenantAPIKeySessions(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	// API requests without and with external-user identity, plus a web user and
+	// cross-tenant API sessions.
+	key1 := createSessionForTest(t, db, 1, types.SessionOwnerAPITenantKeyPrefix+"1:10")
+	key2 := createSessionForTest(t, db, 1, types.SessionOwnerAPITenantKeyPrefix+"1:20")
+	directHeader := createSessionForTest(t, db, 1, types.SessionOwnerAPIExternalUserPrefix+"1:alice")
+	signedToken := createSessionForTest(t, db, 1, types.SessionOwnerAPIExternalUserPrefix+"1:bob")
+	_ = createSessionForTest(t, db, 1, "alice")
+	_ = createSessionForTest(t, db, 2, types.SessionOwnerAPITenantKeyPrefix+"2:30")
+	_ = createSessionForTest(t, db, 2, types.SessionOwnerAPIExternalUserPrefix+"2:mallory")
+
+	// The admin view clears UserID, so every API-key session in the tenant is
+	// returned regardless of which key created it.
+	items, total, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+		TenantID: 1, UserID: "", Source: types.SessionSourceAPI, Page: 1, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 4, total)
+	require.ElementsMatch(
+		t,
+		[]string{key1.ID, key2.ID, directHeader.ID, signedToken.ID},
+		listItemIDsForTest(items),
+	)
+}
+
+// Maintenance sessions (skill install / remove) are real sessions with real
+// transcripts, but they are infrastructure, not conversations. They must be
+// invisible in every bucket — including the unfiltered listing, which is why
+// the exclusion lives in applyBase and not in the "web" source branch.
+func TestSessionRepositoryQueryPagedHidesMaintenanceSessions(t *testing.T) {
+	repo, db := newSessionRepositoryForTest(t)
+	require.NoError(t, db.AutoMigrate(&testIMChannelSession{}))
+	ctx := context.Background()
+
+	web := createSessionForTest(t, db, 1, "alice")
+	maintenance := createSessionForTest(t, db, 1, "alice")
+	require.NoError(t, db.Model(&types.Session{}).Where("id = ?", maintenance.ID).
+		Update("description", types.SkillMaintenanceSessionMarker+"install").Error)
+
+	for _, source := range []string{"", "web"} {
+		items, total, err := repo.QueryPaged(ctx, &types.SessionListQuery{
+			TenantID: 1, UserID: "alice", Source: source, Page: 1, PageSize: 50,
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{web.ID}, listItemIDsForTest(items),
+			"source=%q must not list the maintenance session", source)
+		require.EqualValues(t, 1, total,
+			"source=%q count must not include the maintenance session", source)
+	}
+}

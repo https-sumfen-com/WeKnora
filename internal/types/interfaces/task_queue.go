@@ -2,6 +2,7 @@ package interfaces
 
 import (
 	"context"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
 )
@@ -13,11 +14,15 @@ import (
 // tuple is the only routing primitive the repository understands;
 // deduplication, batching, and retry policy live in the consumer.
 //
-// Concurrency model in this revision: PeekBatch does NOT take row
-// locks. Consumers are expected to enforce per-(scope_id) serialization
-// out-of-band (wiki ingest does this via Redis SetNX wiki:active:<kbID>).
-// The reserved `claimed_at` column lets a future revision adopt
-// pessimistic locking without a schema change.
+// Concurrency model: two consumption primitives coexist.
+//   - PeekBatch does NOT take row locks; consumers enforce per-(scope_id)
+//     serialization out-of-band (e.g. an external Redis lock). This is the
+//     original primitive and is still used by single-process (Lite) mode.
+//   - ClaimBatch DOES take row locks (SELECT ... FOR UPDATE SKIP LOCKED on
+//     Postgres) and marks rows with claimed_at, so multiple concurrent
+//     consumers of the same tuple pull DISJOINT rows without an external
+//     lock. This is what lets the wiki pipeline drop its exclusive per-KB
+//     batch lock and spread one KB's backlog across the whole worker pool.
 type TaskPendingOpsRepository interface {
 	// Enqueue inserts a single op. The caller fills in TenantID, TaskType,
 	// Scope, ScopeID, Op, DedupKey, Payload; ID, FailCount, EnqueuedAt
@@ -25,10 +30,36 @@ type TaskPendingOpsRepository interface {
 	Enqueue(ctx context.Context, op *types.TaskPendingOp) error
 
 	// PeekBatch returns up to `limit` rows for the given queue tuple,
-	// ordered by id ASC (FIFO within the queue). Rows are NOT removed —
-	// callers must DeleteByIDs once the ops have been processed (or
-	// IncrFailCount and leave them for the next pass).
+	// ordered by fail_count ASC, id ASC (least-failed first; FIFO among
+	// rows with the same fail_count). Rows are NOT removed — callers must
+	// DeleteByIDs once the ops have been processed (or IncrFailCount and
+	// leave them for the next pass).
 	PeekBatch(ctx context.Context, taskType, scope, scopeID string, limit int) ([]*types.TaskPendingOp, error)
+
+	// ClaimBatch atomically claims eligible rows for the tuple, grouped by
+	// dedup_key, and returns them with claimed_at set to now. `limit`
+	// counts DISTINCT dedup_keys (documents), NOT rows: ALL eligible rows
+	// sharing a chosen dedup_key are claimed together so a document with
+	// several queued ops is never split across two concurrent batches.
+	// A row is eligible when it is unclaimed (claimed_at IS NULL) or its
+	// claim is stale (claimed_at < staleBefore) — the latter recovers rows
+	// abandoned by a crashed worker. Keys are selected least-failed first
+	// (then oldest id) so a retried row cannot starve never-attempted
+	// work. On Postgres the per-key anchor row is locked with FOR UPDATE
+	// SKIP LOCKED so concurrent claimers take disjoint key sets without
+	// blocking or double-claiming.
+	//
+	// Claimed rows are NOT removed: the consumer must DeleteByIDs on
+	// success, or ReleaseByIDs to hand a still-retryable row back to the
+	// pool (otherwise it stays claimed until staleBefore elapses).
+	ClaimBatch(ctx context.Context, taskType, scope, scopeID string, limit int, staleBefore time.Time) ([]*types.TaskPendingOp, error)
+
+	// ReleaseByIDs clears claimed_at (back to NULL) for the given rows so
+	// a claimed-but-not-consumed row becomes immediately eligible for the
+	// next ClaimBatch. No-op for empty input. Used by the wiki retry path
+	// to re-queue a transiently-failed op without waiting for its claim to
+	// go stale. Harmless on rows that were never claimed (Lite mode).
+	ReleaseByIDs(ctx context.Context, ids []int64) error
 
 	// DeleteByIDs removes the given rows. No-op for empty input. Used
 	// to consume a successfully-processed batch, and to drop ops that
@@ -53,6 +84,77 @@ type TaskPendingOpsRepository interface {
 	// deleted). If `op` is empty, every matching row is removed
 	// regardless of op.
 	DeleteByDedupKey(ctx context.Context, taskType, scope, scopeID, dedupKey, op string) error
+}
+
+// TaskPendingOpsClaimableCounter counts the distinct keys ClaimBatch can
+// claim, excluding every key with a fresh claim (including late siblings).
+// PendingCount remains the count of all rows for crash-recovery consumers.
+type TaskPendingOpsClaimableCounter interface {
+	ClaimableCount(ctx context.Context, taskType, scope, scopeID string, staleBefore time.Time) (int64, error)
+}
+
+// TaskPendingOpsKnowledgeClaimer preserves ClaimBatch's whole-key exclusion
+// when an operator requests one document instead of the next automatic batch.
+type TaskPendingOpsKnowledgeClaimer interface {
+	ClaimKnowledge(ctx context.Context, taskType, scope, scopeID, knowledgeID string,
+		staleBefore time.Time) ([]*types.TaskPendingOp, error)
+}
+
+// TaskPendingOpsScopeCleaner is an optional extension for callers that need
+// to discard every durable pending operation owned by a deleted scope. It is
+// intentionally separate from TaskPendingOpsRepository so alternate queue
+// implementations and existing test doubles are not forced to implement a
+// lifecycle-only operation.
+type TaskPendingOpsScopeCleaner interface {
+	DeleteByScope(ctx context.Context, scope, scopeID string) error
+}
+
+// TaskPendingOpsDrainer is an optional extension for consumers that must give
+// up on a queue lane. DrainUnclaimedAndRelease deletes the lane's op rows for
+// documents no live batch holds (no row claimed at or after staleBefore) and
+// releases one finalizing slot per such document, atomically; it returns the
+// released dedup keys.
+type TaskPendingOpsDrainer interface {
+	DrainUnclaimedAndRelease(
+		ctx context.Context, taskType, scope, scopeID, op string, staleBefore time.Time,
+	) ([]string, error)
+}
+
+// TaskPendingOpsDiscarder removes obsolete work that owns no finalizing slot.
+// Like the drainer, it preserves every document held by a live batch. Empty
+// tuple or operation fields must be rejected by the implementation.
+type TaskPendingOpsDiscarder interface {
+	DiscardUnclaimed(ctx context.Context, taskType, scope, scopeID, op string, staleBefore time.Time) error
+}
+
+// TaskPendingOpsKnowledgeBaseGuard atomically persists a KB-scoped operation
+// only while its knowledge base is still active. Implementations must
+// serialize the active-KB check with soft deletion so a detached worker cannot
+// recreate durable work after the deletion scrub has finished.
+type TaskPendingOpsKnowledgeBaseGuard interface {
+	EnqueueIfKnowledgeBaseActive(ctx context.Context, op *types.TaskPendingOp) (accepted bool, err error)
+}
+
+// TaskPendingOpsTenantLiveness reports whether a tenant is still alive (not
+// soft-deleted). Wiki task consumers use it to guarantee a deleted tenant
+// never triggers new model requests: the check runs at task entry (ingest
+// and finalize) and inside the guarded enqueue, alongside the KB-active
+// check — tenant soft-deletion removes the workspace without touching its
+// knowledge bases or durable pending ops.
+type TaskPendingOpsTenantLiveness interface {
+	HasActiveTenant(ctx context.Context, tenantID uint64) (bool, error)
+}
+
+// TaskPendingOpsFinalizingSeeder atomically hands a processing knowledge row
+// to the asynchronous finalizing pipeline while persisting the durable
+// pending operation that owns one of its subtask slots.
+type TaskPendingOpsFinalizingSeeder interface {
+	SeedKnowledgeFinalizingWithPendingOp(
+		ctx context.Context,
+		knowledgeID string,
+		expectedSubtasks int,
+		op *types.TaskPendingOp,
+	) (promoted bool, err error)
 }
 
 // TaskDeadLetterRepository persists rows for the generic task dead-letter

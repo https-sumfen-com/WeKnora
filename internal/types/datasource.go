@@ -2,7 +2,9 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/utils"
@@ -10,10 +12,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrDataSourceSettingsConflict means the saved connector changed during a selection update.
+var ErrDataSourceSettingsConflict = errors.New("data source configuration changed; reload before retrying")
+
 // Data source types and constants
 const (
 	// Connector types
-	ConnectorTypeFeishu      = "feishu"
+	ConnectorTypeFeishu = "feishu"
+	// ConnectorTypeLark is Feishu's international edition (open.larksuite.com).
+	// It shares the Feishu connector; only the API host and tenant differ.
+	ConnectorTypeLark = "lark"
+	// ConnectorTypeFeishuDrive is the Feishu Drive (云盘) mode: syncs documents
+	// under a user-supplied Drive folder_token, as opposed to a Wiki space.
+	// Shares the feishu connector package; only resource enumeration + fetch differ.
+	ConnectorTypeFeishuDrive = "feishu_drive"
+	// ConnectorTypeLarkDrive is the Lark (international) Drive mode, the
+	// international counterpart of ConnectorTypeFeishuDrive.
+	ConnectorTypeLarkDrive   = "lark_drive"
 	ConnectorTypeNotion      = "notion"
 	ConnectorTypeConfluence  = "confluence"
 	ConnectorTypeYuque       = "yuque"
@@ -25,6 +40,10 @@ const (
 	ConnectorTypeSlack       = "slack"
 	ConnectorTypeIMAP        = "imap"
 	ConnectorTypeRSS         = "rss"
+	ConnectorTypeGitLab      = "gitlab"
+	ConnectorTypeIMA         = "ima"
+	ConnectorTypeSeafile     = "seafile"
+	ConnectorTypeNextcloud   = "nextcloud"
 
 	// Sync modes
 	SyncModeIncremental = "incremental"
@@ -53,7 +72,7 @@ type DataSource struct {
 	// Unique identifier
 	ID string `json:"id" gorm:"type:varchar(36);primaryKey"`
 
-	// Tenant ID for multi-tenancy
+	// Workspace ID for multi-workspace isolation
 	TenantID uint64 `json:"tenant_id" gorm:"index"`
 
 	// Target knowledge base ID
@@ -131,40 +150,40 @@ func (d *DataSource) BeforeCreate(tx *gorm.DB) error {
 // SyncLog records the execution of a sync task
 type SyncLog struct {
 	// Unique identifier
-	ID string `json:"id" gorm:"type:varchar(36);primaryKey"`
+	ID string `json:"id" gorm:"type:varchar(36);primaryKey" extensions:"x-agent=sync_log_id"`
 
 	// Reference to the data source
-	DataSourceID string `json:"data_source_id" gorm:"index"`
+	DataSourceID string `json:"data_source_id" gorm:"index" extensions:"x-agent"`
 
-	// Tenant ID
+	// Workspace ID
 	TenantID uint64 `json:"tenant_id" gorm:"index"`
 
 	// Sync status: running, success, partial, failed, canceled
-	Status string `json:"status" gorm:"type:varchar(32);index"`
+	Status string `json:"status" gorm:"type:varchar(32);index" extensions:"x-agent"`
 
 	// Sync start time
-	StartedAt time.Time `json:"started_at"`
+	StartedAt time.Time `json:"started_at" extensions:"x-agent"`
 
 	// Sync completion time
-	FinishedAt *time.Time `json:"finished_at"`
+	FinishedAt *time.Time `json:"finished_at" extensions:"x-agent"`
 
 	// Total items fetched from source
-	ItemsTotal int `json:"items_total"`
+	ItemsTotal int `json:"items_total" extensions:"x-agent"`
 
 	// New items created in knowledge base
-	ItemsCreated int `json:"items_created"`
+	ItemsCreated int `json:"items_created" extensions:"x-agent"`
 
 	// Existing items updated
-	ItemsUpdated int `json:"items_updated"`
+	ItemsUpdated int `json:"items_updated" extensions:"x-agent"`
 
 	// Items deleted from knowledge base
-	ItemsDeleted int `json:"items_deleted"`
+	ItemsDeleted int `json:"items_deleted" extensions:"x-agent"`
 
 	// Items skipped (no changes detected)
-	ItemsSkipped int `json:"items_skipped"`
+	ItemsSkipped int `json:"items_skipped" extensions:"x-agent"`
 
 	// Items that failed to sync
-	ItemsFailed int `json:"items_failed"`
+	ItemsFailed int `json:"items_failed" extensions:"x-agent"`
 
 	// Error details if status is "failed"
 	ErrorMessage string `json:"error_message"`
@@ -223,19 +242,54 @@ func (d DataSourceConfig) HasCredentials() bool {
 	return len(d.Credentials) > 0
 }
 
+// HasConfiguredCredentials reports whether user-facing secret credentials are
+// stored. RSS feed URLs are non-secret configuration (settings); only
+// auth_headers count as credentials for that connector.
+func (d DataSourceConfig) HasConfiguredCredentials(connectorType string) bool {
+	if len(d.Credentials) == 0 {
+		return false
+	}
+	switch connectorType {
+	case ConnectorTypeRSS:
+		raw, ok := d.Credentials["auth_headers"]
+		if !ok {
+			return false
+		}
+		s, ok := raw.(string)
+		return ok && strings.TrimSpace(s) != ""
+	default:
+		return len(d.Credentials) > 0
+	}
+}
+
+// StripNonSecretCredentials removes non-secret values mistakenly stored in the
+// credentials map before persistence.
+func (d *DataSourceConfig) StripNonSecretCredentials(connectorType string) {
+	if d == nil || d.Credentials == nil {
+		return
+	}
+	switch connectorType {
+	case ConnectorTypeRSS:
+		delete(d.Credentials, "feed_urls")
+		if len(d.Credentials) == 0 {
+			d.Credentials = nil
+		}
+	}
+}
+
 // Resource represents a syncable resource (document, folder, space) from external system
 type Resource struct {
 	// Unique identifier in the external system
-	ExternalID string `json:"external_id"`
+	ExternalID string `json:"external_id" extensions:"x-agent"`
 
 	// Display name
-	Name string `json:"name"`
+	Name string `json:"name" extensions:"x-agent"`
 
 	// Resource type (document, folder, space, page, etc.)
-	Type string `json:"type"`
+	Type string `json:"type" extensions:"x-agent"`
 
 	// Optional description
-	Description string `json:"description"`
+	Description string `json:"description" extensions:"x-agent"`
 
 	// URL to access in external system
 	URL string `json:"url"`
@@ -244,10 +298,10 @@ type Resource struct {
 	ModifiedAt time.Time `json:"modified_at"`
 
 	// For hierarchical resources (parent ID if applicable)
-	ParentID string `json:"parent_id,omitempty"`
+	ParentID string `json:"parent_id,omitempty" extensions:"x-agent"`
 
 	// Whether this resource has children that can be expanded
-	HasChildren bool `json:"has_children,omitempty"`
+	HasChildren bool `json:"has_children,omitempty" extensions:"x-agent"`
 
 	// Additional metadata
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
@@ -255,6 +309,11 @@ type Resource struct {
 
 // FetchedItem represents a single document/content item fetched from external source
 type FetchedItem struct {
+	// RetryOnFailure requires streaming ingestion to reject recorded failures
+	// before a connector checkpoints this item. Existing connectors retain their
+	// best-effort handling unless they explicitly opt in.
+	RetryOnFailure bool `json:"retry_on_failure,omitempty"`
+
 	// Unique ID in the external system
 	ExternalID string `json:"external_id"`
 
@@ -276,6 +335,9 @@ type FetchedItem struct {
 	// When last modified in external system
 	UpdatedAt time.Time `json:"updated_at"`
 
+	// When created in external system. Zero when the source does not expose it.
+	CreatedAt time.Time `json:"created_at"`
+
 	// Additional metadata to preserve
 	Metadata map[string]string `json:"metadata"`
 
@@ -284,6 +346,62 @@ type FetchedItem struct {
 
 	// Source resource ID (e.g., folder ID this document belongs to)
 	SourceResourceID string `json:"source_resource_id"`
+
+	// ReplacesSubtree, when true, tells ingestion to reconcile this item's
+	// sub-items: after the parent is (re)ingested, every existing knowledge item
+	// whose external_id starts with SubtreeChildPrefix(ExternalID) that is NOT
+	// listed in SubtreeKeep is deleted as stale. Used by connectors that fan one
+	// source node out into a parent document plus attachment/image sub-items
+	// (e.g. Feishu docx).
+	//
+	// PRECONDITIONS the sweep relies on — a connector setting this MUST honour:
+	//   1. Child external_ids are built with SubtreeChildID, so they share the
+	//      '#' prefix the sweep matches. A child ID without that prefix is never
+	//      swept (silently orphaned); an unrelated item that happens to start
+	//      with the prefix would be wrongly swept.
+	//   2. The parent is emitted (streaming) / listed (batch) no later than its
+	//      children, and SubtreeKeep already names every still-present child when
+	//      the parent is ingested. The sweep runs at parent-ingest time against
+	//      the PRIOR sync's children, so a child emitted after its parent's sweep
+	//      but absent from SubtreeKeep could be deleted right after being added.
+	ReplacesSubtree bool `json:"replaces_subtree,omitempty"`
+
+	// SubtreeKeep lists the external_ids of sub-items that still exist in the
+	// source this sync. Consulted only when ReplacesSubtree is true: the sweep
+	// preserves these children even if they could not be re-ingested this cycle
+	// (transient download/parse failure, or an unclassifiable filename), so a
+	// still-present attachment never loses its previously-synced good copy. Only
+	// children absent from this set — genuinely removed from the source — are
+	// swept.
+	//
+	// CONTRACT: an empty (or nil) SubtreeKeep with ReplacesSubtree=true means
+	// "keep nothing" and sweeps EVERY existing child under the prefix. That is
+	// correct for a node whose attachments all vanished, so a connector setting
+	// ReplacesSubtree MUST populate SubtreeKeep with every child still present.
+	// The field is consumed in-process (fetch → ingest, no serialization), so
+	// nil and empty are equivalent here; the omitempty tag is for API/debug
+	// exposure only and must not be relied on to distinguish "unset" from "empty".
+	SubtreeKeep []string `json:"subtree_keep,omitempty"`
+}
+
+// SubtreeChildID builds the external_id of a sub-item fanned out from a parent
+// source node — e.g. a docx node's attachment or embedded image. The shape is
+// "<parentExternalID>#<kind>#<token>". The '#' separator is the contract the
+// subtree sweep depends on (see SubtreeChildPrefix and FetchedItem.ReplacesSubtree):
+// producers MUST build child IDs with this helper so the producer and the sweep
+// consumer share one source of truth. kind is a short discriminator ("file",
+// "image"); token is the source system's id for the child and is assumed to be
+// '#'-free (Feishu/Notion/etc. tokens are).
+func SubtreeChildID(parentExternalID, kind, token string) string {
+	return parentExternalID + "#" + kind + "#" + token
+}
+
+// SubtreeChildPrefix is the external_id prefix that matches every child of a
+// parent node built with SubtreeChildID. The sweep deletes prior children whose
+// external_id starts with this prefix and are absent from SubtreeKeep. It must
+// move in lockstep with SubtreeChildID: both encode the same '#' separator.
+func SubtreeChildPrefix(parentExternalID string) string {
+	return parentExternalID + "#"
 }
 
 // SyncCursor represents the position/state for incremental sync
@@ -319,21 +437,75 @@ type SyncResult struct {
 	// Items that failed
 	Failed int `json:"failed"`
 
-	// Detailed error messages
-	Errors []string `json:"errors,omitempty"`
+	// Deleted items whose KB deletion failed (a subset of Failed). Past the
+	// connector cursor, so normally only a later full sync retries them.
+	DeletionFailed int `json:"deletion_failed,omitempty"`
+
+	// Per-item failure samples (capped), shown in the sync-log UI.
+	Errors []SyncItemError `json:"errors,omitempty"`
 
 	// Updated cursor for next incremental sync
 	NextCursor *SyncCursor `json:"next_cursor,omitempty"`
 }
 
+// SyncItemError is one user-facing failure sample. It carries a stable i18n
+// Code (+ interpolation Params) so the frontend localises it to the viewer's
+// language, plus a Message fallback for clients without the key. The raw API
+// status/body/log_id is never stored here — that stays in the server logs.
+type SyncItemError struct {
+	// Title is the document title (user content, not translated).
+	Title string `json:"title,omitempty"`
+	// Code is a stable key the frontend maps to a localized string, e.g.
+	// "feishu_rate_limited" → datasource.syncError.feishu_rate_limited.
+	Code string `json:"code,omitempty"`
+	// Params are interpolation values for the localized string, e.g. {"code":"1663"}.
+	Params map[string]string `json:"params,omitempty"`
+	// Message is a human fallback used when the client has no i18n key for Code.
+	Message string `json:"message,omitempty"`
+}
+
+// Display renders the sample as a single plain string for server-side use
+// (logs, fatal-error detail). The localised UI string is built on the frontend
+// from Code/Params; this is only a non-localised fallback.
+func (e SyncItemError) Display() string {
+	switch {
+	case e.Title != "" && e.Message != "":
+		return e.Title + ": " + e.Message
+	case e.Message != "":
+		return e.Message
+	default:
+		return e.Title
+	}
+}
+
+// UnmarshalJSON keeps old sync logs readable: historically each error was a
+// plain JSON string, so a bare string decodes into Message.
+func (e *SyncItemError) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		e.Message = s
+		return nil
+	}
+	type alias SyncItemError
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*e = SyncItemError(a)
+	return nil
+}
+
 // DataSourceSyncPayload represents the asynq task payload for data source sync
 type DataSourceSyncPayload struct {
 	TracingContext
+	Initiator TaskInitiator `json:"initiator,omitempty"`
+	// Trigger distinguishes a user-requested run from a scheduler-created run.
+	Trigger string `json:"trigger,omitempty"`
 
 	// Data source ID to sync
 	DataSourceID string `json:"data_source_id"`
 
-	// Tenant ID
+	// Workspace ID
 	TenantID uint64 `json:"tenant_id"`
 
 	// Sync log ID (for tracking)

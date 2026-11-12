@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -23,7 +25,19 @@ var appLogger = logrus.New()
 var (
 	loggerMu      sync.Mutex
 	activeLogFile io.WriteCloser
+	ansiEscapeRE  = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 )
+
+// ansiStripWriter removes ANSI color/style sequences so file logs stay plain text
+// while stdout can still render colors in a terminal.
+type ansiStripWriter struct {
+	w io.Writer
+}
+
+func (s *ansiStripWriter) Write(p []byte) (int, error) {
+	_, err := s.w.Write(ansiEscapeRE.ReplaceAll(p, nil))
+	return len(p), err
+}
 
 // LogLevel 日志级别类型
 type LogLevel string
@@ -53,7 +67,7 @@ const (
 
 type CustomFormatter struct {
 	ForceColor bool   // 是否强制使用颜色，即使在非终端环境下
-	Template   string // 自定义日志格式模板，通过 LOG_FORMAT 环境变量配置，为空则使用内置默认格式
+	Template   string // 自定义日志格式模板，通过 WEKNORA_LOG_FORMAT 环境变量配置，为空则使用内置默认格式
 	// 模板占位符：%d=时间 %level=级别 %thread=goroutine %logger=caller %traceId=请求ID %msg=消息+结构化字段
 
 	// threadNeeded 缓存模板是否引用了 %thread，避免每条日志都调用一次 runtime.Stack。
@@ -219,7 +233,7 @@ func init() {
 }
 
 // ConfigureFromEnv 重新从环境变量应用日志配置。
-// 这允许在 main() 中加载 .env 后，让 LOG_LEVEL / LOG_PATH 立即生效。
+// 这允许在 main() 中加载 .env 后，让 LOG_LEVEL / LOG_PATH / WEKNORA_LOG_FORMAT 立即生效。
 func ConfigureFromEnv() {
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
@@ -241,7 +255,7 @@ func ConfigureFromEnv() {
 			fmt.Fprintf(os.Stderr, "logger: failed to open log file %s: %v\n", logPath, err)
 		} else {
 			activeLogFile = file
-			writer = io.MultiWriter(os.Stdout, file)
+			writer = io.MultiWriter(os.Stdout, &ansiStripWriter{w: file})
 		}
 	}
 
@@ -332,11 +346,30 @@ func resolveLogPathFromEnv() string {
 	return defaultMacAppLogPath()
 }
 
-// resolveLogFormatFromEnv 从环境变量 LOG_FORMAT 读取自定义日志格式模板。
-// 为空则使用内置默认格式；非空则作为模板，支持占位符：
+// resolveLogFormatFromEnv prefers WEKNORA_LOG_FORMAT, including an explicitly
+// empty value, and falls back to the deprecated LOG_FORMAT only when unset.
+// Nonempty templates must include %msg so configuration cannot hide log bodies.
+// 支持占位符：
 // %d=时间 %level=级别 %thread=goroutine %logger=caller %traceId=请求ID %msg=消息+结构化字段
 func resolveLogFormatFromEnv() string {
-	return strings.TrimSpace(os.Getenv("LOG_FORMAT"))
+	name := "WEKNORA_LOG_FORMAT"
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		name = "LOG_FORMAT"
+		raw = os.Getenv(name)
+	}
+	tmpl := strings.TrimSpace(raw)
+	if tmpl == "" {
+		return ""
+	}
+	if !strings.Contains(tmpl, "%msg") {
+		fmt.Fprintf(os.Stderr, "logger: %s must contain %%msg; using the default log format\n", name)
+		return ""
+	}
+	if name == "LOG_FORMAT" {
+		fmt.Fprintln(os.Stderr, "logger: LOG_FORMAT is deprecated; use WEKNORA_LOG_FORMAT instead")
+	}
+	return tmpl
 }
 
 func defaultMacAppLogPath() string {
@@ -489,38 +522,47 @@ func Fatalf(c context.Context, format string, args ...interface{}) {
 }
 
 // CloneContext 复制上下文中的关键信息到新上下文
+//
+// Which keys survive is decided by types.contextCloneAcrossDetach, which lives
+// next to where context keys are declared so that adding a key and deciding
+// its fate are the same edit. Keeping that decision here instead meant every
+// new key silently defaulted to being dropped.
 func CloneContext(ctx context.Context) context.Context {
 	newCtx := context.Background()
 
-	for _, k := range []types.ContextKey{
-		types.LoggerContextKey,
-		types.TenantIDContextKey,
-		types.RequestIDContextKey,
-		types.TenantInfoContextKey,
-		types.UserIDContextKey,
-		types.UserContextKey,
-		// TenantRoleContextKey: the caller's resolved role in the
-		// active tenant (PR 2 #1303). Must be propagated for the same
-		// reason as TenantIDContextKey — any handler that does
-		// `ctx := logger.CloneContext(c.Request.Context())` and then
-		// reads role via TenantRoleFromContext (e.g. session/qa.go's
-		// "viewer cannot run runnable_by_viewer=false agent" gate)
-		// would otherwise see the type-zero TenantRole and fall back
-		// to Viewer, blocking even Owners.
-		types.TenantRoleContextKey,
-		types.LanguageContextKey,
-		types.SessionTenantIDContextKey,
-		types.EmbedQueryContextKey,
-		// Keep the Langfuse trace alive across CloneContext boundaries so
-		// LLM/Embedder/Reranker/VLM/ASR wrappers attach their generations
-		// to the same trace opened by GinMiddleware, instead of each call
-		// auto-creating its own orphan trace.
-		types.LangfuseTraceContextKey,
-	} {
+	for _, k := range types.ContextKeysClonedAcrossDetach() {
 		if v := ctx.Value(k); v != nil {
 			newCtx = context.WithValue(newCtx, k, v)
 		}
 	}
 
+	// Preserve the active OpenTelemetry span across the rebuild. The Langfuse
+	// *Trace handle above carries the trace id, but span PARENTING flows through
+	// the OTel span context (trace.SpanFromContext), which CloneContext would
+	// otherwise drop — orphaning child spans opened after a CloneContext (e.g.
+	// the agent engine's agent.execute becoming a separate trace from the HTTP
+	// root). Re-inject the recording span so children stitch to the same trace.
+	if sp := trace.SpanFromContext(ctx); sp.IsRecording() {
+		newCtx = trace.ContextWithSpan(newCtx, sp)
+	}
+
+	return newCtx
+}
+
+// CloneContextWithoutTrace copies the same identity keys as CloneContext but
+// drops the Langfuse *Trace handle and the OpenTelemetry span. Use it for
+// background work that must keep tenant/session identity yet must not attach
+// child spans (Docker Engine HTTP, idle sweeps, image pulls kicked off after
+// a tool has returned) onto the originating chat trace.
+func CloneContextWithoutTrace(ctx context.Context) context.Context {
+	newCtx := context.Background()
+	for _, k := range types.ContextKeysClonedAcrossDetach() {
+		if k == types.LangfuseTraceContextKey {
+			continue
+		}
+		if v := ctx.Value(k); v != nil {
+			newCtx = context.WithValue(newCtx, k, v)
+		}
+	}
 	return newCtx
 }

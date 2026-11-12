@@ -21,6 +21,15 @@ type DataSourceService interface {
 	// UpdateDataSource updates an existing data source
 	UpdateDataSource(ctx context.Context, ds *types.DataSource) (*types.DataSource, error)
 
+	// PatchDataSourceSyncSettings writes only the selected sync settings.
+	PatchDataSourceSyncSettings(
+		ctx context.Context,
+		before, after *types.DataSource,
+		fields []string,
+	) (
+		*types.DataSource,
+		error,
+	)
 	// DeleteDataSource deletes a data source (soft delete)
 	DeleteDataSource(ctx context.Context, id string) error
 
@@ -43,8 +52,15 @@ type DataSourceService interface {
 	// This is used by the frontend "Test Connection" button before creating a data source.
 	ValidateCredentials(ctx context.Context, connectorType string, credentials map[string]interface{}) error
 
-	// ListAvailableResources lists resources available for sync in the external system
-	ListAvailableResources(ctx context.Context, dsID string) ([]types.Resource, error)
+	// ListAvailableResources lists resources available for sync in the external system.
+	// parentID enables lazy loading: "" lists the top level, a resource ExternalID lists its children.
+	ListAvailableResources(ctx context.Context, dsID string, parentID string) ([]types.Resource, error)
+
+	// ResolveResourceAncestors returns the deduplicated ExternalIDs of every
+	// ancestor that must be expanded to reveal the given (possibly deeply nested)
+	// resources in a lazily-loaded picker. Used to restore an existing selection
+	// when editing a data source.
+	ResolveResourceAncestors(ctx context.Context, dsID string, resourceIDs []string) ([]string, error)
 
 	// ManualSync triggers an immediate sync for a data source
 	ManualSync(ctx context.Context, dsID string) (*types.SyncLog, error)
@@ -78,6 +94,9 @@ type DataSourceRepository interface {
 
 	// Update updates an existing data source
 	Update(ctx context.Context, ds *types.DataSource) error
+
+	// PatchSyncSettings updates named settings, checking the original config when replacing resource selection.
+	PatchSyncSettings(ctx context.Context, ds *types.DataSource, expectedConfig types.JSON, fields []string) error
 
 	// UpdateSyncState updates only fields produced by a sync run.
 	UpdateSyncState(ctx context.Context, ds *types.DataSource) error
@@ -116,6 +135,8 @@ type SyncLogRepository interface {
 	// CancelPendingByDataSource marks all non-terminal sync logs for a data source as canceled.
 	CancelPendingByDataSource(ctx context.Context, dsID string) error
 
-	// CleanupOldLogs deletes sync logs older than the retention period
-	CleanupOldLogs(ctx context.Context, retentionDays int) error
+	// CleanupOldLogs deletes expired terminal logs using each source's policy.
+	// Failed logs of live sources are retained because they may be awaiting retry.
+	// defaultRetentionDays applies to missing sources and unset policies.
+	CleanupOldLogs(ctx context.Context, defaultRetentionDays int) error
 }

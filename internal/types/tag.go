@@ -11,15 +11,15 @@ import (
 // Knowledge (documents) and FAQ Chunks.
 type KnowledgeTag struct {
 	// Unique identifier of the tag (UUID)
-	ID string `json:"id"                gorm:"type:varchar(36);primaryKey"`
+	ID string `json:"id"                gorm:"type:varchar(36);primaryKey" extensions:"x-agent=tag_id"`
 	// SeqID is an auto-increment integer ID for external API usage
-	SeqID int64 `json:"seq_id"            gorm:"type:bigint;uniqueIndex;autoIncrement"`
-	// Tenant ID
+	SeqID int64 `json:"seq_id"            gorm:"type:bigint;uniqueIndex;autoIncrement" extensions:"x-agent=tag_seq_id"`
+	// Workspace ID
 	TenantID uint64 `json:"tenant_id"`
 	// Knowledge base ID that this tag belongs to
 	KnowledgeBaseID string `json:"knowledge_base_id" gorm:"type:varchar(36);index"`
 	// Tag name, unique within the same knowledge base
-	Name string `json:"name"              gorm:"type:varchar(128);not null"`
+	Name string `json:"name"              gorm:"type:varchar(128);not null" extensions:"x-agent"`
 	// Optional display color
 	Color string `json:"color"             gorm:"type:varchar(32)"`
 	// Sort order within the same knowledge base
@@ -55,7 +55,7 @@ func (t *KnowledgeTag) BeforeCreate(tx *gorm.DB) error {
 // KnowledgeTagWithStats represents tag information along with usage statistics.
 type KnowledgeTagWithStats struct {
 	KnowledgeTag
-	KnowledgeCount int64 `json:"knowledge_count"`
+	KnowledgeCount int64 `json:"knowledge_count" extensions:"x-agent"`
 	ChunkCount     int64 `json:"chunk_count"`
 }
 
@@ -63,4 +63,17 @@ type KnowledgeTagWithStats struct {
 type TagReferenceCounts struct {
 	KnowledgeCount int64
 	ChunkCount     int64
+}
+
+// KnowledgeTagRelation represents a many-to-many association between
+// a document knowledge entry and a tag in the knowledge_tag_relations table.
+type KnowledgeTagRelation struct {
+	KnowledgeID string    `gorm:"type:varchar(36);primaryKey"`
+	TagID       string    `gorm:"type:varchar(36);primaryKey"`
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+}
+
+// TableName overrides the default table name.
+func (KnowledgeTagRelation) TableName() string {
+	return "knowledge_tag_relations"
 }

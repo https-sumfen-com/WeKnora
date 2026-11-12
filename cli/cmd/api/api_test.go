@@ -12,9 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/Tencent/WeKnora/cli/internal/cmdutil"
 	"github.com/Tencent/WeKnora/cli/internal/iostreams"
@@ -78,14 +81,12 @@ func TestAPI_GetSuccess_JSON(t *testing.T) {
 	if err := runAPI(context.Background(), &Options{}, &cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, cli, "GET", "/api/v1/foo", false); err != nil {
 		t.Fatalf("runAPI: %v", err)
 	}
-	// v0.7 envelope: {ok:true, data:{status, headers, body}}
+	// The server response is passed through directly under envelope.data — no
+	// {status, headers, body} wrapper — so consumers project at the server's
+	// own depth (e.g. .data.value here).
 	var env struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Status  int               `json:"status"`
-			Headers map[string]string `json:"headers"`
-			Body    map[string]any    `json:"body"`
-		} `json:"data"`
+		OK   bool           `json:"ok"`
+		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatalf("decode envelope JSON: %v\n%s", err, out.String())
@@ -93,15 +94,55 @@ func TestAPI_GetSuccess_JSON(t *testing.T) {
 	if !env.OK {
 		t.Errorf("envelope ok: want true, got false")
 	}
-	got := env.Data
-	if got.Status != 200 {
-		t.Errorf("status: want 200, got %d", got.Status)
+	if v, ok := env.Data["value"]; !ok || v.(float64) != 42 {
+		t.Errorf("data.value: want 42 directly under .data (no .body nesting), got %v", env.Data)
 	}
-	if got.Headers["Content-Type"] != "application/json" {
-		t.Errorf("Content-Type header missing: %v", got.Headers)
+}
+
+// TestAPI_InlineDataBody verifies -d/--data sends an inline JSON body and
+// auto-promotes the method to POST.
+func TestAPI_InlineDataBody(t *testing.T) {
+	_, _ = iostreams.SetForTest(t)
+	var seenBody []byte
+	var seenMethod string
+	cli, stop := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		seenMethod = r.Method
+		seenBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":"new"}`))
+	})
+	defer stop()
+
+	opts := &Options{Data: `{"name":"foo"}`}
+	if err := runAPI(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatText}, cli, resolveMethod(opts), "/api/v1/things", false); err != nil {
+		t.Fatalf("runAPI: %v", err)
 	}
-	if v, ok := got.Body["value"]; !ok || v.(float64) != 42 {
-		t.Errorf("body.value: want 42, got %v", got.Body)
+	if seenMethod != http.MethodPost {
+		t.Errorf("inline -d should auto-promote to POST, got %s", seenMethod)
+	}
+	if string(seenBody) != `{"name":"foo"}` {
+		t.Errorf("server received body %q, want the inline --data JSON", seenBody)
+	}
+}
+
+// TestAPI_InlineDataMalformed_RejectedAsInput pins that a malformed -d body is
+// rejected as input.invalid_argument before any request.
+func TestAPI_InlineDataMalformed_RejectedAsInput(t *testing.T) {
+	_, _ = iostreams.SetForTest(t)
+	called := false
+	cli, stop := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	})
+	defer stop()
+
+	opts := &Options{Data: `{bad`}
+	err := runAPI(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, cli, "POST", "/api/v1/things", false)
+	var typed *cmdutil.Error
+	if !errors.As(err, &typed) || typed.Code != cmdutil.CodeInputInvalidArgument {
+		t.Errorf("want input.invalid_argument for malformed -d, got %v", err)
+	}
+	if called {
+		t.Error("server must not be called with a malformed inline body")
 	}
 }
 
@@ -127,6 +168,33 @@ func TestAPI_PostWithStdinInput(t *testing.T) {
 	}
 	if string(seenBody) != `{"name":"foo"}` {
 		t.Errorf("server received body %q, want %q", seenBody, `{"name":"foo"}`)
+	}
+}
+
+// TestAPI_MalformedInputJSON_RejectedAsInput pins that a non-JSON --input body
+// is rejected with input.invalid_argument (exit 5) at the boundary, not the
+// confusing network.error (exit 7, "retryable") the SDK's marshal step
+// produced. The server must never be called.
+func TestAPI_MalformedInputJSON_RejectedAsInput(t *testing.T) {
+	_, _ = iostreams.SetForTest(t)
+	called := false
+	cli, stop := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	})
+	defer stop()
+
+	opts := &Options{Input: "-", StdinReader: strings.NewReader(`{bad json`)}
+	err := runAPI(context.Background(), opts, &cmdutil.FormatOptions{Mode: cmdutil.FormatJSON}, cli, "POST", "/api/v1/things", false)
+	if err == nil {
+		t.Fatal("expected an error for malformed --input JSON")
+	}
+	var typed *cmdutil.Error
+	if !errors.As(err, &typed) || typed.Code != cmdutil.CodeInputInvalidArgument {
+		t.Errorf("want input.invalid_argument, got %v", err)
+	}
+	if called {
+		t.Error("server must not be called with a malformed body")
 	}
 }
 
@@ -325,6 +393,109 @@ func asTypedError(err error, dst **cmdutil.Error) bool {
 	return false
 }
 
+func TestAPI_PaginateTruncatedHTTPBody(t *testing.T) {
+	for _, mode := range []cmdutil.FormatMode{cmdutil.FormatJSON, cmdutil.FormatText} {
+		t.Run(string(mode), func(t *testing.T) {
+			out, _ := iostreams.SetForTest(t)
+			var calls atomic.Int32
+			cli, stop := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				body := `{"data":[{"id":"1"}`
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", fmt.Sprint(len(body)+1))
+				_, _ = io.WriteString(w, body)
+			})
+			defer stop()
+
+			fopts := &cmdutil.FormatOptions{Mode: mode}
+			err := runAPI(context.Background(), &Options{}, fopts, cli, "GET", "/api/v1/items", true)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF, "stdout: %q", out.String())
+			var ce *cmdutil.Error
+			require.ErrorAs(t, err, &ce)
+			assert.Equal(t, cmdutil.CodeNetworkError, ce.Code)
+			assert.Empty(t, out.String(), "stdout must be empty on a failed transfer")
+			assert.Equal(t, int32(1), calls.Load())
+		})
+	}
+}
+
+type apiResponseBody struct {
+	data       string
+	err        error
+	closeCalls int
+}
+
+func (b *apiResponseBody) Read(p []byte) (int, error) {
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	if len(b.data) == 0 {
+		return n, b.err
+	}
+	return n, nil
+}
+
+func (b *apiResponseBody) Close() error {
+	b.closeCalls++
+	return nil
+}
+
+func TestAPI_PaginateReadError(t *testing.T) {
+	readErr := errors.New("response body read failed")
+	for _, tt := range []struct {
+		name       string
+		failedPage int
+		body       string
+		status     int
+	}{
+		{"first complete page", 1, `{"data":[{"id":"1"}],"total":1,"page_size":1}`, http.StatusOK},
+		{"first non-paginated response", 1, `{"hello":"world"}`, http.StatusOK},
+		{"later complete page", 2, `{"data":[{"id":"2"}],"total":2,"page_size":1}`, http.StatusOK},
+		{"later truncated page", 2, `{"data":[`, http.StatusOK},
+		{"later page with more results", 2, `{"data":[{"id":"2"}],"total":3,"page_size":1}`, http.StatusOK},
+		{"error status", 1, `{"error":"unavailable"}`, http.StatusBadGateway},
+	} {
+		for _, mode := range []cmdutil.FormatMode{cmdutil.FormatJSON, cmdutil.FormatText} {
+			t.Run(tt.name+"/"+string(mode), func(t *testing.T) {
+				out, _ := iostreams.SetForTest(t)
+				var bodies []*apiResponseBody
+				calls := 0
+				svc := &fakeAPISvc{do: func(_, _ string, _ any) (*http.Response, error) {
+					calls++
+					if calls > tt.failedPage {
+						return nil, errors.New("requested another page after a failed read")
+					}
+					for i, body := range bodies {
+						assert.Equal(t, 1, body.closeCalls, "page %d must close before the next request", i+1)
+					}
+					body := &apiResponseBody{
+						data: `{"data":[{"id":"1"}],"total":3,"page_size":1}`,
+						err:  io.EOF,
+					}
+					status := http.StatusOK
+					if calls == tt.failedPage {
+						body.data, body.err, status = tt.body, readErr, tt.status
+					}
+					bodies = append(bodies, body)
+					return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
+				}}
+
+				fopts := &cmdutil.FormatOptions{Mode: mode}
+				err := runAPI(context.Background(), &Options{}, fopts, svc, "GET", "/api/v1/items", true)
+				require.ErrorIs(t, err, readErr, "stdout: %q; requests: %d", out.String(), calls)
+				var ce *cmdutil.Error
+				require.ErrorAs(t, err, &ce)
+				assert.Equal(t, cmdutil.CodeNetworkError, ce.Code)
+				assert.Equal(t, "read response body", ce.Message)
+				assert.Empty(t, out.String(), "stdout must not contain partial results")
+				assert.Equal(t, tt.failedPage, calls)
+				for i, body := range bodies {
+					assert.Equal(t, 1, body.closeCalls, "page %d body must close exactly once", i+1)
+				}
+			})
+		}
+	}
+}
+
 func TestAPI_PaginateMergesPages(t *testing.T) {
 	pages := [][]byte{
 		[]byte(`{"success":true,"data":[{"id":"1"},{"id":"2"}],"total":5,"page":1,"page_size":2}`),
@@ -418,14 +589,12 @@ func TestAPI_PaginateNoMetadataPassesThrough(t *testing.T) {
 	if called != 1 {
 		t.Errorf("called %d times, want 1 (non-paginated response)", called)
 	}
-	// H3a: fallback must produce an envelope, not raw passthrough.
+	// The non-paginated fallback must emit the SAME flat shape as a single
+	// call: the server response directly under .data (no {status,headers,body}
+	// wrapper), so --paginate and single-call project identically.
 	var env struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Status  int               `json:"status"`
-			Headers map[string]string `json:"headers"`
-			Body    map[string]any    `json:"body"`
-		} `json:"data"`
+		OK   bool           `json:"ok"`
+		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatalf("non-paginated fallback must emit envelope JSON, unmarshal failed: %v\n%s", err, out.String())
@@ -433,11 +602,8 @@ func TestAPI_PaginateNoMetadataPassesThrough(t *testing.T) {
 	if !env.OK {
 		t.Errorf("envelope ok: want true, got false")
 	}
-	if env.Data.Status != 200 {
-		t.Errorf("envelope data.status: want 200, got %d", env.Data.Status)
-	}
-	if v, ok := env.Data.Body["hello"]; !ok || v.(string) != "world" {
-		t.Errorf("envelope data.body: want {hello:world}, got %v", env.Data.Body)
+	if v, ok := env.Data["hello"]; !ok || v.(string) != "world" {
+		t.Errorf("fallback must pass the body through flat under .data (.data.hello), got %v", env.Data)
 	}
 }
 
@@ -489,5 +655,57 @@ func TestAPI_PaginateServerCapsPageSize(t *testing.T) {
 	got := env.Data
 	if len(got.Data) != 5 {
 		t.Errorf("got %d records, want 5 (server-capped page_size should not cause truncation)", len(got.Data))
+	}
+}
+
+// TestAPI_PUT_RequiresConfirmation pins the exit-10 write gate on the
+// escape-hatch PUT path: `weknora api -X PUT /...` mutates server state the
+// same way a typed `kb update` does, so it must require -y (exit 10) rather
+// than silently writing. Regression: only DELETE was gated, letting an agent
+// bypass the write-confirmation protocol via raw PUT/PATCH.
+func TestAPI_PUT_RequiresConfirmation(t *testing.T) {
+	for _, method := range []string{"PUT", "PATCH"} {
+		t.Run(method, func(t *testing.T) {
+			iostreams.SetForTest(t) // non-TTY
+			f := &cmdutil.Factory{
+				Client:   func() (*sdk.Client, error) { return nil, nil },
+				Prompter: func() prompt.Prompter { return prompt.AgentPrompter{} },
+			}
+			root := withRootHarness(NewCmd(f), "/api/v1/knowledge-bases/kb_xxx", "-X", method, "-F", "name=x")
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("expected confirmation_required for %s without -y", method)
+			}
+			var ce *cmdutil.Error
+			if !asTypedError(err, &ce) || ce.Code != cmdutil.CodeInputConfirmationRequired {
+				t.Errorf("want input.confirmation_required, got %v", err)
+			}
+			if got := cmdutil.ExitCode(err); got != 10 {
+				t.Errorf("exit code = %d, want 10", got)
+			}
+		})
+	}
+}
+
+// TestAPI_POST_NotGated: POST is create-shaped and, like typed `kb create`,
+// intentionally ungated — it must reach the SDK without a confirmation gate.
+func TestAPI_POST_NotGated(t *testing.T) {
+	iostreams.SetForTest(t)
+	called := false
+	cli, stop := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	defer stop()
+	f := &cmdutil.Factory{
+		Client:   func() (*sdk.Client, error) { return cli, nil },
+		Prompter: func() prompt.Prompter { return prompt.AgentPrompter{} },
+	}
+	root := withRootHarness(NewCmd(f), "/api/v1/knowledge-bases", "-X", "POST", "-F", "name=x")
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !called {
+		t.Error("POST handler not called - POST must not be gated")
 	}
 }

@@ -56,6 +56,20 @@ func TestDataSourceConfig_ToJSON_PassthroughWhenNoKey(t *testing.T) {
 	assert.Contains(t, string(blob), "plain-token")
 }
 
+func TestNextcloudAppPasswordEncryption(t *testing.T) {
+	withAESKey(t, testAESKey32)
+	cfg := DataSourceConfig{Type: ConnectorTypeNextcloud, Credentials: map[string]any{
+		"base_url": "https://nextcloud.example.com", "username": "alice", "app_password": "app-password-for-tests",
+	}}
+	blob, err := cfg.ToJSON()
+	assert.NoError(t, err)
+	assert.NotContains(t, string(blob), "app-password-for-tests")
+	parsed, err := (&DataSource{Config: blob}).ParseConfig()
+	assert.NoError(t, err)
+	assert.Equal(t, "app-password-for-tests", parsed.Credentials["app_password"])
+	assert.Equal(t, "app-password-for-tests", cfg.Credentials["app_password"])
+}
+
 func TestDataSource_ParseConfig_Roundtrip(t *testing.T) {
 	withAESKey(t, testAESKey32)
 	original := &DataSourceConfig{
@@ -115,4 +129,54 @@ func TestDataSource_ParseConfig_MissingKeyDegradesGracefully(t *testing.T) {
 	assert.Equal(t, []string{"repo-1"}, parsed.ResourceIDs, "non-credential config survives")
 	assert.False(t, parsed.HasCredentials() && parsed.Credentials["token"] != "",
 		"HasCredentials should not report a usable credential when decrypt failed")
+}
+
+func TestDataSourceConfig_HasConfiguredCredentials_RSS(t *testing.T) {
+	feedOnly := DataSourceConfig{
+		Credentials: map[string]interface{}{
+			"feed_urls": "https://example.com/feed.xml",
+		},
+	}
+	assert.False(t, feedOnly.HasConfiguredCredentials(ConnectorTypeRSS))
+	assert.True(t, feedOnly.HasCredentials())
+
+	withAuth := DataSourceConfig{
+		Credentials: map[string]interface{}{
+			"feed_urls":    "https://example.com/feed.xml",
+			"auth_headers": "Authorization: Bearer x",
+		},
+	}
+	assert.True(t, withAuth.HasConfiguredCredentials(ConnectorTypeRSS))
+
+	t.Run("strip feed_urls", func(t *testing.T) {
+		cfg := feedOnly
+		cfg.StripNonSecretCredentials(ConnectorTypeRSS)
+		assert.Nil(t, cfg.Credentials)
+		assert.False(t, cfg.HasCredentials())
+	})
+}
+
+// TestSubtreeChildID_MatchesPrefix locks the producer/consumer contract: a child
+// ID built by SubtreeChildID must start with the parent's SubtreeChildPrefix
+// (what the sweep queries), and the prefix must not match a sibling node whose
+// external_id merely shares a leading substring.
+func TestSubtreeChildID_MatchesPrefix(t *testing.T) {
+	parent := "node123"
+	prefix := SubtreeChildPrefix(parent)
+	assert.Equal(t, "node123#", prefix)
+
+	fileChild := SubtreeChildID(parent, "file", "tokABC")
+	imageChild := SubtreeChildID(parent, "image", "tokXYZ")
+	assert.Equal(t, "node123#file#tokABC", fileChild)
+	assert.Equal(t, "node123#image#tokXYZ", imageChild)
+
+	// Every child of this node is swept by the prefix.
+	assert.True(t, strings.HasPrefix(fileChild, prefix))
+	assert.True(t, strings.HasPrefix(imageChild, prefix))
+
+	// A sibling node "node1234" (shares the "node123" leading substring but is a
+	// different node) must NOT be caught by node123's prefix — the '#' guards it.
+	sibling := SubtreeChildID("node1234", "file", "tokABC")
+	assert.False(t, strings.HasPrefix(sibling, prefix),
+		"sibling node whose id shares a leading substring must not match the prefix")
 }

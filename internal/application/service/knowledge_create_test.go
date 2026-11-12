@@ -39,6 +39,15 @@ func (r *createKnowledgeFileRepoStub) CreateKnowledge(ctx context.Context, knowl
 	return r.createErr
 }
 
+// GetKnowledgeTags is invoked by setAndAttachKnowledgeTags after create even
+// when no tags were supplied; a fresh knowledge has none, so return empty.
+func (r *createKnowledgeFileRepoStub) GetKnowledgeTags(
+	ctx context.Context,
+	knowledgeIDs []string,
+) (map[string][]*types.KnowledgeTag, error) {
+	return map[string][]*types.KnowledgeTag{}, nil
+}
+
 type createKnowledgeFileKBServiceStub struct {
 	interfaces.KnowledgeBaseService
 
@@ -136,8 +145,9 @@ func TestCreateKnowledgeFromFileDoesNotPersistWhenStorageSaveFails(t *testing.T)
 		nil,
 		nil,
 		"",
+		nil,
 		"",
-		"",
+		nil,
 	)
 
 	require.Error(t, err)
@@ -166,8 +176,9 @@ func TestCreateKnowledgeFromFilePersistsStoredFilePathOnCreate(t *testing.T) {
 		nil,
 		nil,
 		"",
+		nil,
 		"",
-		"",
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -178,6 +189,84 @@ func TestCreateKnowledgeFromFilePersistsStoredFilePathOnCreate(t *testing.T) {
 	require.Equal(t, 1, repo.createCalls)
 	require.NotNil(t, repo.createdKnowledge)
 	require.Equal(t, "stored/"+knowledge.ID, repo.createdKnowledge.FilePath)
+	require.Equal(t, 1, task.calls)
+}
+
+// Datasource sync deletes the previous knowledge for an external_id before
+// calling CreateKnowledgeFromFile. Early JSON rejection here would leave a
+// gap (old gone, nothing created). Malformed .json must still create a row
+// and fail later in async parse — HTTP upload rejects via the handler instead.
+func TestCreateKnowledgeFromFileAcceptsInvalidJSONForAsyncParse(t *testing.T) {
+	t.Parallel()
+
+	repo := &createKnowledgeFileRepoStub{}
+	fileSvc := &createKnowledgeFileServiceStub{}
+	task := &createKnowledgeTaskEnqueuerStub{}
+	svc := &knowledgeService{
+		repo:      repo,
+		kbService: &createKnowledgeFileKBServiceStub{kb: &types.KnowledgeBase{ID: "kb-1"}},
+		fileSvc:   fileSvc,
+		task:      task,
+	}
+
+	knowledge, err := svc.CreateKnowledgeFromFile(
+		newCreateKnowledgeFileContext(),
+		"kb-1",
+		newMultipartFileHeader(t, "bad.json", "{\n// comment\n\"a\": 1\n}"),
+		map[string]string{"datasource_id": "ds-1", "external_id": "ext-1"},
+		nil,
+		"bad.json",
+		nil,
+		"notion",
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, knowledge)
+	require.Equal(t, 1, repo.createCalls)
+	require.Equal(t, 1, task.calls)
+}
+
+func TestCreateKnowledgeFromImageFallsBackWhenLegacyStorageConfigIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	repo := &createKnowledgeFileRepoStub{}
+	fileSvc := &createKnowledgeFileServiceStub{}
+	task := &createKnowledgeTaskEnqueuerStub{}
+	kb := &types.KnowledgeBase{
+		ID:        "kb-1",
+		VLMConfig: types.VLMConfig{Enabled: true, ModelID: "vlm-1"},
+	}
+	kb.SetStorageProvider("cos")
+	svc := &knowledgeService{
+		repo:      repo,
+		kbService: &createKnowledgeFileKBServiceStub{kb: kb},
+		fileSvc:   fileSvc,
+		task:      task,
+	}
+	ctx := context.WithValue(newCreateKnowledgeFileContext(), types.TenantInfoContextKey, &types.Tenant{
+		StorageEngineConfig: &types.StorageEngineConfig{
+			DefaultProvider: "cos",
+			COS:             &types.COSEngineConfig{SecretID: "incomplete"},
+		},
+	})
+
+	knowledge, err := svc.CreateKnowledgeFromFile(
+		ctx,
+		"kb-1",
+		newMultipartFileHeader(t, "image.png", "image bytes"),
+		nil,
+		nil,
+		"",
+		nil,
+		"",
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, knowledge)
+	require.Equal(t, 1, fileSvc.saveCalls)
+	require.Equal(t, 1, repo.createCalls)
 	require.Equal(t, 1, task.calls)
 }
 
@@ -199,8 +288,9 @@ func TestCreateKnowledgeFromFileDeletesStoredFileWhenCreateFails(t *testing.T) {
 		nil,
 		nil,
 		"",
+		nil,
 		"",
-		"",
+		nil,
 	)
 
 	require.EqualError(t, err, "database unavailable")
@@ -209,6 +299,55 @@ func TestCreateKnowledgeFromFileDeletesStoredFileWhenCreateFails(t *testing.T) {
 	require.Equal(t, 1, repo.createCalls)
 	require.Equal(t, 1, fileSvc.deleteCalls)
 	require.Equal(t, "stored/"+fileSvc.savedWithKnowledgeID, fileSvc.deletedPath)
+}
+
+func TestCreateKnowledgeFromFile_PersistsProcessOverrides(t *testing.T) {
+	t.Parallel()
+
+	repo := &createKnowledgeFileRepoStub{}
+	fileSvc := &createKnowledgeFileServiceStub{}
+	task := &createKnowledgeTaskEnqueuerStub{}
+	svc := &knowledgeService{
+		repo:      repo,
+		kbService: &createKnowledgeFileKBServiceStub{kb: &types.KnowledgeBase{ID: "kb-1"}},
+		fileSvc:   fileSvc,
+		task:      task,
+	}
+
+	chunkSize := 512
+	overrides := &types.KnowledgeProcessOverrides{
+		ChunkingConfig: &types.ChunkingConfig{ChunkSize: chunkSize},
+		SummaryEnabled: processConfigBoolPtr(false),
+	}
+
+	knowledge, err := svc.CreateKnowledgeFromFile(
+		newCreateKnowledgeFileContext(),
+		"kb-1",
+		newMultipartFileHeader(t, "doc.txt", "hello"),
+		map[string]string{"source": "test"},
+		nil,
+		"",
+		nil,
+		"",
+		overrides,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, knowledge)
+	require.Equal(t, 1, repo.createCalls)
+	require.NotNil(t, repo.createdKnowledge)
+
+	parsed, err := repo.createdKnowledge.ProcessOverrides()
+	require.NoError(t, err)
+	require.NotNil(t, parsed)
+	require.NotNil(t, parsed.SummaryEnabled)
+	require.False(t, *parsed.SummaryEnabled)
+	require.NotNil(t, parsed.ChunkingConfig)
+	require.Equal(t, chunkSize, parsed.ChunkingConfig.ChunkSize)
+
+	metadataMap, err := repo.createdKnowledge.Metadata.Map()
+	require.NoError(t, err)
+	require.Equal(t, "test", metadataMap["source"])
 }
 
 func newCreateKnowledgeFileContext() context.Context {

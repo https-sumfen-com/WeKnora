@@ -1,7 +1,49 @@
-import { get, post, put, del } from '../../utils/request';
+import { get, post, postUpload, put, del } from '../../utils/request';
 import i18n from '@/i18n'
+import { ModelInUseError, modelInUseErrorFromRequest } from './modelUsage'
+
+export * from './modelUsage'
 
 const t = (key: string) => i18n.global.t(key)
+
+// Protocol-neutral thinking level. Mirrors internal/models/api.ReasoningEffort.
+export type ReasoningEffortLevel =
+  | 'off'
+  | 'auto'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+
+// Catalog view of a saved chat/VLM model. Mirrors internal/models/catalog.Capabilities.
+// thinking_levels: empty array = the model cannot be asked to think.
+export interface ModelCapabilities {
+  provider: string;
+  api: string;
+  cataloged: boolean;
+  reasoning: boolean;
+  thinking_levels: ReasoningEffortLevel[];
+  thinking_format: string;
+  input?: string[];
+  context_window?: number;
+  max_output_tokens?: number;
+  max_tokens_field?: string;
+}
+
+// Per-row override of a catalog entry. Mirrors internal/types.ModelSpecOverride.
+// compat is the flat, protocol-specific object defined in
+// internal/models/api/*_settings.go (free-form JSON).
+export interface ModelSpecOverride {
+  api?: string;
+  reasoning?: boolean;
+  input?: string[];
+  context_window?: number;
+  max_output_tokens?: number;
+  thinking_levels?: Record<string, string | null>;
+  compat?: Record<string, unknown>;
+}
 
 // 模型类型定义
 export interface ModelConfig {
@@ -19,6 +61,7 @@ export interface ModelConfig {
     embedding_parameters?: {
       dimension?: number;
       truncate_prompt_tokens?: number;
+      supports_dimension_override?: boolean;
     };
     interface_type?: 'ollama' | 'openai'; // VLLM专用
     parameter_size?: string; // Ollama模型参数大小 (e.g., "7B", "13B", "70B")
@@ -27,22 +70,52 @@ export interface ModelConfig {
     // 会在调用远程模型 API 时附加到每个请求上。Authorization、Content-Type 等保留头会被忽略。
     custom_headers?: Record<string, string>;
     supports_vision?: boolean; // Whether the model accepts image/multimodal input
+    // 对话/VLM 的上下文窗口（token）。0 或不填表示使用后端默认 200000。
+    context_window?: number;
+    max_output_tokens?: number;
+    // 后台任务（入库/富化）对该模型的并发上限，按模型 ID 全副本共享。
+    // 0 或不填表示沿用全局默认（model.max_concurrency）；仅对 chat/embedding/vllm 生效。
+    max_concurrency?: number;
     app_id?: string;
     // Secret fields (api_key, app_secret) are never returned by the server in
     // this shape — they live behind the /credentials subresource. They are
     // kept on the type so create-mode payloads can still carry them in the
     // initial POST body.
     app_secret?: string;
+    // Per-model catalog override (protocol, limits, protocol compat knobs).
+    spec?: ModelSpecOverride;
   };
+  // Catalog view (chat / VLM remote models only): protocol, thinking levels,
+  // context window. Computed by the backend from provider + name + overrides.
+  capabilities?: ModelCapabilities;
   is_default?: boolean;
+  default_for?: string[];
   is_builtin?: boolean;
   status?: string;
-  // Per-field configured? metadata from the main response. Absent for
-  // builtin models.
+  // Per-field configured? metadata from the main response. For builtin
+  // models it is returned only to system administrators.
   credentials?: Record<ModelCredentialField, { configured: boolean }>;
   created_at?: string;
   updated_at?: string;
   deleted_at?: string | null;
+}
+
+// 复制模型。只提交展示名；name 与凭证由服务端从源模型复制。
+export function copyModelConfig(id: string, displayName: string): Promise<ModelConfig> {
+  return new Promise((resolve, reject) => {
+    post(`/api/v1/models/${id}/copy`, { display_name: displayName })
+      .then((response: any) => {
+        if (response.success && response.data) {
+          resolve(response.data);
+        } else {
+          reject(new Error(response.message || ''));
+        }
+      })
+      .catch((error: any) => {
+        console.error('Failed to copy model:', error);
+        reject(error);
+      });
+  });
 }
 
 // 创建模型
@@ -80,7 +153,9 @@ export function listModels(type?: string): Promise<ModelConfig[]> {
       })
       .catch((error: any) => {
         console.error('Failed to list models:', error);
-        resolve([]);
+        // 抛出而非吞掉：调用方（含缓存层）才能区分「真失败」与「成功但无模型」，
+        // 避免把一次瞬时失败的空结果缓存下来。各 UI 调用点均已 try/catch 兜底。
+        reject(error);
       });
   });
 }
@@ -129,14 +204,73 @@ export function deleteModel(id: string): Promise<void> {
         if (response.success) {
           resolve();
         } else {
+          const conflict = modelInUseErrorFromRequest(response)
+          if (conflict) {
+            reject(conflict)
+            return
+          }
           reject(new Error(response.message || t('error.model.deleteFailed')));
         }
       })
       .catch((error: any) => {
         console.error('Failed to delete model:', error);
+        if (error instanceof ModelInUseError) {
+          reject(error)
+          return
+        }
+        const conflict = modelInUseErrorFromRequest(error)
+        if (conflict) {
+          reject(conflict)
+          return
+        }
         reject(error);
       });
   });
+}
+
+export interface ModelDebugOptions {
+  system_prompt?: string
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  thinking?: boolean
+  // Graded thinking level; takes precedence over the boolean when set.
+  reasoning_effort?: ReasoningEffortLevel | string
+  // Embedding only: score `documents` (and the file) against `input` as a query.
+  similarity?: boolean
+}
+
+export interface ModelDebugResult {
+  ok: boolean
+  elapsed_ms: number
+  request: Record<string, unknown>
+  raw_response: unknown
+  observations: Record<string, unknown>
+  error?: string
+}
+
+export async function debugModel(
+  id: string,
+  data: {
+    input?: string
+    documents?: string[]
+    options?: ModelDebugOptions
+    file?: File | null
+  },
+): Promise<ModelDebugResult> {
+  const form = new FormData()
+  form.append('input', data.input || '')
+  form.append('documents', JSON.stringify(data.documents || []))
+  form.append('options', JSON.stringify(data.options || {}))
+  if (data.file) form.append('file', data.file)
+  const response: any = await postUpload(
+    `/api/v1/models/${id}/debug`,
+    form,
+    undefined,
+    { timeout: 300000 },
+  )
+  if (response?.success && response?.data) return response.data
+  throw new Error(response?.message || t('error.model.getFailed'))
 }
 
 // ----------------------------------------------------------------------------

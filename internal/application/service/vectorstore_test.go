@@ -137,7 +137,7 @@ func mockEngineFactory(err error) interfaces.EngineFactory {
 // mockEngineService satisfies interfaces.RetrieveEngineService minimally.
 type mockEngineService struct{}
 
-func (m *mockEngineService) EngineType() types.RetrieverEngineType                    { return "mock" }
+func (m *mockEngineService) EngineType() types.RetrieverEngineType { return "mock" }
 func (m *mockEngineService) Retrieve(_ context.Context, _ types.RetrieveParams) ([]*types.RetrieveResult, error) {
 	return nil, nil
 }
@@ -391,6 +391,28 @@ func TestCreateStore_DuplicateCheck_EnvStore(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, errors.ErrConflict, appErr.Code)
 	assert.Contains(t, appErr.Error(), "environment variables")
+}
+
+func TestCreateStore_DuplicateCheck_QdrantEnvStore(t *testing.T) {
+	withSSRFWhitelist(t, "qdrant")
+	t.Setenv("RETRIEVE_DRIVER", "qdrant")
+	t.Setenv("QDRANT_HOST", "qdrant")
+	t.Setenv("QDRANT_PORT", "7443")
+	t.Setenv("QDRANT_USE_TLS", "true")
+	t.Setenv("QDRANT_COLLECTION", "custom_vectors")
+
+	repo := &mockVectorStoreRepo{}
+	svc := NewVectorStoreService(repo, nil, nil, nil, nil)
+	err := svc.CreateStore(context.Background(), &types.VectorStore{
+		TenantID: 1, Name: "duplicate", EngineType: types.QdrantRetrieverEngineType,
+		ConnectionConfig: types.ConnectionConfig{Host: "qdrant", Port: 7443, UseTLS: true},
+		IndexConfig:      types.IndexConfig{CollectionPrefix: "custom_vectors"},
+	})
+	var appErr *errors.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, errors.ErrConflict, appErr.Code)
+	assert.Contains(t, appErr.Error(), "environment variables")
+	assert.Empty(t, repo.stores)
 }
 
 func TestCreateStore_DuplicateCheck_EnvStore_DifferentIndex_Allowed(t *testing.T) {
@@ -822,6 +844,8 @@ CREATE TABLE IF NOT EXISTS vector_stores (
     deleted_at DATETIME NULL
 );
 CREATE TABLE IF NOT EXISTS knowledge_bases (
+    profile_config TEXT,
+    generated_profile TEXT,
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -838,11 +862,13 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     extract_config TEXT NULL DEFAULT NULL,
     faq_config TEXT,
     question_generation_config TEXT NULL,
+    auto_tag_config TEXT NULL,
     is_temporary BOOLEAN NOT NULL DEFAULT 0,
     is_pinned INTEGER NOT NULL DEFAULT 0,
     pinned_at DATETIME NULL,
     asr_config TEXT,
-    vector_store_id VARCHAR(36),
+		vector_store_id VARCHAR(36),
+		storage_backend_id VARCHAR(36),
     wiki_config TEXT,
     indexing_strategy TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -910,6 +936,17 @@ func (r *realStoreRepo) ExistsByEndpointAndIndex(_ context.Context, _ uint64, _ 
 // vector-store service (only CountByVectorStoreID is exercised here).
 type realKBRepo struct{ db *gorm.DB }
 
+func (r *realKBRepo) UpdateKnowledgeBaseGeneratedProfile(
+	ctx context.Context, id string, profile *types.KnowledgeBaseProfile,
+) error {
+	var value interface{}
+	if profile != nil {
+		value = *profile
+	}
+	return r.db.WithContext(ctx).Model(&types.KnowledgeBase{}).Where("id = ?", id).
+		Update("generated_profile", value).Error
+}
+
 func (r *realKBRepo) CountByVectorStoreID(ctx context.Context, db *gorm.DB, tenantID uint64, storeID string) (int64, error) {
 	if db == nil {
 		db = r.db
@@ -920,6 +957,12 @@ func (r *realKBRepo) CountByVectorStoreID(ctx context.Context, db *gorm.DB, tena
 		Where("tenant_id = ? AND vector_store_id = ?", tenantID, storeID).
 		Count(&count).Error
 	return count, err
+}
+func (r *realKBRepo) CountByModelID(_ context.Context, _ uint64, _ string) (int64, error) {
+	return 0, nil
+}
+func (r *realKBRepo) ListModelUsages(_ context.Context, _ uint64, _ string) ([]types.ModelUsageResource, error) {
+	return []types.ModelUsageResource{}, nil
 }
 
 // The remaining methods are not called by the tested code paths; declare them
@@ -1074,7 +1117,7 @@ func TestDeleteStore_Guard_RejectsCount3(t *testing.T) {
 	storeID := "store-A"
 	for i := 0; i < 3; i++ {
 		kb := &types.KnowledgeBase{
-			ID: "kb-multi-" + tenantID2s(1) + "-" + ptrOrEmpty(&storeID) + "-" + string(rune('a'+i)),
+			ID:   "kb-multi-" + tenantID2s(1) + "-" + ptrOrEmpty(&storeID) + "-" + string(rune('a'+i)),
 			Name: "kb", TenantID: 1, EmbeddingModelID: "e", SummaryModelID: "s",
 			VectorStoreID: &storeID,
 		}
