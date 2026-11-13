@@ -18,7 +18,7 @@ fi
 
 # Encode the instance identifier before embedding it in JavaScript so quotes,
 # backslashes and line breaks from deployment configuration stay plain data.
-INSTANCE_ID_ENCODED=$(printf '%s' "${SUMFEN_INSTANCE_ID:-knowage}" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g')
+INSTANCE_ID_ENCODED=$(printf '%s' "${SUMFEN_INSTANCE_ID:-knowledge}" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g')
 
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {

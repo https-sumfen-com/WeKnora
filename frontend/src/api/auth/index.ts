@@ -579,7 +579,7 @@ export async function sumfenAutoLogin(
 
     const instanceId = window.__RUNTIME_CONFIG__?.SUMFEN_INSTANCE_ID?.trim()
       || __SUMFEN_INSTANCE_ID__?.trim()
-      || 'knowage'
+      || 'knowledge'
     const res = await fetch(SUMFEN_LOGIN_URL, {
       method: 'POST',
       headers: reqHeaders,

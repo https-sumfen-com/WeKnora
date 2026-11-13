@@ -16,11 +16,11 @@ const headers = {
 }
 
 for (const scenario of [
-  { name: 'default', dev: false, expected: 'knowage' },
+  { name: 'default', dev: false, expected: 'knowledge' },
   { name: 'root .env for local development', dev: true, env: 'local-instance', expected: 'local-instance' },
   { name: 'runtime overrides build', dev: false, env: 'build-instance', runtime: 'deployment-instance', expected: 'deployment-instance' },
   { name: 'empty runtime falls back to build', dev: false, env: 'build-instance', runtime: '', expected: 'build-instance' },
-  { name: 'blank configuration', dev: true, env: '  ', runtime: '  ', expected: 'knowage' },
+  { name: 'blank configuration', dev: true, env: '  ', runtime: '  ', expected: 'knowledge' },
   { name: 'trim whitespace', dev: false, runtime: '  deployment-instance  ', expected: 'deployment-instance' },
 ]) {
   test(`Sumfen auto-login sends instance_id from ${scenario.name}`, async () => {

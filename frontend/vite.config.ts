@@ -98,7 +98,7 @@ export default defineConfig(({ mode }) => ({
     __FRONTEND_COMMIT__: JSON.stringify(FRONTEND_COMMIT),
     // Expose only this public instance identifier from the repository-root .env.
     __SUMFEN_INSTANCE_ID__: JSON.stringify(
-      loadEnv(mode, resolve(__dirname, '..'), 'SUMFEN_INSTANCE_ID').SUMFEN_INSTANCE_ID?.trim() || 'knowage',
+      loadEnv(mode, resolve(__dirname, '..'), 'SUMFEN_INSTANCE_ID').SUMFEN_INSTANCE_ID?.trim() || 'knowledge',
     ),
   },
   build: {
