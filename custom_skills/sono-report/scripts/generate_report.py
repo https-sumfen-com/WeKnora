@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""End-to-end SONO plot report generator.
+# -*- coding: utf-8 -*-
+# @Time    : 2026/07/03 20:54
+# @Author  : feidu
+# @File    : generate_report.py
+"""整体报告生成与同源勘察章节拼接。
+
+End-to-end SONO plot report generator.
 
 Preferred execute_skill_script usage:
   script_path: scripts/generate_report.py
@@ -16,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -42,7 +48,9 @@ def run_step(cmd: list[str], step: str) -> str:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
-    result = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", capture_output=True, env=env)
+    result = subprocess.run(
+        cmd, text=True, encoding="utf-8", errors="replace", capture_output=True, env=env
+    )
     if result.returncode != 0:
         message = [f"{step} failed with exit code {result.returncode}"]
         if result.stdout.strip():
@@ -61,7 +69,9 @@ def read_input(args: argparse.Namespace) -> str:
     stdin_bytes = sys.stdin.buffer.read()
     if stdin_bytes.strip():
         return stdin_bytes.decode("utf-8")
-    raise ReportGenerationError("REPORT_DATA JSON is required via stdin, --input-json, or --input-file")
+    raise ReportGenerationError(
+        "REPORT_DATA JSON is required via stdin, --input-json, or --input-file"
+    )
 
 
 def create_workspace(output_dir: Path) -> Path:
@@ -89,11 +99,17 @@ def derive_report_filename(report_no: str, report_url: str) -> str:
     raw_name = path_segments[-1] if path_segments else ""
     filename = raw_name or f"{report_no}.html"
     if not filename:
-        raise ReportGenerationError("Cannot derive output filename from report_url or report_no")
+        raise ReportGenerationError(
+            "Cannot derive output filename from report_url or report_no"
+        )
     if "/" in filename or "\\" in filename:
-        raise ReportGenerationError("Derived report filename must not contain path separators")
+        raise ReportGenerationError(
+            "Derived report filename must not contain path separators"
+        )
     if filename in {".", ".."} or ".." in filename:
-        raise ReportGenerationError("Derived report filename must not contain path traversal")
+        raise ReportGenerationError(
+            "Derived report filename must not contain path traversal"
+        )
     if Path(filename).name != filename:
         raise ReportGenerationError("Derived report filename must be a plain filename")
     if not filename.lower().endswith(".html"):
@@ -102,7 +118,14 @@ def derive_report_filename(report_no: str, report_url: str) -> str:
 
 
 def status_headers(args: argparse.Namespace) -> dict[str, str] | None:
-    status_values = [args.report_no, args.report_url, args.plot_id, args.cid, args.entity_id, args.entity_info_id]
+    status_values = [
+        args.report_no,
+        args.report_url,
+        args.plot_id,
+        args.cid,
+        args.entity_id,
+        args.entity_info_id,
+    ]
     if not any(status_values):
         return None
     missing = []
@@ -119,7 +142,9 @@ def status_headers(args: argparse.Namespace) -> dict[str, str] | None:
     if not args.entity_info_id:
         missing.append("--entity-info-id")
     if missing:
-        raise ReportGenerationError("Missing required status/report parameters: " + ", ".join(missing))
+        raise ReportGenerationError(
+            "Missing required status/report parameters: " + ", ".join(missing)
+        )
     return {
         "Content-Type": "application/json",
         "plot-id": str(args.plot_id).strip(),
@@ -129,7 +154,9 @@ def status_headers(args: argparse.Namespace) -> dict[str, str] | None:
     }
 
 
-def post_status(endpoint: str, headers: dict[str, str], report_no: str, status: str) -> tuple[int, Any]:
+def post_status(
+    endpoint: str, headers: dict[str, str], report_no: str, status: str
+) -> tuple[int, Any]:
     endpoint = require_http_url(endpoint, "status endpoint")
     body = {"report_no": report_no, "status": status}
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -140,9 +167,13 @@ def post_status(endpoint: str, headers: dict[str, str], report_no: str, status: 
             response_text = resp.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         response_text = exc.read().decode("utf-8", errors="replace")
-        raise ReportGenerationError(f"Report status update failed with HTTP {exc.code}: {response_text[:500]}") from exc
+        raise ReportGenerationError(
+            f"Report status update failed with HTTP {exc.code}: {response_text[:500]}"
+        ) from exc
     except error.URLError as exc:
-        raise ReportGenerationError(f"Report status update failed: {exc.reason}") from exc
+        raise ReportGenerationError(
+            f"Report status update failed: {exc.reason}"
+        ) from exc
 
     if not response_text.strip():
         return response_status, {}
@@ -155,17 +186,60 @@ def post_status(endpoint: str, headers: dict[str, str], report_no: str, status: 
 def generate(args: argparse.Namespace, raw: str) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
-        raise ReportGenerationError("--output-dir must be an absolute path, normally /app/report/")
+        raise ReportGenerationError(
+            "--output-dir must be an absolute path, normally /app/report/"
+        )
 
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ReportGenerationError(f"REPORT_DATA input is not valid JSON: {exc}") from exc
+        raise ReportGenerationError(
+            f"REPORT_DATA input is not valid JSON: {exc}"
+        ) from exc
     if not isinstance(parsed, dict):
         raise ReportGenerationError("REPORT_DATA must be a JSON object")
+    # 生成时间是执行事实，不能沿用模型根据旧对话猜测的时间。
+    parsed.setdefault("meta", {})["generatedAt"] = (
+        datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
-    report_url = require_http_url(args.report_url, "--report-url") if args.report_url else ""
-    output_filename = derive_report_filename(args.report_no, report_url) if args.report_no or args.report_url else ""
+    from survey_report_binding import (
+        load_binding,
+        require_canonical_survey_section,
+        validate_binding,
+    )
+
+    scope = {
+        "cid": args.cid,
+        "entity-id": args.entity_id,
+        "entity-info-id": args.entity_info_id,
+    }
+    if getattr(args, "plot_id", None):
+        scope["plot_id"] = args.plot_id
+    binding = load_binding(output_dir, args.report_no)
+    survey_report_id = args.survey_report_id
+    if binding:
+        survey_report_id = validate_binding(binding, survey_report_id, scope)
+    evidence = None
+    if survey_report_id:
+        from survey_report_client import append_survey_evidence, get_report_evidence
+
+        # 在生成任何HTML前读取固定证据；失败不可降级成缺失R1/R2的成功报告。
+        evidence = get_report_evidence(scope, survey_report_id)
+        if binding and evidence["snapshot_sha256"] != binding["survey_snapshot_sha256"]:
+            raise ReportGenerationError(
+                "Survey snapshot differs from its fixed report binding"
+            )
+        require_canonical_survey_section(parsed)
+
+    report_url = (
+        require_http_url(args.report_url, "--report-url") if args.report_url else ""
+    )
+    output_filename = (
+        derive_report_filename(args.report_no, report_url)
+        if args.report_no or args.report_url
+        else ""
+    )
 
     skill_root = Path(__file__).resolve().parents[1]
     script_dir = skill_root / "scripts"
@@ -174,23 +248,65 @@ def generate(args: argparse.Namespace, raw: str) -> dict[str, Any]:
         template_path = skill_root / template_path
 
     work_dir = create_workspace(output_dir)
+    if evidence is not None:
+        # 勘察关联报告只使用API的完整模板；校验失败不可回退到旧页面。
+        template = evidence["document_template"]
+        checksum = hashlib.sha256(template.encode()).hexdigest()
+        if checksum != evidence["document_template_sha256"]:
+            raise ReportGenerationError("Overall report template checksum differs")
+        if template.count("<!-- SONO_CANONICAL_RESULTS -->") != 1:
+            raise ReportGenerationError("Overall report template result slot is invalid")
+        template_path = work_dir / "overall-report-template.html"
+        template_path.write_text(template, encoding="utf-8")
     input_path = work_dir / "input-report-data.json"
     normalized_path = work_dir / "normalized-report-data.json"
     generated_path = work_dir / "generated-report.html"
-    input_path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+    input_path.write_text(
+        json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
-    preprocess_cmd = [sys.executable, str(script_dir / "preprocess_report_data.py"), str(input_path), str(normalized_path)]
+    preprocess_cmd = [
+        sys.executable,
+        str(script_dir / "preprocess_report_data.py"),
+        str(input_path),
+        str(normalized_path),
+    ]
     if args.strict:
         preprocess_cmd.append("--strict")
     run_step(preprocess_cmd, "preprocess")
 
-    run_step([
-        sys.executable,
-        str(script_dir / "render_report_html.py"),
-        str(template_path),
-        str(normalized_path),
-        str(generated_path),
-    ], "render")
+    run_step(
+        [
+            sys.executable,
+            str(script_dir / "render_report_html.py"),
+            str(template_path),
+            str(normalized_path),
+            str(generated_path),
+        ],
+        "render",
+    )
+
+    if evidence is not None:
+        generated_path.write_text(
+            append_survey_evidence(
+                generated_path.read_text(encoding="utf-8"), evidence
+            ),
+            encoding="utf-8",
+        )
+        normalized = json.loads(normalized_path.read_text(encoding="utf-8"))
+        normalized["surveyEvidence"] = {
+            key: evidence[key]
+            for key in ("report_id", "survey_id", "snapshot_sha256", "snapshot")
+        }
+        normalized["surveyEvidence"]["document_template_sha256"] = evidence["document_template_sha256"]
+        analysis_evidence = evidence.get("analysis_evidence") or evidence.get(
+            "monitoring_evidence"
+        )
+        if analysis_evidence is not None:
+            normalized["surveyEvidence"]["analysis_evidence"] = analysis_evidence
+        normalized_path.write_text(
+            json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     save_cmd = [
         sys.executable,
@@ -224,7 +340,9 @@ def generate(args: argparse.Namespace, raw: str) -> dict[str, Any]:
     return result
 
 
-def generate_with_retries(args: argparse.Namespace, raw: str) -> tuple[dict[str, Any], int]:
+def generate_with_retries(
+    args: argparse.Namespace, raw: str
+) -> tuple[dict[str, Any], int]:
     attempts = max(1, int(args.max_attempts))
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -236,7 +354,9 @@ def generate_with_retries(args: argparse.Namespace, raw: str) -> tuple[dict[str,
             last_error = exc
             if attempt >= attempts:
                 break
-    raise ReportGenerationError(f"report generation failed after {attempts} attempt(s): {last_error}") from last_error
+    raise ReportGenerationError(
+        f"report generation failed after {attempts} attempt(s): {last_error}"
+    ) from last_error
 
 
 def update_final_status_once(
@@ -246,25 +366,67 @@ def update_final_status_once(
 ) -> dict[str, Any] | None:
     if not headers or not args.report_no:
         return None
-    status_code, status_response = post_status(args.status_endpoint, headers, args.report_no, final_status)
-    return {"status": final_status, "status_code": status_code, "response": status_response}
+    status_code, status_response = post_status(
+        args.status_endpoint, headers, args.report_no, final_status
+    )
+    return {
+        "status": final_status,
+        "status_code": status_code,
+        "response": status_response,
+    }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate and save a SONO plot report from REPORT_DATA JSON")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Final report directory")
-    parser.add_argument("--template", default="template.html", help="HTML template path, relative to skill root by default")
-    parser.add_argument("--strict", action="store_true", help="Enable strict plot-report validation")
-    parser.add_argument("--input-json", help="REPORT_DATA JSON string; prefer stdin for large payloads")
+    parser = argparse.ArgumentParser(
+        description="Generate and save a SONO plot report from REPORT_DATA JSON"
+    )
+    parser.add_argument(
+        "--output-dir", default=DEFAULT_OUTPUT_DIR, help="Final report directory"
+    )
+    parser.add_argument(
+        "--template",
+        default="template.html",
+        help="HTML template path, relative to skill root by default",
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="Enable strict plot-report validation"
+    )
+    parser.add_argument(
+        "--input-json", help="REPORT_DATA JSON string; prefer stdin for large payloads"
+    )
     parser.add_argument("--input-file", help="Existing REPORT_DATA JSON file")
-    parser.add_argument("--report-no", help="Pre-created report number from sono-report-request")
-    parser.add_argument("--report-url", help="Pre-created public report URL from sono-report-request")
-    parser.add_argument("--plot-id", help="plot-id header value for report status callback")
+    parser.add_argument(
+        "--survey-report-id",
+        help="Frozen field survey report UUID to include without recalculating R1/R2",
+    )
+    parser.add_argument(
+        "--report-no", help="Pre-created report number from sono-report-request"
+    )
+    parser.add_argument(
+        "--report-url", help="Pre-created public report URL from sono-report-request"
+    )
+    parser.add_argument(
+        "--plot-id", help="plot-id header value for report status callback"
+    )
     parser.add_argument("--cid", help="cid header value for report status callback")
-    parser.add_argument("--entity-id", help="entity-id header value for report status callback")
-    parser.add_argument("--entity-info-id", help="entity-info-id header value for report status callback")
-    parser.add_argument("--status-endpoint", default=DEFAULT_STATUS_ENDPOINT, help="Report status callback endpoint")
-    parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS, help="Maximum report-generation attempts before posting the final status once")
+    parser.add_argument(
+        "--entity-id", help="entity-id header value for report status callback"
+    )
+    parser.add_argument(
+        "--entity-info-id",
+        help="entity-info-id header value for report status callback",
+    )
+    parser.add_argument(
+        "--status-endpoint",
+        default=DEFAULT_STATUS_ENDPOINT,
+        help="Report status callback endpoint",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help="Maximum report-generation attempts before posting the final status once",
+    )
     args = parser.parse_args()
 
     headers = status_headers(args)
@@ -275,16 +437,24 @@ def main() -> None:
     try:
         result, _attempts = generate_with_retries(args, raw)
         final_status = STATUS_SUCCESS
-    except Exception as exc:  # noqa: BLE001 - final status is posted after all retries finish
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - final status is posted after all retries finish
         generation_error = exc
         final_status = STATUS_FAILURE
 
     try:
         status_result = update_final_status_once(args, headers, final_status)
-    except Exception as status_exc:  # noqa: BLE001 - never post a second status after callback failure
+    except (
+        Exception
+    ) as status_exc:  # noqa: BLE001 - never post a second status after callback failure
         if generation_error is not None:
-            raise SystemExit(f"{generation_error}; final status update failed: {status_exc}") from status_exc
-        raise SystemExit(f"report generated but final status update failed: {status_exc}") from status_exc
+            raise SystemExit(
+                f"{generation_error}; final status update failed: {status_exc}"
+            ) from status_exc
+        raise SystemExit(
+            f"report generated but final status update failed: {status_exc}"
+        ) from status_exc
 
     if generation_error is not None:
         raise SystemExit(str(generation_error)) from generation_error

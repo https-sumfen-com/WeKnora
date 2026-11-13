@@ -1,109 +1,293 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SONO 学术报告</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-<style>
-:root{--primary:#1a3c2a;--primary-light:#eaf2ec;--accent:#8b6914;--danger:#a0403b;--warning:#b5761b;--success:#2d6a4f;--info:#2f5f8f;--text:#1a1a1a;--text-secondary:#4a4a4a;--text-muted:#6b7280;--border:#d4d4d4;--bg-page:#fdfdfd;--bg-table-header:#f5f6f8;--shadow-md:0 4px 16px rgba(0,0,0,.08)}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:"CMU Serif","Noto Serif CJK SC","Source Han Serif CN","Songti SC","STSong","Times New Roman",serif;color:var(--text);background:#e8ece9;line-height:1.9;font-size:15px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}.report-toolbar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-bottom:1px solid #dfe6e2;box-shadow:0 2px 10px rgba(0,0,0,.06)}.toolbar-inner{max-width:960px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:10px 18px;font-family:"PingFang SC","Microsoft YaHei",sans-serif}.toolbar-title{font-size:13px;color:var(--text-secondary);letter-spacing:.5px}.export-pdf-button{border:1px solid var(--primary);background:var(--primary);color:#fff;border-radius:4px;padding:7px 14px;font-size:13px;cursor:pointer;letter-spacing:.5px}.export-pdf-button:hover{background:#10291d}
-.title-page{background:#fefefe;min-height:100vh;display:flex;align-items:center;justify-content:center;page-break-after:always;position:relative;border-bottom:2px solid var(--primary)}
-.title-page::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:var(--primary)}.title-page::after{content:"";position:absolute;bottom:60px;left:50%;transform:translateX(-50%);width:120px;height:1px;background:var(--accent)}
-.title-content{text-align:center;max-width:760px;padding:60px 40px}.title-overline{font-size:12px;letter-spacing:5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:32px;font-family:"PingFang SC","Microsoft YaHei",sans-serif}.title-content h1{font-size:34px;font-weight:700;line-height:1.4;letter-spacing:1px;margin-bottom:12px;color:#111}.title-content .subtitle{font-size:16px;color:var(--text-secondary);font-style:italic;margin-bottom:48px}.title-divider{width:60px;height:2px;background:var(--primary);margin:0 auto 40px}.title-info{display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px;text-align:center;font-size:13px;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif}.info-label{font-size:10px;letter-spacing:2px;text-transform:uppercase;display:block;margin-bottom:6px;color:#999}.info-value{font-size:14px;color:var(--text);font-weight:500}.title-footer{position:absolute;bottom:32px;left:0;right:0;text-align:center;font-size:11px;color:#aaa;letter-spacing:2px;font-family:"PingFang SC","Microsoft YaHei",sans-serif}
-.paper-container{max-width:960px;margin:0 auto;background:var(--bg-page);box-shadow:var(--shadow-md);counter-reset:table-counter figure-counter}.section{padding:56px 80px;page-break-after:always;border-bottom:1px solid #eee}.section:last-child{border-bottom:none}.section-number{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif;margin-bottom:6px}.section h2{font-size:24px;font-weight:700;letter-spacing:.5px;margin-bottom:4px;color:#111}.section h3{font-size:17px;font-weight:600;margin:36px 0 14px;color:var(--primary);padding-bottom:6px;border-bottom:1px solid #e5e5e5}.section h4{font-size:14px;font-weight:600;margin:24px 0 10px;color:var(--text-secondary)}
-.abstract-box{background:#fafcfa;border:1px solid #dce5dd;padding:24px 28px;margin:20px 0 28px;font-size:14px;line-height:1.85}.abstract-label{font-weight:700;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--primary);display:block;margin-bottom:10px;font-family:"PingFang SC","Microsoft YaHei",sans-serif}.keywords{margin-top:14px;font-size:12px;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif}.keywords span{background:#eef3ef;padding:3px 10px;margin:0 4px 6px 0;border-radius:3px;font-size:11px;display:inline-block}.finding-box{background:#fdf8f0;border-left:4px solid var(--accent);padding:18px 22px;margin:20px 0 28px;font-size:14px}.finding-box strong{color:var(--accent)}
-.data-table{width:100%;border-collapse:collapse;margin:18px 0 26px;font-size:13px}.data-table caption{caption-side:top;text-align:left;font-weight:700;font-size:13px;margin-bottom:8px;color:var(--text-secondary)}.data-table caption::before{counter-increment:table-counter;content:"表 " counter(table-counter) "  ";color:var(--primary)}.data-table th{background:var(--bg-table-header);font-weight:600;color:var(--text-secondary);border:1px solid var(--border);padding:10px 12px;text-align:left}.data-table td{border:1px solid var(--border);padding:9px 12px;vertical-align:top}.data-table tr:nth-child(even) td{background:#fafafa}
-.figure-wrapper{margin:28px 0 32px;page-break-inside:avoid}.figure-caption{font-size:13px;text-align:center;color:var(--text-secondary);margin-bottom:12px;font-weight:600}.figure-caption::before{counter-increment:figure-counter;content:"图 " counter(figure-counter) "  ";color:var(--primary)}.chart-container{width:100%;height:380px;border:1px solid #e5e5e5;background:#fff;padding:12px}.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:20px}.chart-row .chart-container{height:320px}.chart-fallback{font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:var(--text-muted);font-size:13px;padding:20px;text-align:center}.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 26px}.metric-card{border:1px solid var(--border);background:#fff;padding:14px 16px}.metric-label{font-size:12px;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif}.metric-value{font-size:22px;font-weight:700;color:var(--primary);line-height:1.35}.metric-sub{font-size:11px;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif}
-.insight-block{border-left:3px solid var(--primary);padding:12px 16px;background:#f8faf8;margin:14px 0}.insight-block.warn{border-left-color:var(--warning);background:#fff8ec}.insight-block.danger{border-left-color:var(--danger);background:#fff5f5}.insight-block.info{border-left-color:var(--info);background:#f3f7fb}.insight-title{font-weight:700;color:var(--primary);margin-bottom:4px}.insight-block.warn .insight-title{color:var(--warning)}.insight-block.danger .insight-title{color:var(--danger)}.insight-block.info .insight-title{color:var(--info)}.recommendation-list{list-style:none;margin:18px 0}.recommendation-list li{position:relative;padding:12px 0 12px 36px;border-bottom:1px solid #eee}.recommendation-list li::before{content:"→";position:absolute;left:8px;color:var(--accent);font-weight:700}.conclusion-list{counter-reset:conclusion;list-style:none;margin:20px 0}.conclusion-list li{counter-increment:conclusion;position:relative;padding:12px 0 12px 48px;border-bottom:1px solid #eee}.conclusion-list li::before{content:counter(conclusion);position:absolute;left:0;top:12px;width:28px;height:28px;border-radius:50%;background:var(--primary);color:white;text-align:center;line-height:28px;font-weight:700;font-size:13px}.disclaimer{background:#f8f8f8;border:1px solid #e5e5e5;padding:18px 22px;margin-top:24px;font-size:12px;color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.7}.link-list{list-style:none;margin:12px 0}.link-list a{color:var(--primary);text-decoration:none;border-bottom:1px solid var(--primary)}.muted{color:var(--text-muted)}.module-divider{border-top:1px solid #e5e5e5;margin:34px 0 8px}.missing-module{color:var(--text-muted);font-family:"PingFang SC","Microsoft YaHei",sans-serif;font-size:12px}
-@media print{body{background:white}.report-toolbar{display:none}.title-page{min-height:297mm}.paper-container{box-shadow:none;max-width:none}.section{padding:32px 40px;page-break-after:auto}.chart-container{break-inside:avoid}.figure-wrapper,.data-table{break-inside:avoid}}
-@media(max-width:768px){.section{padding:28px 18px}.title-info,.chart-row{grid-template-columns:1fr}.title-content h1{font-size:26px}.chart-container{height:300px}.toolbar-inner{padding:8px 12px}.toolbar-title{display:none}}
-</style>
-</head>
-<body>
-<div class="report-toolbar"><div class="toolbar-inner"><div class="toolbar-title">SONO 地块学术报告</div><button class="export-pdf-button" type="button" onclick="window.print()">导出 PDF</button></div></div>
-<div id="title-root"></div>
-<main class="paper-container" id="paper-root"></main>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>地块勘察综合分析报告</title><style>
+    :root{--ink:#193a46;--green:#236b65;--amber:#a96924;--soft:#edf2f3;--paper:#fff;--line:#d8e3e6;--muted:#526b74}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:122px}body{margin:0;background:var(--soft);color:var(--ink);font:16px/1.85 SimSun,"Songti SC",serif}a{color:var(--green)}button,nav,.eyebrow,.cover-meta,.source-note,figcaption,small,td,th,summary{font-family:"Microsoft YaHei",Arial,sans-serif}
+    .toolbar{position:sticky;top:0;z-index:5;background:#193a46;color:#fff}.toolbar-inner{max-width:960px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 20px;font:13px/1.5 "Microsoft YaHei",sans-serif}.toolbar-actions{display:flex;gap:10px;align-items:center}.toolbar button,.download-pdf{background:white;color:var(--ink);border:0;padding:8px 14px;border-radius:4px;cursor:pointer;text-decoration:none;font:13px/1.5 "Microsoft YaHei",sans-serif;white-space:nowrap}.toolbar button{background:transparent;color:white;border:1px solid #89a6af;padding:7px 12px}
+    nav{position:sticky;top:62px;z-index:4;max-width:960px;margin:auto;background:#fff;display:flex;gap:8px;padding:10px 18px;overflow-x:auto;border-bottom:1px solid var(--line);font-size:13px}nav a{white-space:nowrap;text-decoration:none;padding:5px 8px;border-radius:3px}nav a:hover,nav a.active{color:#fff;background:var(--green)}:focus-visible{outline:3px solid var(--amber);outline-offset:3px}
+    .paper{width:min(960px,100%);margin:20px auto 48px;background:var(--paper);box-shadow:0 10px 40px #193a4610}.cover,.chapter{padding:40px 60px}.cover{padding-top:46px}.chapter{border-top:1px solid var(--line)}h1,h2,h3{line-height:1.5;letter-spacing:.02em}h1{font-size:32px;margin:8px 0 12px}h2{font-size:24px;margin:0 0 14px}h3{font-size:19px;margin:24px 0 12px}p{margin:12px 0 18px}.eyebrow{font-size:13px;color:var(--green);margin:0}.cover-meta{font-size:13px;color:var(--muted)}.lead{color:var(--muted);margin-bottom:25px;font-size:17px}
+    .cover-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:28px;margin:28px 0}.cover-grid figure{margin:0;padding:12px}.cover-grid figcaption{font-size:11px}.findings h2{font-size:19px;margin-top:4px}.findings p{font-size:15px;padding:0 0 12px;border-bottom:1px solid var(--line);margin:10px 0}.findings b{display:block;color:var(--green);margin-bottom:4px}
+    .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin:22px 0}.metrics>div{padding:6px 0 6px 18px;border-left:3px solid var(--green)}dt{font-size:13px;color:var(--muted)}dd{font:600 26px/1.4 Arial,"Microsoft YaHei",sans-serif;margin:6px 0;overflow-wrap:anywhere}.metrics small{display:block;font-size:11px;line-height:1.65;color:var(--muted)}
+    figure{margin:20px 0;padding:20px 18px 12px;background:#f7fafb;border:1px solid var(--line);break-inside:avoid}svg{display:block;width:100%;height:auto}svg text{font:13px Arial,"Microsoft YaHei",sans-serif;fill:var(--ink)}figcaption{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7}.chart-pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart-pair figure{margin:12px 0;padding:12px}.chart-pair svg text{font-size:15px}
+    .table-wrap{overflow-x:auto;margin:20px 0}table{width:100%;border-collapse:collapse;font-size:13px}caption{text-align:left;font-weight:600;color:var(--ink);padding:0 0 10px;caption-side:top}td,th{border-bottom:1px solid var(--line);padding:12px 10px;text-align:left;vertical-align:top;line-height:1.7;overflow-wrap:anywhere}th{background:var(--soft);font-weight:500;white-space:nowrap}td:first-child{color:var(--ink);min-width:100px}.source-note{font-size:12px;color:var(--muted);line-height:1.8}.assumption{padding:16px 18px;border-left:3px solid var(--amber);background:#fbf8f3;font-size:14px}details{margin:22px 0}summary{cursor:pointer;font-size:14px;color:var(--green);padding:10px 0}.appendix{padding-top:20px;padding-bottom:20px}.footer{padding:20px 60px 30px;border-top:1px solid var(--line);font:12px/1.8 "Microsoft YaHei",sans-serif;color:var(--muted)}
+    .history-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:20px;align-items:center}.history-layout figure{margin:0}.history-layout>div{min-width:0}.annual-status{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:16px 0}.annual-status>div{border-top:3px solid #c6d4d8;padding:12px 2px;text-align:center}.annual-status strong{display:block;font:600 17px Arial,sans-serif}.annual-status span{display:block;color:var(--muted);font:11px/1.7 "Microsoft YaHei",sans-serif;margin-top:8px}.cover-grid>*{min-width:0}
+    @media(max-width:680px){body{font-size:15px}.toolbar-inner{font-size:11px;padding:12px}.toolbar button{white-space:nowrap;padding:7px 10px}nav{top:58px;font-size:12px;padding:8px}.paper{margin:0 auto}.cover,.chapter{padding:28px 22px}.cover{padding-top:30px}h1{font-size:27px}h2{font-size:22px}.cover-grid,.chart-pair{grid-template-columns:1fr;gap:12px}.cover-grid{margin:18px 0}.findings p{font-size:15px}.metrics{grid-template-columns:1fr;gap:14px}.metrics>div{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;padding-left:14px}dd{margin:0;font-size:24px;grid-column:2;grid-row:1/3}dt,small{grid-column:1}.metrics small{font-size:11px}figure{padding:10px;margin:16px 0}.table-wrap{max-width:100%}table{font-size:12px}td,th{padding:10px 8px}th{white-space:normal}.source-note{font-size:12px}.footer{padding:20px 22px}}
+    @media screen and (max-width:680px){.history-layout{grid-template-columns:1fr}.toolbar-inner>span{max-width:150px}.toolbar-actions{gap:6px}.download-pdf{font-size:11px;padding:7px 9px}}
+    @page{size:A4;margin:18mm}
+    @media print{
+      html,body{width:auto;min-width:0;margin:0;padding:0;background:white;overflow:visible;font-size:10.5pt;line-height:1.75;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .toolbar,nav{display:none!important}.paper{width:174mm;max-width:100%;margin:0 auto;box-shadow:none}.cover,.chapter{padding:6mm 0}.cover{break-inside:avoid;break-after:page}.chapter{break-before:auto}
+      h1{font-size:23pt}h2{font-size:17pt}h3{font-size:13pt}h1,h2,h3,caption,summary{break-after:avoid}p{orphans:3;widows:3}.lead{font-size:11pt;margin-bottom:5mm;break-after:avoid}.cover-meta,.eyebrow{font-size:9pt}
+      .cover-grid{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:6mm;margin:6mm 0;break-inside:avoid}.cover-grid figure{padding:3mm}.findings h2{font-size:12pt}.findings p{font-size:10pt}.cover-grid figcaption{font-size:8pt}
+      .metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:5mm;break-inside:avoid}.metrics>div{display:block;min-width:0;padding:1mm 0 1mm 4mm}dt{font-size:9pt}dd{margin:2mm 0;font-size:17pt;grid-column:auto;grid-row:auto}.metrics small{font-size:8pt;grid-column:auto}
+      .chart-pair{display:block}.chart-pair figure,figure{margin:5mm 0;padding:4mm;break-inside:avoid}.chart-pair svg text{font-size:13px}svg{max-width:100%;height:auto}figcaption,.source-note{font-size:8.5pt}.assumption{font-size:9.5pt}
+      .table-wrap{width:100%;max-width:100%;overflow:visible;break-inside:auto}table{width:100%;table-layout:fixed;font-size:9pt}.compact-table{break-inside:avoid}th,td{min-width:0!important;padding:2.5mm 2mm;white-space:normal;overflow-wrap:anywhere}thead{display:table-header-group;break-after:avoid}tr{break-inside:avoid}
+      .history-layout{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:5mm;break-inside:avoid}.annual-status{gap:1.5mm}.annual-status strong{font-size:11pt}.annual-status span{font-size:8pt}
+      details:not([open]){display:none}.footer{display:none}
+    }
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+    
+.paper-container{max-width:960px}.chapter.survey-report{max-width:none;background:transparent;padding:40px 60px;font:inherit;margin:0;border-top:1px solid var(--line)}
+.survey-title{display:none}.survey-metrics,.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:18px;margin:24px 0}.survey-metric,.metric-card{padding:2px 0 2px 18px;border:0;border-left:3px solid #236b65;min-width:0}.survey-metric span,.metric-label{display:block;font:12px/1.7 'Microsoft YaHei',sans-serif;color:var(--muted)}.survey-metric strong,.metric-value{display:block;font-size:25px;line-height:1.6;font-variant-numeric:tabular-nums}.survey-metric small,.metric-sub{font:11px/1.7 'Microsoft YaHei',sans-serif;color:var(--muted)}
+.survey-scroll{overflow-x:auto;margin:20px 0}.survey-scroll table{margin:0}.survey-meta,.survey-source{font:12px/1.8 'Microsoft YaHei',sans-serif;color:var(--muted);overflow-wrap:anywhere}.survey-note,.insight-block{padding:16px 18px;border-left:3px solid var(--amber);background:#fbf8f3;font-size:14px}.insight-title{font-weight:bold}.survey-report svg{display:block;width:100%;height:auto}figure svg image{image-rendering:auto}.cover figure{margin:0}.findings p span{display:block}.chapter h3{border:0}.metrics dd{font-variant-numeric:tabular-nums}p{text-wrap:pretty}h1,h2{text-wrap:balance}select{font:12px 'Microsoft YaHei',sans-serif;color:var(--ink);padding:8px;border:1px solid var(--line);background:#fff;border-radius:3px}.imagery-control{display:flex;gap:6px;align-items:center}.chart-container{width:100%;height:auto}.chart-container svg{width:100%;height:auto}.module-divider{margin-top:24px;border-top:1px solid var(--line)}
+nav a:focus-visible,button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.history-years{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.history-year{text-align:center;border:1px solid var(--line);padding:10px 6px}.history-year svg{width:100%;max-width:110px;margin:auto}.history-year h4{margin:0 0 8px}.cover .map-grid-label,.cover .map-legend,.history-layout .map-grid-label,.history-layout .map-legend{display:none}
+@media(max-width:680px){.chapter.survey-report{padding:28px 22px}.survey-metrics,.metric-grid{grid-template-columns:1fr}.toolbar-inner>span{display:none}.toolbar-actions{flex-wrap:wrap}.imagery-control{font-size:11px}}
+@media print{.chapter.survey-report{padding:6mm 0}.survey-scroll{overflow:visible;width:100%}.survey-metrics,.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:5mm;break-inside:avoid}.survey-metric strong,.metric-value{font-size:17pt}.survey-report tr{break-inside:avoid}.survey-report details:not([open]){display:none}.appendix details[open]{display:block}.chart-container,.figure-wrapper{break-inside:avoid}.survey-report table{table-layout:fixed}.survey-report th,.survey-report td{overflow-wrap:anywhere}}
+</style></head><body>
+<div class="toolbar report-toolbar"><div class="toolbar-inner"><span>地块综合分析</span><div class="toolbar-actions"><!-- LOCAL_REPORT_DOWNLOAD --><button id="print-report" class="export-pdf-button" type="button">导出 PDF</button></div></div></div>
+<nav aria-label="报告章节"></nav><main class="paper paper-container" id="paper-root"></main>
+<template id="canonical-results-template"><!-- SONO_CANONICAL_RESULTS --></template>
 <script>
 const REPORT_DATA = /* __REPORT_DATA__ */ {
-  meta: { plotName: '', subjectName: '', reportDate: '', generatedAt: '', reportType: '', reportSubtype: '' },
-  paper: { abstract: '', keywords: [], methods: [], findings: [], discussion: [], conclusions: [], limitations: [], appendixLinks: [] },
-  overview: { kpis: [] },
-  charts: { biomassTrend: [] },
-  weather: { now: {}, forecast: [], alerts: [] },
-  plotWarnings: [],
-  plots: [],
-  devices: { summary: {}, items: [] },
-  wofost: { phenology: [], kpis: [], waterBalance: [], links: {} },
-  moduleReports: [],
-  recommendations: [],
-  emptyStates: []
-};
-
-const MODULE_INFO={
-  plot_growth_analysis:{name:'长势分析',title:'农业遥感与作物长势定量分析报告',subtitle:'Quantitative Assessment of Crop Growth Vigor Using Remote-Sensing Indicators',keywords:['长势分析','NDVI','LAI','覆盖度','农事建议'],method:'综合 NDVI、LAI、覆盖度、长势等级及异常区域等指标，对地块长势状态和阶段变化进行定量分析。'},
-  plot_3d_phenotype:{name:'三维表型',title:'作物三维表型结构与空间异质性分析报告',subtitle:'Three-Dimensional Phenotyping and Spatial Heterogeneity Assessment',keywords:['三维表型','株高','冠层','生物量','空间异质性'],method:'利用株高、冠层覆盖、LAI、生物量及三维重建结论，评估作物表型结构及空间差异。'},
-  plot_growth_dynamics:{name:'生长动态',title:'作物生长动态模型模拟分析报告',subtitle:'WOFOST-Based Crop Growth Dynamics and Biomass Simulation Report',keywords:['WOFOST','模型模拟','DVS','LAI','TAGP','土壤水分'],method:'基于 WOFOST 日序列模型数据，分析生育进程、冠层变化、生物量积累、水分过程与氮素吸收。'},
-  plot_seedling_monitoring:{name:'苗情监控',title:'苗情监测与建群质量评估报告',subtitle:'Seedling Establishment Monitoring and Stand Quality Assessment',keywords:['苗情监控','出苗率','苗密度','整齐度','缺苗风险'],method:'围绕出苗率、苗数/密度、整齐度、缺苗断垄及补苗建议，对苗期建群质量进行评估。'},
-  overall_report:{name:'整体报告',title:'地块综合生长监测与多源专项分析报告',subtitle:'Integrated Multi-Module Crop Growth Monitoring and Agronomic Assessment',keywords:['长势分析','三维表型','生长动态','苗情监控','综合评估'],method:'整合长势分析、三维表型、生长动态与苗情监控四类证据，形成跨模块综合研判。'}
 };
 const MODULE_ORDER=['plot_growth_analysis','plot_3d_phenotype','plot_growth_dynamics','plot_seedling_monitoring'];
-const DISPLAY_SOURCE={'plot-info':'地块基础信息','plot-warning':'地块风险预警','weather':'气象与作业窗口','report-by-type':'专项分析结果'};
-const BAD_TEXT=new Set(['','nan','none','nil','n/a','--','-','—','无','暂无','未提供'].concat(['n'+'ull','un'+'defined']));
+const MODULE_INFO={plot_growth_analysis:{name:'长势分析'},plot_3d_phenotype:{name:'三维表型'},plot_growth_dynamics:{name:'生长动态'},plot_seedling_monitoring:{name:'苗情监控'},overall_report:{name:'整体报告'}};
+const BAD_TEXT=new Set(['','nan','none','nil','n/a','--','-','—','无','暂无','未提供','null','undefined']);
 function isPresent(v){if(v==void 0)return false;if(typeof v==='number')return Number.isFinite(v);if(typeof v==='boolean')return true;if(typeof v==='string')return !BAD_TEXT.has(v.trim().toLowerCase());if(Array.isArray(v))return v.some(isPresent);if(typeof v==='object')return Object.values(v).some(isPresent);return true}
+
 function cleanArray(v){return Array.isArray(v)?v.filter(isPresent):[]}
+
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function fmtNumber(v,d=2){if(!isPresent(v))return '';const n=Number(v);if(!Number.isFinite(n))return escapeHtml(v);return n.toFixed(d).replace(/\.0+$|(?<=\.\d*[1-9])0+$/,'')}
-function text(v,fallback='—'){return isPresent(v)?escapeHtml(v):fallback}
+
+function text(v,fallback='—'){return isPresent(v)?escapeHtml(String(v).replace(/WOFOST/g,'作物生长模拟')):fallback}
+
 function safeUrl(v){if(!isPresent(v))return '';try{const u=new URL(String(v));return ['http:','https:'].includes(u.protocol)?u.href:''}catch(e){return ''}}
+
 function meta(){return REPORT_DATA.meta||{}}
+
 function subtype(){const m=meta();return m.reportSubtype||m.report_type||(m.reportType==='plot_overall_report'?'overall_report':'')}
+
 function isOverall(){return subtype()==='overall_report'||meta().reportType==='plot_overall_report'}
-function reportInfo(){const st=subtype();return MODULE_INFO[st]||MODULE_INFO.overall_report}
+
 function plotName(){const m=meta();return m.plotName||m.subjectName||cleanArray(REPORT_DATA.plots)[0]?.name||'目标地块'}
+
 function moduleTypeName(type){return (MODULE_INFO[type]&&MODULE_INFO[type].name)||String(type||'专项分析').replace(/_/g,' ')}
+
 function levelClass(level){const s=String(level||'').toLowerCase();if(/red|danger|high|高|严重/.test(s))return 'danger';if(/amber|warn|mid|medium|中|风险|注意/.test(s))return 'warn';if(/blue|info|gray|grey|关注|信息/.test(s))return 'info';return ''}
+
 function levelText(value){const s=String(value||'').trim().toLowerCase();if(!s)return '';if(/red|danger|high|高|严重/.test(s))return '高风险 / 需优先处置';if(/amber|warn|mid|medium|中|风险|注意/.test(s))return '需关注';if(/green|good|normal|low|正常|良好/.test(s))return '正常';if(/blue|info/.test(s))return '关注指标';if(/gray|grey/.test(s))return '信息项';return String(value)}
+
 function displayValue(v,key=''){if(!isPresent(v))return '';const k=String(key||'').toLowerCase();if(['level','status','state','priority','tag','badge','说明'].some(x=>k.includes(x)))return levelText(v);const raw=String(v).trim();if(/^(red|green|blue|amber|gray|grey|warn|danger)$/i.test(raw))return levelText(raw);return raw}
+
 function fieldLabel(key){return {label:'样本',date:'日期',time:'时间',day:'模型日',dvs:'DVS',lai:'LAI',tagp:'TAGP',twso:'TWSO',wso:'WSO',wlv:'WLV',wst:'WST',wrt:'WRT',soilMoisture:'SM',sm:'SM',rd:'RD',nUptakeTotal:'氮素吸收',ndvi:'NDVI',coverage:'覆盖度',fvc:'FVC',height:'株高',plantHeight:'株高',biomass:'生物量',density:'苗密度',emergenceRate:'出苗率',uniformity:'整齐度',area:'面积',ratio:'占比',level:'等级',status:'状态'}[key]||String(key).replace(/_/g,' ')}
+
 function periodText(){const m=meta();const parts=[m.periodStart,m.periodEnd].filter(isPresent);if(parts.length===2)return parts.join(' 至 ');const dates=cleanArray(REPORT_DATA.moduleReports).flatMap(r=>[r.startDate,r.endDate,r.reportDate,r.date]).filter(isPresent);return parts[0]||dates.slice(0,2).join(' 至 ')||m.reportDate||'当前报告期'}
+
 function getModules(){const mods=cleanArray(REPORT_DATA.moduleReports).filter(r=>r&&typeof r==='object');const st=subtype();if(isOverall())return mods.filter(r=>MODULE_ORDER.includes(r.type)).sort((a,b)=>MODULE_ORDER.indexOf(a.type)-MODULE_ORDER.indexOf(b.type));if(MODULE_ORDER.includes(st))return mods.filter(r=>r.type===st);return mods}
-function moduleMap(){const map={};getModules().forEach(m=>{map[m.type]=m});return map}
+
 function metricItems(values){return cleanArray(values).map(item=>typeof item==='object'?item:{label:'指标',value:item}).filter(item=>isPresent(item.label)&&isPresent(item.value))}
-function sourceLabel(value){const raw=String(value||'');if(raw.indexOf('report_by_type:')>0)return moduleTypeName(raw.split(':')[1]);const key=raw.replace(/^get_/,'').replace(/_/g,'-');return DISPLAY_SOURCE[key]||key.replace(/-/g,' ')}
+
 function itemTitle(item,fb='分析结论'){if(typeof item!=='object')return fb;return item.title||item.label||item.name||item.type||item.category||item.badge||fb}
+
 function itemBody(item){if(typeof item!=='object')return item;const values=[item.body,item.content,item.description,item.message,item.reason,item.suggestion,item.advice,item.handle_suggestion,item.recommendation,item.remark,item.value];for(const v of values){if(Array.isArray(v)){const joined=v.filter(isPresent).map(x=>typeof x==='object'?itemBody(x):x).filter(isPresent).join('；');if(isPresent(joined))return joined}else if(isPresent(v))return v}if(Array.isArray(item.suggestions)){const joined=item.suggestions.filter(isPresent).map(x=>typeof x==='object'?itemBody(x):x).filter(isPresent).join('；');if(isPresent(joined))return joined}return ''}
-function renderTitlePage(){const info=reportInfo();const m=meta();const title=m.title&&m.title!=='地块报告'?m.title:`${plotName()}${info.name==='整体报告'?'综合生长监测与分析报告':info.name+'报告'}`;document.title=title;document.getElementById('title-root').innerHTML=`<section class="title-page"><div class="title-content"><div class="title-overline">SONO AGRONOMIC TECHNICAL REPORT</div><h1>${escapeHtml(title)}</h1><div class="subtitle">${escapeHtml(info.subtitle)}</div><div class="title-divider"></div><div class="title-info"><div><span class="info-label">Monitoring Object</span><span class="info-value">${text(plotName())}</span></div><div><span class="info-label">Observation Period</span><span class="info-value">${text(periodText())}</span></div><div><span class="info-label">Report Date</span><span class="info-value">${text(m.reportDate)}</span></div></div></div><div class="title-footer">AI AGRICULTURAL DECISION SUPPORT · EVIDENCE-BASED REPORT</div></section>`}
-function section(num,title,body){return `<section class="section"><div class="section-number">§ ${num}</div><h2>${escapeHtml(title)}</h2>${body}</section>`}
-function renderAbstract(){const p=REPORT_DATA.paper||{};const info=reportInfo();const mods=getModules();const conclusions=mods.map(m=>m.conclusion||m.summary||m.overview||m.result).filter(isPresent);let core='当前报告依据已取得的地块真实业务数据形成判断，未取得的数据不作推断。';if(conclusions.length){core=isOverall()?`四类专项中已取得 ${conclusions.length} 类有效结论：${conclusions.slice(0,4).join('；')}`:`核心结果显示：${conclusions[0]}`}
-const abstract=p.abstract||`本报告以 ${plotName()} 为研究对象，围绕${info.name}开展结构化分析。报告综合地块基础信息、专项指标、时序趋势、风险项与农事建议，采用描述统计、趋势比较和异常识别等方法，对当前可取得的证据进行归纳。${core} 报告结论用于辅助生产决策，建议结合现场巡查、天气窗口和农技规范复核。`;
-const keywords=cleanArray(p.keywords).length?cleanArray(p.keywords):info.keywords;return section(1,'摘 要',`<div class="abstract-box"><span class="abstract-label">Abstract</span><p>${escapeHtml(abstract)}</p><div class="keywords"><strong>关键词：</strong>${keywords.map(k=>`<span>${escapeHtml(k)}</span>`).join('')}</div></div>`) }
+
 function hasDisplayContent(v){return isPresent(displayValue(v))}
+
 function getCellValue(row,header,index){if(Array.isArray(row))return row[index];if(row&&typeof row==='object'){if(Object.prototype.hasOwnProperty.call(row,header))return row[header];const normalized=String(header).toLowerCase();const key=Object.keys(row).find(k=>k===header||fieldLabel(k)===header||String(k).toLowerCase()===normalized);if(key)return row[key];const vals=Object.keys(row).filter(k=>k!=='source').map(k=>row[k]).filter(isPresent);return vals[index]}return index===0?row:''}
+
 function cleanTable(headers,rows){let hs=cleanArray(headers).map(String);const rs=cleanArray(rows);if(!hs.length&&rs.length&&rs[0]&&typeof rs[0]==='object'&&!Array.isArray(rs[0]))hs=Object.keys(rs[0]).filter(k=>k!=='source');if(!hs.length)return {headers:[],rows:[]};const matrix=rs.map(row=>hs.map((h,i)=>getCellValue(row,h,i))).filter(row=>row.some(hasDisplayContent));if(!matrix.length)return {headers:[],rows:[]};const keep=hs.map((h,i)=>matrix.some(row=>hasDisplayContent(row[i])));return {headers:hs.filter((h,i)=>keep[i]),rows:matrix.map(row=>row.filter((c,i)=>keep[i])).filter(row=>row.some(hasDisplayContent))}}
+
 function renderTable(caption,headers,rows){const table=cleanTable(headers,rows);if(!table.rows.length||!table.headers.length)return '';return `<table class="data-table"><caption>${escapeHtml(caption)}</caption><thead><tr>${table.headers.map(h=>`<th>${escapeHtml(fieldLabel(h))}</th>`).join('')}</tr></thead><tbody>${table.rows.map(row=>`<tr>${row.map((cell,i)=>`<td>${text(displayValue(cell,table.headers[i]))}</td>`).join('')}</tr>`).join('')}</tbody></table>`}
-function renderMethods(){const m=meta();const kpis=cleanArray(REPORT_DATA.overview?.kpis);const plots=cleanArray(REPORT_DATA.plots);const methods=cleanArray(REPORT_DATA.paper?.methods);const dataSources=cleanArray(m.dataSources).map(sourceLabel).filter(isPresent);const plotRows=[['地块名称',plotName()],['报告类型',reportInfo().name],['观测期',periodText()],['作物/阶段',plots.map(p=>[p.crop,p.stage].filter(isPresent).join(' / ')).filter(isPresent).join('；')||'按已取得地块信息展示']];const indicatorRows=kpis.slice(0,10).map(k=>[k.label,[k.value,k.unit].filter(isPresent).join(' '),displayValue(k.tag||k.level||k.status||k.sub,'level')]).filter(r=>r.some(isPresent));const sourceRows=(dataSources.length?dataSources:['地块基础信息','专项分析结果']).map(s=>[s,'结构化业务数据','用于指标提取、趋势分析与风险研判']);const methodText=methods.length?methods.map(x=>`<p>${escapeHtml(typeof x==='string'?x:(itemBody(x)||itemTitle(x,'')))}</p>`).join(''):`<p>${escapeHtml(reportInfo().method)}</p><p>所有结论均基于当前输入的结构化数据与专项报告结果生成；未在数据中出现的具体数值、阈值或因果关系不作扩展推断。</p>`;return section(2,'数据来源与处理方法',`${methodText}${renderTable('监测对象与报告范围', ['项目','内容'], plotRows)}${indicatorRows.length?renderTable('地块基础指标摘要', ['指标','数值','说明'], indicatorRows):''}${renderTable('数据来源与分析用途', ['数据类别','数据形态','用途'], sourceRows)}`)}
+
 function numericKeys(list){return [...new Set(list.flatMap(row=>Object.keys(row).filter(k=>!['label','date','time','day','source','title','name','type'].includes(k)&&Number.isFinite(Number(row[k])))))].slice(0,5)}
+
 function normalizeTrendRows(rows,title='趋势分析',chartType='line'){const list=cleanArray(rows).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));if(list.length<2)return false;const keys=numericKeys(list);if(!keys.length)return false;return {title,type:chartType,labels:list.map((row,i)=>String(row.label||row.date||row.time||row.day||row.name||`样本${i+1}`)),datasets:keys.map((key,i)=>({key,label:fieldLabel(key),data:list.map(row=>Number.isFinite(Number(row[key]))?Number(row[key]):''),color:['#2d6a4f','#8b6914','#1f6f9f','#a0403b','#2f5f8f'][i%5]})),rows:list}}
+
 function normalizeSeriesChart(chart,title='专项图表'){const labels=cleanArray(chart.labels||chart.xAxis||chart.categories).map(String);const rawSeries=cleanArray(chart.series||chart.datasets);if(!labels.length||!rawSeries.length)return false;const datasets=rawSeries.map((s,i)=>{const obj=typeof s==='object'?s:{name:`序列${i+1}`,data:s};const data=cleanArray(obj.data||obj.values).map(v=>Number.isFinite(Number(v))?Number(v):'');return {key:obj.key||obj.name||`s${i}`,label:obj.name||obj.label||`序列${i+1}`,data,color:['#2d6a4f','#8b6914','#1f6f9f','#a0403b','#2f5f8f'][i%5]}}).filter(ds=>ds.data.some(v=>v!==''));if(!datasets.length)return false;return {title:chart.title||title,type:chart.type||'line',labels,datasets}}
+
 function chartFromTable(table,moduleName){const rows=cleanArray(table.rows).filter(x=>x&&typeof x==='object'&&!Array.isArray(x));if(rows.length<2)return false;const keys=numericKeys(rows);if(!keys.length)return false;const labelKey=Object.keys(rows[0]).find(k=>!keys.includes(k)&&isPresent(rows[0][k]))||'label';return {title:table.title||`${moduleName}分布图`,type:/分布|占比|等级|区域|结构/.test(String(table.title||''))?'bar':'line',labels:rows.map((row,i)=>String(row[labelKey]||`样本${i+1}`)),datasets:keys.slice(0,4).map((key,i)=>({key,label:fieldLabel(key),data:rows.map(row=>Number.isFinite(Number(row[key]))?Number(row[key]):''),color:['#2d6a4f','#8b6914','#1f6f9f','#a0403b'][i%4]}))}}
+
 function extractCharts(report){const charts=[];const moduleName=moduleTypeName(report.type);[report.trendSeries,report.timeSeries,report.dailyData,report.rows,report.records].forEach((rows,i)=>{const c=normalizeTrendRows(rows,i?`${moduleName}趋势 ${i+1}`:`${moduleName}趋势`);if(c)charts.push(c)});cleanArray(report.charts).forEach(chart=>{const direct=normalizeSeriesChart(chart,chart.title||`${moduleName}图表`);if(direct)charts.push(direct);const c=normalizeTrendRows(chart.rows||chart.data||chart.points||chart.trendSeries,chart.title||`${moduleName}趋势`,chart.type||'line');if(c)charts.push(c)});cleanArray(report.tables).forEach(t=>{const c=chartFromTable(t,moduleName);if(c)charts.push(c)});return charts.filter((c,i,arr)=>arr.findIndex(x=>x.title===c.title)===i).slice(0,4)}
-function topLevelCharts(){const charts=[];const biomass=normalizeTrendRows(REPORT_DATA.charts?.biomassTrend,'WOFOST 生长动态模型趋势');if(biomass)charts.push(biomass);return charts}
+
+function topLevelCharts(){const charts=[];const biomass=normalizeTrendRows(REPORT_DATA.charts?.biomassTrend,'作物生长模拟 生长动态模型趋势');if(biomass)charts.push(biomass);return charts}
+
 function renderMetrics(metrics){const items=metricItems(metrics).slice(0,12);if(!items.length)return '';return `<div class="metric-grid">${items.map(item=>`<div class="metric-card"><div class="metric-label">${text(item.label)}</div><div class="metric-value">${text(displayValue(item.value,item.label))}${item.unit?`<span style="font-size:13px;margin-left:3px">${escapeHtml(item.unit)}</span>`:''}</div>${item.sub||item.tag||item.level?`<div class="metric-sub">${text(displayValue(item.sub||item.tag||item.level,'level'))}</div>`:''}</div>`).join('')}</div>`}
+
 function renderInsightItems(items){return cleanArray(items).slice(0,10).map(item=>{const obj=typeof item==='object'?item:{title:'分析结论',body:item};const title=itemTitle(obj,'分析结论');const body=itemBody(obj);if(!isPresent(title)&&!isPresent(body))return '';if(!isPresent(body))return '';return `<div class="insight-block ${levelClass(obj.level||obj.priority||obj.status)}"><div class="insight-title">${text(title)}</div><div>${text(displayValue(body))}</div></div>`}).filter(Boolean).join('')}
+
 function renderModuleTables(report){return cleanArray(report.tables).slice(0,4).map(t=>renderTable(t.title||'专项数据表',cleanArray(t.headers).length?cleanArray(t.headers):[],cleanArray(t.rows))).join('')}
+
 function renderSections(report){return cleanArray(report.sections).slice(0,5).map(s=>{const title=typeof s==='object'?s.title:'说明';const items=typeof s==='object'?cleanArray(s.items||s.children||s.points):[s];const html=items.map(x=>itemBody(x)||itemTitle(x,'')).filter(isPresent).map(x=>`<p>${text(x)}</p>`).join('');return html?`<h4>${text(title)}</h4>${html}`:''}).join('')}
+
 function renderChartFigure(chart,id,caption){return `<div class="figure-wrapper"><div class="figure-caption">${escapeHtml(caption)}</div><div class="chart-container" id="${id}"></div></div>`}
+
 function renderModuleReportSection(report,index){const title=report.title||moduleTypeName(report.type);const conclusion=report.conclusion||report.summary||report.overview||report.result||'当前专项数据未给出明确文字结论，以下内容基于已取得指标和趋势结构化展示。';const charts=extractCharts(report);const chartHtml=charts.map((chart,i)=>renderChartFigure(chart,`chart-${index}-${i}`,chart.title)).join('');const analysis=cleanArray(report.analysisItems||report.insights||report.findings||report.diagnosis);const risks=cleanArray(report.risks||report.warnings||report.alerts||report.abnormal);const suggestions=cleanArray(report.suggestions||report.recommendations||report.advice);const suggestionItems=suggestions.map(s=>itemBody(s)||itemTitle(s,'')).filter(isPresent);const link=safeUrl(report.link||report.reportUrl||report.report_url||report.url||report.file_url||report.pdf_url);return `<div class="module-divider"></div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(conclusion)}</p>${renderMetrics(report.metrics||report.kpis||report.index||report.keyMetrics)}${chartHtml}${renderInsightItems(analysis)}${renderSections(report)}${renderModuleTables(report)}${risks.length?`<h4>风险与异常解释</h4>${renderInsightItems(risks)}`:''}${suggestionItems.length?`<h4>专项建议</h4><ul class="recommendation-list">${suggestionItems.slice(0,8).map(s=>`<li>${text(s)}</li>`).join('')}</ul>`:''}${link?`<p class="muted">关联材料：<a href="${escapeHtml(link)}">查看专项报告</a></p>`:''}`}
-function renderOverallSynthesis(mods){if(!isOverall())return '';const map=moduleMap();const rows=MODULE_ORDER.map(type=>{const m=map[type];if(!m)return [moduleTypeName(type),'未取得该专项报告数据','未纳入本次综合研判','不生成缺失模块结论'];const metrics=metricItems(m.metrics||m.kpis).slice(0,4).map(x=>`${x.label}:${x.value}${x.unit||''}`).join('；')||'以专项报告字段为准';const conclusion=m.conclusion||m.summary||m.result||'已纳入综合研判';const risks=cleanArray(m.risks||m.warnings||m.alerts).map(itemBody).filter(isPresent);return [moduleTypeName(type),metrics,conclusion,risks.length?risks.slice(0,2).join('；'):'未见显著风险字段']});const available=MODULE_ORDER.filter(t=>map[t]).map(moduleTypeName).join('、')||'暂无专项模块';return `<h3>四模块综合证据矩阵</h3>${renderTable('四类专项报告综合摘要', ['模块','关键指标','主要结论','风险提示'], rows)}<div class="finding-box"><strong>综合研判：</strong>本整体报告以长势分析、三维表型、生长动态与苗情监控为固定证据框架。当前已取得模块包括：${escapeHtml(available)}。未取得的专项数据仅标注缺失，不补造指标、风险或结论。</div>`}
-function renderResults(){const mods=getModules();let body=renderOverallSynthesis(mods);const topCharts=topLevelCharts();if(topCharts.length)body+=topCharts.map((chart,i)=>renderChartFigure(chart,`top-chart-${i}`,chart.title)).join('');if(!mods.length){body+='<p class="muted">当前未取得可展示的专项模块数据，报告仅保留基础信息与方法说明。</p>'}else{body+=mods.map((m,i)=>renderModuleReportSection(m,i+1)).join('')}return section(3,'结果与分析',body)}
-function renderDiscussion(){const paper=REPORT_DATA.paper||{};const paperDiscussion=cleanArray(paper.discussion).map(itemBody).filter(isPresent);const paperFindings=cleanArray(paper.findings).filter(isPresent);const recs=cleanArray(REPORT_DATA.recommendations);const warnings=cleanArray(REPORT_DATA.plotWarnings);const moduleSuggestions=getModules().flatMap(m=>cleanArray(m.suggestions||m.recommendations||m.advice)).slice(0,10);let body='<p>讨论部分围绕数据证据与生产管理含义展开。所有建议均应结合现场墒情、作物阶段、近期天气和当地农技规范复核。</p>';if(paperDiscussion.length)body+=`<h3>综合讨论</h3>${paperDiscussion.map(x=>`<p>${text(x)}</p>`).join('')}`;const findingHtml=renderInsightItems(paperFindings);if(findingHtml)body+=`<h3>关键发现</h3>${findingHtml}`;const warningHtml=renderInsightItems(warnings);if(warningHtml)body+=`<h3>风险事项</h3>${warningHtml}`;const recItems=recs.map(r=>[itemTitle(r,'建议'),itemBody(r)]).filter(pair=>isPresent(pair[1]));const modItems=moduleSuggestions.map(s=>itemBody(s)||itemTitle(s,'')).filter(isPresent);if(recItems.length||modItems.length){body+=`<h3>农事建议</h3><ul class="recommendation-list">${recItems.map(pair=>`<li><strong>${text(pair[0])}</strong>：${text(pair[1])}</li>`).join('')}${modItems.map(s=>`<li>${text(s)}</li>`).join('')}</ul>`}else{body+='<p class="muted">当前数据未形成明确处置建议，建议继续跟踪关键指标变化并结合现场巡查确认。</p>'}if(getModules().some(m=>m.type==='plot_growth_dynamics'))body+='<div class="disclaimer">生长动态部分使用 WOFOST 日序列模型数据，相关 DVS、LAI、生物量、水分和氮素指标均为模型模拟/预测结果，不等同于实测产量或现场实测值。</div>';return section(4,'讨论与农事建议',body)}
-function renderConclusion(){const p=REPORT_DATA.paper||{};const conclusions=cleanArray(p.conclusions).filter(isPresent);const derived=getModules().map(m=>m.conclusion||m.summary||m.result).filter(isPresent);const items=(conclusions.length?conclusions:derived).slice(0,5);const fallback=[`本报告围绕 ${plotName()} 的${reportInfo().name}形成结构化分析。`,'当前结论严格限定在已取得的数据范围内，未对缺失指标作具体数值推断。','建议将本报告作为巡田、灌溉、补苗和后续监测计划的辅助依据。'];const limits=cleanArray(p.limitations).length?cleanArray(p.limitations):['报告受数据完整性、模型参数和观测时间范围影响；涉及 WOFOST 的内容均为模型模拟/预测，应结合现场观测验证。'];const links=cleanArray(p.appendixLinks).concat(getModules().map(m=>m.link||m.reportUrl||m.report_url||m.url).filter(safeUrl));let body=`<ol class="conclusion-list">${(items.length?items:fallback).map(x=>`<li>${text(typeof x==='object'?(itemBody(x)||itemTitle(x,'')):x)}</li>`).join('')}</ol><h3>数据质量与限制</h3>${limits.map(x=>`<p>${text(typeof x==='object'?(itemBody(x)||itemTitle(x,'')):x)}</p>`).join('')}`;if(links.length)body+=`<h3>附录链接</h3><ul class="link-list">${links.slice(0,6).map((l,i)=>`<li><a href="${escapeHtml(safeUrl(l))}">附录材料 ${i+1}</a></li>`).join('')}</ul>`;body+=`<div class="disclaimer">本报告数据来源：${escapeHtml(plotName())}地块真实数据记录。报告仅供生产管理参考，请结合实地情况、当地农技规范和天气条件作出最终决策。</div>`;return section(5,'结论与报告附录',body)}
-function renderAcademicChart(id,chart){const dom=document.getElementById(id);if(!dom||!chart)return;if(!window.echarts){dom.innerHTML=`<div class="chart-fallback">${escapeHtml(chart.title)}：图表库未加载，详见相邻数据表。</div>`;return}const isBar=String(chart.type||'').toLowerCase()==='bar';const option={tooltip:{trigger:'axis'},legend:{top:0,textStyle:{fontFamily:'PingFang SC'}},grid:{left:52,right:28,top:48,bottom:42},xAxis:{type:'category',data:chart.labels,axisLabel:{fontFamily:'PingFang SC'}},yAxis:{type:'value',axisLabel:{fontFamily:'PingFang SC'}},series:chart.datasets.map(ds=>({name:ds.label,type:isBar?'bar':'line',smooth:!isBar,showSymbol:!isBar?false:true,data:ds.data,lineStyle:{width:2,color:ds.color},itemStyle:{color:ds.color},areaStyle:isBar?void 0:{opacity:.08}}))};echarts.init(dom).setOption(option)}
+
+
+function renderWeatherSection(){const weather=REPORT_DATA.weather||{};const now=weather.now||{};const forecast=cleanArray(weather.forecast);const currentRows=Object.entries(now).filter(([k,v])=>['temp','temperature','humidity','windSpeed','precip','precipitation','text','obsTime'].includes(k)&&isPresent(v)).map(([k,v])=>[({temp:'温度（℃）',temperature:'温度（℃）',humidity:'相对湿度（%）',windSpeed:'风速（km/h）',precip:'降水（mm）',precipitation:'降水（mm）',text:'天气',obsTime:'观测时间'})[k],v]);const forecastRows=forecast.map(r=>[r.date||r.fxDate,r.tempMin??r.tmin,r.tempMax??r.tmax,r.precip??r.precipitation,r.textDay||r.text||r.summary]).filter(r=>r.some(isPresent));if(!currentRows.length&&!forecastRows.length)return '';return `<h3>天气与作业窗口</h3>${currentRows.length?renderTable('当前天气', ['指标','记录'],currentRows):''}${forecastRows.length?renderTable('天气预报（以气象服务发布时间为准）',['日期','最低温（℃）','最高温（℃）','降水（mm）','天气'],forecastRows):''}`}
+
+function renderWofostSection(){const w=REPORT_DATA.wofost||{};const k=cleanArray(w.kpis);const p=cleanArray(w.phenology);const b=cleanArray(w.waterBalance);if(!k.length&&!p.length&&!b.length)return '';const rows=xs=>xs.map(x=>[x.label||x.name||x.code,x.value,x.unit||x.description||x.sub||'']).filter(r=>r.some(isPresent));return `<h3>作物模型与水量收支</h3><p>以下为当前地块关联的作物生长模拟模型记录，物候日期、收获器官生物量和水量收支均属于模拟结果。</p>${k.length?renderTable('模型指标',['指标','数值','单位/说明'],rows(k)):''}${p.length?renderTable('模拟物候',['阶段','日期','说明'],rows(p)):''}${b.length?renderTable('模拟水量收支',['指标','数值','单位/说明'],rows(b)):''}`}
+
+
+function renderStaticChart(dom,chart){
+  // 外部图表库不可达时，仍以原始数值绘制矢量图；缺失值保留断点。
+  const series=chart.datasets,labels=chart.labels,isBar=String(chart.type||'').toLowerCase()==='bar';
+  const valid=v=>v!==''&&v!==null&&v!==undefined&&Number.isFinite(Number(v));
+  const values=series.flatMap(ds=>ds.data.filter(valid).map(Number));
+  if(!values.length){dom.innerHTML='<div class="chart-fallback">暂无可绘制的有效数值。</div>';return}
+  const width=760,height=340,left=70,right=20,top=52,bottom=52;
+  let low=Math.min(...values),high=Math.max(...values);
+  if(isBar){low=Math.min(0,low);high=Math.max(0,high)}
+  const pad=(high-low||Math.abs(high)||1)*.08;low-=pad;high+=pad;
+  const plotWidth=width-left-right,plotHeight=height-top-bottom;
+  const x=i=>left+(i+.5)*plotWidth/Math.max(labels.length,1);
+  const y=v=>top+(high-Number(v))*plotHeight/(high-low);
+  const number=v=>Number(v.toPrecision(4)).toLocaleString('zh-CN',{maximumFractionDigits:4});
+  let parts=[`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(chart.title)}" style="width:100%;height:100%;font:12px sans-serif"><title>${escapeHtml(chart.title)}</title>`];
+  for(let tick=0;tick<=4;tick++){
+    const value=low+(high-low)*tick/4,py=y(value);
+    parts.push(`<line x1="${left}" y1="${py}" x2="${width-right}" y2="${py}" stroke="#e3e9e5"/><text x="${left-10}" y="${py+4}" text-anchor="end" fill="#627168">${number(value)}</text>`);
+  }
+  const stride=Math.max(1,Math.ceil(labels.length/7));
+  labels.forEach((label,i)=>{if(i%stride===0||i===labels.length-1)parts.push(`<text x="${x(i)}" y="${height-bottom+22}" text-anchor="middle" fill="#627168">${escapeHtml(String(label))}</text>`)});
+  series.forEach((ds,index)=>{
+    const color=/^#[0-9a-f]{3,8}$/i.test(ds.color||'')?ds.color:['#2d6a4f','#8b6914','#1f6f9f','#a0403b'][index%4];
+    const legendX=left+(index%3)*220,legendY=16+Math.floor(index/3)*18;
+    parts.push(`<rect x="${legendX}" y="${legendY-9}" width="12" height="10" fill="${color}"/><text x="${legendX+18}" y="${legendY}" fill="#42544a">${escapeHtml(ds.label)}</text>`);
+    let path='';
+    ds.data.forEach((value,i)=>{
+      if(!valid(value)){if(path){parts.push(`<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>`);path=''}return}
+      const px=x(i),py=y(value),hint=escapeHtml(`${labels[i]} · ${ds.label}：${number(Number(value))}`);
+      if(isBar){const barWidth=plotWidth/Math.max(labels.length,1)*.72/series.length;parts.push(`<rect x="${px+(index-series.length/2)*barWidth}" y="${Math.min(py,y(0))}" width="${barWidth}" height="${Math.max(Math.abs(y(0)-py),.5)}" fill="${color}"><title>${hint}</title></rect>`)}
+      else{path+=`${path?'L':'M'}${px},${py} `}
+    });
+    if(path)parts.push(`<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>`);
+  });
+  parts.push('</svg>');dom.innerHTML=parts.join('');
+}
+
+function renderAcademicChart(id,chart){const dom=document.getElementById(id);if(!dom||!chart)return;if(!window.echarts){renderStaticChart(dom,chart);return}const isBar=String(chart.type||'').toLowerCase()==='bar';const option={tooltip:{trigger:'axis'},legend:{top:0,textStyle:{fontFamily:'PingFang SC'}},grid:{left:52,right:28,top:48,bottom:42},xAxis:{type:'category',data:chart.labels,axisLabel:{fontFamily:'PingFang SC'}},yAxis:{type:'value',axisLabel:{fontFamily:'PingFang SC'}},series:chart.datasets.map(ds=>({name:ds.label,type:isBar?'bar':'line',smooth:!isBar,showSymbol:!isBar?false:true,data:ds.data,lineStyle:{width:2,color:ds.color},itemStyle:{color:ds.color},areaStyle:isBar?void 0:{opacity:.08}}))};echarts.init(dom).setOption(option)}
+
 function renderAllCharts(){topLevelCharts().forEach((chart,i)=>renderAcademicChart(`top-chart-${i}`,chart));getModules().forEach((m,index)=>extractCharts(m).forEach((chart,i)=>renderAcademicChart(`chart-${index+1}-${i}`,chart)))}
-function init(){renderTitlePage();const root=document.getElementById('paper-root');root.innerHTML=renderAbstract()+renderMethods()+renderResults()+renderDiscussion()+renderConclusion();renderAllCharts()}
-init();
-</script>
-</body>
-</html>
+window.addEventListener('resize',()=>{if(window.echarts)document.querySelectorAll('.chart-container').forEach(dom=>{const chart=echarts.getInstanceByDom(dom);if(chart)chart.resize()})});
+const CHAPTERS = [
+  ['crop','地块边界与作物识别','分析边界、分类候选和时序输入按本地块冻结结果展示。'],
+  ['remote','遥感植被与观测变化','以观测日期、像元尺度和产品来源解释植被信号。'],
+  ['risk','异常分布与风险分析','用位置、编号与指标解释异常候选；风险信号保留实际分析方法。'],
+  ['environment','气象与土壤条件','格点天气与土壤参考提供环境背景，保留来源、尺度及有效日期。'],
+  ['growth','生育进程与长势综合评价','生育、冠层、生物量和水分按实际模拟或预测日期展示。'],
+  ['production','产量与品质预测','只展示已发布指标，明确区分干物质、商品鲜产量和品质结果。'],
+  ['management','管理价值与建议','用位置、时段和分析结果组织关注项，经营数值以实际记录为依据。'],
+];
+const TOPICS = {
+  '农田分割与作物识别':'crop','遥感植被状态':'remote','卫星观测与影像来源':'remote','历史长势分析':'remote',
+  '气象条件与降水过程':'environment','土壤基础与养分参考':'environment',
+  '异常识别与巡查':'risk','病虫害分析':'risk','气候灾害分析':'risk',
+  '生育进程与水分状态':'growth','长势综合评价':'growth','产量与品质预测':'production','专项分析结果':'methods',
+};
+
+function contextData(){
+  const node=document.getElementById('canonical-results-template').content.querySelector('#survey-framework-context');
+  return node ? JSON.parse(node.content.textContent) : {};
+}
+function element(tag,classes='',content=''){
+  const node=document.createElement(tag);node.className=classes;node.textContent=content;return node;
+}
+function addText(parent,tag,content,classes=''){
+  if(content!==undefined&&content!==null&&content!=='')parent.append(element(tag,classes,String(content).replace(/WOFOST/gi,'作物生长模拟')));
+}
+function chapter(key,title,lead){
+  const node=element('section','chapter survey-report');node.id=key;
+  node.append(element('h2','',title),element('p','lead',lead));return node;
+}
+function renderCover(context,groups){
+  const node=element('header','cover');node.id='overview';
+  const subject=meta().plotName||meta().subjectName||context.name||'目标地块';
+  document.title=subject+' · 地块勘察综合分析报告';
+  node.append(element('p','eyebrow','地块综合分析'),element('h1','','地块勘察综合分析报告'));
+  const cutoff=context.as_of||meta().reportDate||'未提供';
+  const period=[context.start_date||meta().periodStart,context.end_date||meta().periodEnd].filter(Boolean).join(' 至 ');
+  node.append(element('p','cover-meta',subject+' · 报告截止 '+cutoff+(period?(context.reference_year?' · 当季参考期 ':' · 参考时段 ')+period:'')));
+  if(context.reference_year){const source=context.observation_period||{};const window=[source.start_date,source.end_date].filter(Boolean).join(' 至 ');node.append(element('p','cover-meta','主分析年度 '+context.reference_year+(window?' · 观测范围 '+window:' · 观测不足')))}
+  const grid=element('div','cover-grid'),map=element('div'),findings=element('div','findings');
+  const image=[...groups.risk.querySelectorAll('figure')].find(x=>x.querySelector('svg'))
+    ||[...groups.crop.querySelectorAll('figure')].find(x=>x.querySelector('svg'));
+  if(image)map.append(image.cloneNode(true));else map.append(element('p','source-note','当前冻结成果没有可用影像或空间图。'));
+  findings.append(element('h2','','主要发现'));
+  const paper=REPORT_DATA.paper||{};
+  const authored=cleanArray(paper.findings).length?cleanArray(paper.findings):cleanArray(paper.conclusions);
+  const items=context.findings||authored.map(x=>({title:itemTitle(x,''),body:itemBody(x)}));
+  for(const item of items.slice(0,3)){
+    const p=element('p');p.append(element('b','',item.title||''));addText(p,'span',item.body);findings.append(p);
+  }
+  grid.append(map,findings);node.append(grid);
+  const metrics=element('dl','metrics');
+  for(const item of context.metrics||[]){const cell=element('div');cell.append(element('dt','',item.label),element('dd','',item.value),element('small','',item.detail));metrics.append(cell);}
+  if(metrics.children.length)node.append(metrics);
+  node.append(element('p','source-note','来源、日期与分析性质在各章节标明；缺失指标保留状态，不作数值推断。'));
+  return node;
+}
+function collectCanonical(groups){
+  const source=document.getElementById('canonical-results-template').content;
+  for(const root of [...source.children].filter(node=>node.matches('.survey-report'))){
+    let target=groups.methods;
+    for(const original of root.children){
+      if(original.matches('style,header.survey-title'))continue;
+      if(original.tagName==='H3')target=groups[TOPICS[original.textContent.trim()]||'methods'];
+      if(original.tagName==='DETAILS'&&/版本/.test(original.querySelector('summary')?.textContent||''))target=groups.methods;
+      const cloned=original.cloneNode(true);
+      target.append(cloned);
+    }
+  }
+}
+function addManagement(context,group){
+  if(context.economic_note)group.append(element('h3','','经营记录与经济价值'),element('p','',context.economic_note));
+}
+function addBusinessData(groups){
+  const basics=metricItems(REPORT_DATA.overview?.kpis);
+  if(basics.length){
+    groups.crop.append(element('h3','','地块基础指标'),element('p','survey-source','基础指标的来源和有效日期以记录说明为准。'));
+    groups.crop.insertAdjacentHTML('beforeend',renderMetrics(basics));
+  }
+  const plots=cleanArray(REPORT_DATA.plots);
+  if(plots.length)groups.crop.insertAdjacentHTML('beforeend',renderTable('地块与种植记录',['地块','作物','阶段'],plots.map(p=>[p.name,p.crop,p.stage])));
+  getModules().forEach((module,index)=>{
+    const key=['plot_growth_dynamics','plot_growth_analysis'].includes(module.type)?'growth':'crop';
+    groups[key].insertAdjacentHTML('beforeend',renderModuleReportSection(module,index+1));
+  });
+  groups.environment.insertAdjacentHTML('beforeend',renderWeatherSection());
+  groups.growth.insertAdjacentHTML('beforeend',renderWofostSection());
+  topLevelCharts().forEach((chart,index)=>groups.growth.insertAdjacentHTML('beforeend',renderChartFigure(chart,`top-chart-${index}`,chart.title)));
+  const paper=REPORT_DATA.paper||{};
+  if(paper.abstract){groups.management.append(element('h3','','综合解读'));addText(groups.management,'p',paper.abstract);}
+  if(cleanArray(paper.discussion).length){groups.management.append(element('h3','','管理分析'));for(const item of paper.discussion)addText(groups.management,'p',itemBody(item));}
+  const recommendations=cleanArray(REPORT_DATA.recommendations);
+  if(recommendations.length){groups.management.append(element('h3','','管理建议'));for(const item of recommendations){const p=element('p');p.append(element('b','',itemTitle(item,'建议')+'：'));addText(p,'span',itemBody(item));groups.management.append(p);}}
+  for(const [key,title] of [['findings','综合分析'],['conclusions','管理结论']]){
+    const items=cleanArray(paper[key]);
+    if(items.length){groups.management.append(element('h3','',title));for(const item of items)addText(groups.management,'p',typeof item==='string'?item:itemBody(item));}
+  }
+  const sources=cleanArray(meta().dataSources);
+  if(sources.length){groups.methods.append(element('h3','','数据来源'));addText(groups.methods,'p',sources.join('、'));}
+  groups.management.insertAdjacentHTML('beforeend',renderInsightItems(REPORT_DATA.plotWarnings));
+  for(const method of cleanArray(paper.methods))addText(groups.methods,'p',typeof method==='string'?method:itemBody(method));
+  // 同类分析限制合为一段，避免打印时末尾短句单独成页；不删减原说明。
+  addText(groups.methods,'p',cleanArray(paper.limitations).map(limit=>typeof limit==='string'?limit:itemBody(limit)).filter(Boolean).join(' '));
+  for(const link of cleanArray(paper.appendixLinks)){const url=safeUrl(typeof link==='string'?link:link.url);if(url){const p=element('p'),a=element('a','','查看关联材料');a.href=url;p.append(a);groups.methods.append(p);}}
+}
+function initializeFramework(){
+  const context=contextData(),groups={};
+  for(const [key,title,lead] of CHAPTERS)groups[key]=chapter(key,title,lead);
+  groups.methods=element('div','survey-report');
+  collectCanonical(groups);addBusinessData(groups);
+  const map=[...groups.crop.querySelectorAll('figure')].find(x=>x.querySelector('svg'));
+  addManagement(context,groups.management);
+  const paper=document.getElementById('paper-root');paper.append(renderCover(context,groups));
+  for(const [key] of CHAPTERS)paper.append(groups[key]);
+  const appendix=element('section','chapter appendix');appendix.id='methods';
+  const details=document.createElement('details');details.append(element('summary','','数据与方法'),groups.methods);appendix.append(details);paper.append(appendix);
+  const footer=element('footer','footer','地块勘察综合分析报告 · 来源与性质按章节标明');paper.append(footer);
+  const navigation=document.querySelector('nav');
+  for(const [key,label] of [['overview','地块概览'],['crop','边界与识别'],['remote','遥感与变化'],['risk','异常与风险'],['environment','气象与土壤'],['growth','生育与长势'],['production','产量与品质'],['management','管理价值']]){const a=element('a','',label);a.href='#'+key;navigation.append(a);}
+  document.getElementById('print-report').addEventListener('click',()=>window.print());
+  let wasOpen=false;
+  window.addEventListener('beforeprint',()=>{wasOpen=details.open;details.open=true;});
+  window.addEventListener('afterprint',()=>{details.open=wasOpen;});
+  const links=[...navigation.querySelectorAll('a')];
+  const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting)links.forEach(a=>a.classList.toggle('active',a.hash==='#'+entry.target.id));}),{rootMargin:'-122px 0px -65% 0px'});
+  document.querySelectorAll('.chapter,#overview').forEach(node=>observer.observe(node));
+  renderAllCharts();
+}
+initializeFramework();
+
+</script></body></html>

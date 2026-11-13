@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""Render a SONO report HTML file by injecting REPORT_DATA into template.html.
+# -*- coding: utf-8 -*-
+# @Time    : 2026/6/29 12:24
+# @Author  : feidu
+# @File    : render_report_html.py
+"""完整报告的确定性数据注入，防止用户数据终止script。
+
+Render a SONO report HTML file by injecting REPORT_DATA into template.html.
 
 Usage:
   python scripts/render_report_html.py template.html normalized-report-data.json generated-report.html
@@ -22,6 +27,7 @@ REPORT_DATA_RE = re.compile(
 
 
 def main() -> None:
+    """从归一化输入渲染可信模板，失败时不保存HTML。"""
     parser = argparse.ArgumentParser(description="Inject REPORT_DATA into SONO HTML template")
     parser.add_argument("template", help="HTML template path")
     parser.add_argument("report_data", help="Normalized REPORT_DATA JSON path")
@@ -39,8 +45,11 @@ def main() -> None:
     if not isinstance(data, dict):
         raise SystemExit("REPORT_DATA must be a JSON object")
 
-    replacement = "const REPORT_DATA = " + json.dumps(data, ensure_ascii=False, indent=2) + ";"
-    rendered, count = REPORT_DATA_RE.subn(replacement, html, count=1)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    for char, escaped in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        payload = payload.replace(char, escaped)
+    replacement = "const REPORT_DATA = " + payload + ";"
+    rendered, count = REPORT_DATA_RE.subn(lambda _: replacement, html, count=1)
     if count != 1:
         raise SystemExit("Template must contain exactly one REPORT_DATA placeholder")
     if not rendered.lstrip().startswith("<!DOCTYPE html>"):

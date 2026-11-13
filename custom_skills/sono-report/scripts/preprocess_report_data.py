@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
-"""Normalize SONO report data before rendering HTML.
+# -*- coding: utf-8 -*-
+# @Time    : 2026/07/03 20:54
+# @Author  : feidu
+# @File    : preprocess_report_data.py
+"""SONO报告数据归一化，仅使用真实关联的业务来源。
+
+Normalize SONO report data before rendering HTML.
 
 Usage:
   python scripts/preprocess_report_data.py input.json output.json [--strict]
@@ -23,8 +28,27 @@ from typing import Any
 
 ID_LIKE_RE = re.compile(r"^(?:地块\s*)?(?:ID[:：]?\s*)?\d+$", re.IGNORECASE)
 DISALLOWED_DATA_SOURCES = {"get_summary_base"}
-DISALLOWED_REPORT_TYPES = {"base_report", "summary_report", "enterprise_report", "comprehensive_report"}
-EMPTY_TEXT_VALUES = {"", "nan", "null", "none", "undefined", "nil", "n/a", "--", "-", "—", "无", "暂无", "未提供"}
+DISALLOWED_REPORT_TYPES = {
+    "base_report",
+    "summary_report",
+    "enterprise_report",
+    "comprehensive_report",
+}
+EMPTY_TEXT_VALUES = {
+    "",
+    "nan",
+    "null",
+    "none",
+    "undefined",
+    "nil",
+    "n/a",
+    "--",
+    "-",
+    "—",
+    "无",
+    "暂无",
+    "未提供",
+}
 MODULE_REPORT_TYPES = {
     "plot_growth_analysis",
     "plot_3d_phenotype",
@@ -72,7 +96,9 @@ def is_present(value: Any) -> bool:
     if isinstance(value, bool):
         return True
     if isinstance(value, (int, float)):
-        return not (isinstance(value, float) and (math.isnan(value) or math.isinf(value)))
+        return not (
+            isinstance(value, float) and (math.isnan(value) or math.isinf(value))
+        )
     if isinstance(value, str):
         return value.strip().lower() not in EMPTY_TEXT_VALUES
     if isinstance(value, list):
@@ -180,7 +206,12 @@ def derive_plot_name(data: dict[str, Any]) -> str:
 def report_date(data: dict[str, Any]) -> str:
     meta = ensure_dict(data.get("meta"))
     wofost = ensure_dict(data.get("wofost"))
-    value = first_text(meta.get("reportDate"), wofost.get("reportDate"), meta.get("periodEnd"), meta.get("generatedAt"))
+    value = first_text(
+        meta.get("reportDate"),
+        wofost.get("reportDate"),
+        meta.get("periodEnd"),
+        meta.get("generatedAt"),
+    )
     match = re.search(r"\d{4}-\d{2}-\d{2}", value)
     if match:
         return match.group(0)
@@ -188,12 +219,23 @@ def report_date(data: dict[str, Any]) -> str:
 
 
 def normalize_recommendations(data: dict[str, Any]) -> None:
-    priority_rank = {"high": 0, "danger": 0, "red": 0, "mid": 1, "medium": 1, "warn": 1, "amber": 1, "low": 2}
+    priority_rank = {
+        "high": 0,
+        "danger": 0,
+        "red": 0,
+        "mid": 1,
+        "medium": 1,
+        "warn": 1,
+        "amber": 1,
+        "low": 2,
+    }
     seen: set[tuple[str, str]] = set()
     normalized: list[dict[str, Any]] = []
     for raw in ensure_list(data.get("recommendations")):
         item = raw if isinstance(raw, dict) else {"body": raw}
-        title = first_text(item.get("title"), item.get("label"), item.get("badge"), "农事建议")
+        title = first_text(
+            item.get("title"), item.get("label"), item.get("badge"), "农事建议"
+        )
         body = first_text(
             item.get("body"),
             item.get("content"),
@@ -217,21 +259,41 @@ def normalize_recommendations(data: dict[str, Any]) -> None:
         priority = first_text(item.get("priority"), item.get("level"), "low").lower()
         if priority not in priority_rank:
             priority = "low"
-        badge = first_text(item.get("badge"), {"high": "紧急", "danger": "紧急", "mid": "注意", "medium": "注意", "warn": "注意", "low": "建议"}.get(priority, "建议"))
-        normalized.append({
-            "priority": priority,
-            "badge": badge,
-            "title": title,
-            "body": body,
-            "source": first_text(item.get("source")),
-        })
+        badge = first_text(
+            item.get("badge"),
+            {
+                "high": "紧急",
+                "danger": "紧急",
+                "mid": "注意",
+                "medium": "注意",
+                "warn": "注意",
+                "low": "建议",
+            }.get(priority, "建议"),
+        )
+        normalized.append(
+            {
+                "priority": priority,
+                "badge": badge,
+                "title": title,
+                "body": body,
+                "source": first_text(item.get("source")),
+            }
+        )
     normalized.sort(key=lambda item: priority_rank.get(item.get("priority", "low"), 2))
     data["recommendations"] = normalized[:8]
 
 
 def normalize_paper(data: dict[str, Any]) -> None:
     paper = ensure_dict(data.get("paper"))
-    for key in ["keywords", "methods", "findings", "discussion", "conclusions", "limitations", "appendixLinks"]:
+    for key in [
+        "keywords",
+        "methods",
+        "findings",
+        "discussion",
+        "conclusions",
+        "limitations",
+        "appendixLinks",
+    ]:
         value = paper.get(key)
         if value is None:
             paper[key] = []
@@ -247,7 +309,9 @@ def normalize_paper(data: dict[str, Any]) -> None:
 def normalize_report_type_and_subtype(data: dict[str, Any]) -> None:
     meta = ensure_dict(data.get("meta"))
     report_type = first_text(meta.get("reportType"), "plot_report")
-    subtype = first_text(meta.get("reportSubtype"), meta.get("report_type"), meta.get("type"))
+    subtype = first_text(
+        meta.get("reportSubtype"), meta.get("report_type"), meta.get("type")
+    )
 
     if report_type in MODULE_REPORT_TYPES:
         subtype = report_type
@@ -288,9 +352,18 @@ def normalize_module_reports(data: dict[str, Any]) -> None:
         modules.append(module)
 
     if subtype in MODULE_REPORT_TYPES:
-        modules = [module for module in modules if first_text(module.get("type")) == subtype]
-    elif subtype == OVERALL_REPORT_TYPE or meta.get("reportType") == "plot_overall_report":
-        modules = [module for module in modules if first_text(module.get("type")) in OVERALL_MODULE_ORDER]
+        modules = [
+            module for module in modules if first_text(module.get("type")) == subtype
+        ]
+    elif (
+        subtype == OVERALL_REPORT_TYPE
+        or meta.get("reportType") == "plot_overall_report"
+    ):
+        modules = [
+            module
+            for module in modules
+            if first_text(module.get("type")) in OVERALL_MODULE_ORDER
+        ]
         modules.sort(key=module_sort_key)
     data["moduleReports"] = modules
 
@@ -320,7 +393,9 @@ def load_wofost_daily_csv() -> list[dict[str, float]]:
     return rows
 
 
-def sample_rows(rows: list[dict[str, float]], max_points: int = 12) -> list[dict[str, float]]:
+def sample_rows(
+    rows: list[dict[str, float]], max_points: int = 12
+) -> list[dict[str, float]]:
     if len(rows) <= max_points:
         return rows
     if max_points <= 1:
@@ -375,7 +450,9 @@ def derive_dvs_stage(dvs: float | None) -> str:
     return "成熟或接近模型终止阶段"
 
 
-def metric(label: str, value: float | None, unit: str = "", sub: str = "模型模拟") -> dict[str, str] | None:
+def metric(
+    label: str, value: float | None, unit: str = "", sub: str = "模型模拟"
+) -> dict[str, str] | None:
     rendered = fmt_number(value)
     if not rendered:
         return None
@@ -403,7 +480,18 @@ def build_growth_dynamics_module(rows: list[dict[str, float]]) -> dict[str, Any]
     for row in sample_rows(rows, 12):
         index = int(row.get("__index__", 0))
         item: dict[str, Any] = {"label": f"模型日{index}"}
-        for key in ["dvs", "lai", "tagp", "wso", "twso", "soilMoisture", "rd", "nUptakeTotal", "tra", "evs"]:
+        for key in [
+            "dvs",
+            "lai",
+            "tagp",
+            "wso",
+            "twso",
+            "soilMoisture",
+            "rd",
+            "nUptakeTotal",
+            "tra",
+            "evs",
+        ]:
             if key in row:
                 item[key] = round(float(row[key]), 4)
         sampled.append(item)
@@ -411,57 +499,75 @@ def build_growth_dynamics_module(rows: list[dict[str, float]]) -> dict[str, Any]
     table_rows = []
     for row in sample_rows(rows, 8):
         index = int(row.get("__index__", 0))
-        table_rows.append({
-            "label": f"模型日{index}",
-            "dvs": fmt_number(row.get("dvs")),
-            "lai": fmt_number(row.get("lai")),
-            "tagp": fmt_number(row.get("tagp")),
-            "wso": fmt_number(row.get("wso")),
-            "soilMoisture": fmt_number(row.get("soilMoisture"), 3),
-            "rd": fmt_number(row.get("rd")),
-        })
+        table_rows.append(
+            {
+                "label": f"模型日{index}",
+                "dvs": fmt_number(row.get("dvs")),
+                "lai": fmt_number(row.get("lai")),
+                "tagp": fmt_number(row.get("tagp")),
+                "wso": fmt_number(row.get("wso")),
+                "soilMoisture": fmt_number(row.get("soilMoisture"), 3),
+                "rd": fmt_number(row.get("rd")),
+            }
+        )
 
     analysis_items: list[dict[str, str]] = []
     if latest_dvs is not None:
-        analysis_items.append({
-            "title": "生育阶段推进",
-            "body": f"DVS 最新有效值约为 {fmt_number(latest_dvs)}，模型判定作物处于“{stage}”。该判断来自 WOFOST 日序列模拟结果。",
-            "level": "green",
-        })
+        analysis_items.append(
+            {
+                "title": "生育阶段推进",
+                "body": f"DVS 最新有效值约为 {fmt_number(latest_dvs)}，模型判定作物处于“{stage}”。该判断来自 WOFOST 日序列模拟结果。",
+                "level": "green",
+            }
+        )
     if max_lai is not None or latest_lai is not None:
         parts = []
         if max_lai is not None:
             parts.append(f"LAI 最大值约为 {fmt_number(max_lai)}")
         if latest_lai is not None:
             parts.append(f"最新有效值约为 {fmt_number(latest_lai)}")
-        analysis_items.append({
-            "title": "冠层发育过程",
-            "body": "，".join(parts) + "，可用于判断模型模拟的冠层扩展与后期衰减过程。",
-            "level": "blue",
-        })
+        analysis_items.append(
+            {
+                "title": "冠层发育过程",
+                "body": "，".join(parts)
+                + "，可用于判断模型模拟的冠层扩展与后期衰减过程。",
+                "level": "blue",
+            }
+        )
     if latest_tagp is not None or latest_wso is not None:
         parts = []
         if latest_tagp is not None:
             parts.append(f"TAGP 最新有效值约为 {fmt_number(latest_tagp)}")
         if latest_wso is not None:
             parts.append(f"WSO 最新有效值约为 {fmt_number(latest_wso)}")
-        analysis_items.append({
-            "title": "生物量积累",
-            "body": "，".join(parts) + "，反映模型模拟的地上生物量与贮藏器官干物重累积。",
-            "level": "green",
-        })
+        analysis_items.append(
+            {
+                "title": "生物量积累",
+                "body": "，".join(parts)
+                + "，反映模型模拟的地上生物量与贮藏器官干物重累积。",
+                "level": "green",
+            }
+        )
     if latest_sm is not None or min_sm is not None:
-        level = "amber" if (latest_sm is not None and latest_sm < 0.2) or (min_sm is not None and min_sm < 0.2) else "green"
+        level = (
+            "amber"
+            if (latest_sm is not None and latest_sm < 0.2)
+            or (min_sm is not None and min_sm < 0.2)
+            else "green"
+        )
         parts = []
         if latest_sm is not None:
             parts.append(f"SM 最新有效值约为 {fmt_number(latest_sm, 3)}")
         if min_sm is not None:
             parts.append(f"最低有效值约为 {fmt_number(min_sm, 3)}")
-        analysis_items.append({
-            "title": "水分过程与胁迫关注",
-            "body": "，".join(parts) + "。若持续低于 0.20，应结合墒情监测与灌溉记录进行现场复核。",
-            "level": level,
-        })
+        analysis_items.append(
+            {
+                "title": "水分过程与胁迫关注",
+                "body": "，".join(parts)
+                + "。若持续低于 0.20，应结合墒情监测与灌溉记录进行现场复核。",
+                "level": level,
+            }
+        )
 
     metrics = [
         metric("最新 DVS", latest_dvs),
@@ -528,7 +634,11 @@ def upsert_growth_dynamics_module(data: dict[str, Any], module: dict[str, Any]) 
 def enrich_growth_dynamics_from_wofost_csv(data: dict[str, Any]) -> None:
     meta = ensure_dict(data.get("meta"))
     subtype = first_text(meta.get("reportSubtype"))
-    should_enrich = subtype == "plot_growth_dynamics" or subtype == OVERALL_REPORT_TYPE or meta.get("reportType") == "plot_overall_report"
+    should_enrich = (
+        subtype == "plot_growth_dynamics"
+        or subtype == OVERALL_REPORT_TYPE
+        or meta.get("reportType") == "plot_overall_report"
+    )
     if not should_enrich:
         return
     rows = load_wofost_daily_csv()
@@ -574,7 +684,11 @@ def clean_empty_values(value: Any) -> Any:
 
 
 def clean_table(table: dict[str, Any]) -> dict[str, Any] | None:
-    headers = [text_from_any(header) for header in ensure_list(table.get("headers")) if text_from_any(header)]
+    headers = [
+        text_from_any(header)
+        for header in ensure_list(table.get("headers"))
+        if text_from_any(header)
+    ]
     rows = ensure_list(table.get("rows"))
     cleaned_rows: list[Any] = []
     for row in rows:
@@ -615,7 +729,9 @@ def clean_report_data(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any], list[str]]:
+def normalize(
+    data: dict[str, Any], strict: bool = False
+) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     meta = ensure_dict(data.get("meta"))
     data["meta"] = meta
@@ -625,18 +741,26 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
     meta.setdefault("dataSources", [])
     if not isinstance(meta.get("dataSources"), list):
         meta["dataSources"] = [str(meta.get("dataSources"))]
-    meta["dataSources"] = [str(source) for source in meta.get("dataSources", []) if is_present(source)]
+    meta["dataSources"] = [
+        str(source) for source in meta.get("dataSources", []) if is_present(source)
+    ]
     normalize_report_type_and_subtype(data)
     meta = ensure_dict(data.get("meta"))
 
     report_type = first_text(meta.get("reportType"), "plot_report")
     if report_type in DISALLOWED_REPORT_TYPES:
-        raise SystemExit(f"sono-report only supports plot-based reports; disallowed reportType: {report_type}")
+        raise SystemExit(
+            f"sono-report only supports plot-based reports; disallowed reportType: {report_type}"
+        )
     disallowed_sources = sorted(set(meta["dataSources"]) & DISALLOWED_DATA_SOURCES)
     if disallowed_sources:
-        raise SystemExit(f"sono-report only supports plot-based MCP sources; remove: {', '.join(disallowed_sources)}")
+        raise SystemExit(
+            f"sono-report only supports plot-based MCP sources; remove: {', '.join(disallowed_sources)}"
+        )
     if strict and "get_plot_info" not in meta["dataSources"]:
-        raise SystemExit("plot reports must include get_plot_info so the report is grounded in a real plot")
+        raise SystemExit(
+            "plot reports must include get_plot_info so the report is grounded in a real plot"
+        )
 
     plot_name = derive_plot_name(data)
     title = first_text(meta.get("title"), "地块报告")
@@ -664,7 +788,7 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
             data[key] = list(default)
 
     normalize_module_reports(data)
-    enrich_growth_dynamics_from_wofost_csv(data)
+    # 固定示例CSV不能充当当前地块的机理证据；仅保留实际取数模块。
     normalize_module_reports(data)
     normalize_paper(data)
     normalize_recommendations(data)
@@ -673,17 +797,25 @@ def normalize(data: dict[str, Any], strict: bool = False) -> tuple[dict[str, Any
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Normalize SONO report REPORT_DATA JSON")
+    parser = argparse.ArgumentParser(
+        description="Normalize SONO report REPORT_DATA JSON"
+    )
     parser.add_argument("input", help="Input REPORT_DATA JSON file")
     parser.add_argument("output", help="Output normalized REPORT_DATA JSON file")
-    parser.add_argument("--strict", action="store_true", help="Fail if plot name is missing or title is plot_id-like")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail if plot name is missing or title is plot_id-like",
+    )
     args = parser.parse_args()
 
     data = json.loads(Path(args.input).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise SystemExit("REPORT_DATA must be a JSON object")
     normalized, warnings = normalize(data, strict=args.strict)
-    Path(args.output).write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path(args.output).write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     for warning in warnings:
         print(f"WARNING: {warning}")
     print(args.output)

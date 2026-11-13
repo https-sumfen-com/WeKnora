@@ -5,6 +5,34 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 
 # SONO 地块 HTML 报告生成
 
+## 勘察请求与单年度分析
+
+首次圈选创建只传`geometry`、`name`、`provider_name`、`company_id`、`site_id`、`entity_id`、`entity_info_id`；`site_id=0`表示未绑定业务地块。归属来自可信会话，不由模型猜测。客户端兼容会话的`cid`、`entity-id`、`entity-info-id`并映射到请求体。无需询问或传递`start_date/end_date`；平台冻结上海时区昨日为截止日，重试不移动日期。
+
+主分析只选一个年度。当年已发生观测满足部署模型时序与有效覆盖要求时使用当年；季前或观测不足时直接使用上一年度完整观测季，最多回退一次。网络、模型或文件故障仍作为执行失败，不能冒充观测不足。当季已到达资料作为独立参考。必须沿用服务端reference_year、observation_period和current_reference_period，不把去年类别、生育或产量模拟值改写成今年事实或预测。专题及整体报告均不展示历史种植、五年占比和轮作。
+
+当前遥感仅作为截止日30m/10m参考，不生成跨年度逐日融合序列。系统独立形成天气、土壤及主分析年度作物生长情景。未完成时返回真实进度；遥感、识别和分析检查点全部完成后才返回报告成功标签。查询、retry和报告data只传资源编号，不带归属或site查询参数。鉴权Key仍只取服务端固定配置；创建请求的业务字段保留。进度直接读取API的progress_detail，说明实际日期、年度、切片、波段及重试；心跳不是完成量，不由对话模型补造百分比。
+
+专题与整体报告复用相同冻结数据和完整模板。地图按实际坐标绘制矢量分割边界和异常候选，带编号、比例尺、坐标及图例；不补造高分辨率影像、道路或经营记录。对话模型不得重写固定科学章节或复制推断为事实。
+
+## 勘察报告共用数据
+
+对于`survey_id`的勘察或专题报告，执行`scripts/survey_report.py`，stdin传`survey_id`、`report_type`及可信`cid`、`entity-id`、`entity-info-id`。该脚本只读取/请求统一勘察报告API，不调用旧地块MCP，不要求`plot_id`，不重新计算模型或自行生成第二套科学章节。未完成返回任务进度，三个检查点完成后才返回`<sono-report>`。
+
+已有地块的整体报告保留下文流程；后端提示包含`survey_report_id`时，一体化生成脚本必须增加`--survey-report-id <UUID>`，并传现有归属参数。脚本按固定报告ID获取同一冻结快照和服务端HTML章节，直接嵌入整体报告，保存`surveyEvidence`摘要及来源。不要让模型重写科学数值，也不要把勘察分析放入旧四模块白名单而丢失。没有勘察关联时不猜测任务。
+
+生成整体报告前，先执行`scripts/survey_report.py`，输入`{"action":"evidence","report_id":"<survey_report_id>","cid":<可信企业号>,"entity-id":<可信主体类型>,"entity-info-id":<可信主体号>}`，核对固定的观测时段、NDVI统计、识别质量、候选类别和缺口。该读取动作不创建新任务或重算数据；不能将融合值或模型分类当作实测真值。
+
+**整体报告的勘察内容只在服务端固定章节中呈现。** `REPORT_DATA` 的 `paper`、`overview`、专项模块等模型撰写字段不要重复遥感、识别、气象、土壤、机理和专项分析数值；主题关键词可以使用“地块勘察”。证据读取失败时停止生成，不得删去 `--survey-report-id` 绕过。请求脚本已按报告编号保存固定关联，生成脚本会校验归属及快照摘要，遗漏参数也仍会复用指定证据。
+
+当前遥感展示`as_of`截止日参考，主分析源年度及观测范围单独注明，不展示历史种植或轮作；读取质量缺口说明当前数据条件。识别结果读取`observation_context`说明实际历史观测窗口、分类截止点和最低有效月份。模型季节日历不是已确认的播种日期；完成状态不等于精度已经人工验证。旧版历史报告仍按其冻结口径读取。
+
+固定`wofost-daily-report.csv`不作为勘察数据源。勘察独立获取天气和土壤；作物候选可映射到目录参数时运行WOFOST机理冷启动，并明确标注模拟种植日与品种选择是假设。无法识别作物或缺少参数时保留缺失原因。未绑定合格无人机来源时不展示虚构2 cm成果；候选作物仍需人工复核。
+
+服务端配置`MLGROWTH_BUSINESS_API_KEY`，可用`MLGROWTH_SURVEY_API_BASE_URL`指定实际API根地址。密钥仅由脚本读取环境，不进入模型输入和最终回复。本节勘察专题规则优先于下文只支持旧地块及强制`get_plot_info`的规则。
+
+本地沙箱过滤环境变量时，脚本也支持固定只读凭据挂载`/app/config/credentials/mlgrowth-survey-api-key`（目录0700、文件0400）；不把凭据放入Skill目录或模型输入。当前部署保持现有沙箱策略。
+
 ## Quick start
 
 本 Skill 是后端内部第二次 LLM 对话的报告渲染流程：只在 prompt 已包含 `##用户问题`、`##系统参数` 或 `##Skill访问机制`、`report_no` 和 `report_url` 时使用。普通用户要求“生成报告 / 导出报告 / 创建报告”时不要用本 Skill，必须先用 `sono-report-request` 保存报告记录；如果已经存在 `report_no` / `report_url` 或 `force_skill: sono-report`，说明已进入内部渲染阶段，严禁再调用 `sono-report-request`，避免重复创建报告记录。
@@ -17,7 +45,7 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 
 本报告渲染流程禁止调用、转交或触发 `sono-report-request` 和 `agri-operation-workflow`；农事建议只作为报告内容字段整理，不进入农事作业流程编排。若 prompt 的 `##Skill访问机制` 包含 `force_skill: sono-report`，必须继续执行本 Skill，不得重新路由。
 
-当前活跃模板是 `template.html`；它已按 `demo.html` 的标题页、摘要、数据方法、结果分析、讨论建议、结论附录、图表编号和表格编号风格渲染。不要把报告写成简单指标卡片或口语化总结。
+关联勘察的报告必须使用固定报告data接口返回的`document_template`及`document_template_sha256`；`generate_report.py`会核验并在本次工作目录冻结该模板，禁止用独立简版页面或自写模板替代。没有勘察关联的既有报告使用同步的 `template.html`；它已按 `demo.html` 的标题页、摘要、数据方法、结果分析、讨论建议、结论附录、图表编号和表格编号风格渲染。不要把报告写成简单指标卡片或口语化总结。
 
 优先用 `execute_skill_script` 执行一体化脚本。`script_path` 必须是 Skill 内的脚本相对路径，不能写 `python3`、`python` 或绝对解释器路径：
 
@@ -70,11 +98,11 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 - 专项分析不要只摘 3 个指标。必须从 `get_report_by_type` 返回的数据里主动挖掘多天趋势、异常点、极值、变化幅度、风险原因和建议，写入 `moduleReports[].trendSeries`、`analysisItems`、`sections`、`tables` 或 `charts[]`。字段允许开放扩展，模板会尽量渲染。
 - 每种报告都必须按论文式结构组织：摘要与关键词、数据来源与处理方法、结果与分析、讨论与农事建议、结论与附录。可选写入 `paper.abstract`、`paper.keywords`、`paper.methods`、`paper.findings`、`paper.discussion`、`paper.conclusions`、`paper.limitations`。
 - `overall_report` 只汇总 4 类专项：`plot_growth_analysis`、`plot_3d_phenotype`、`plot_growth_dynamics`、`plot_seedling_monitoring`；不要把 `plot_wofost` 作为默认第五模块。
-- `plot_growth_dynamics` 的 WOFOST 日序列来自 `../sono-mcp/wofost-daily-report.csv`，属于生长动态报告。CSV 无日期列时使用“模型日/序列编号”作图表标签，禁止编造日期；所有相关指标必须称为模型模拟/预测。
+- 生长动态只使用当前地块真实关联的WOFOST接口/资产，不读取固定样例CSV补齐。仅有有效模型序列时展示趋势；无日期信息时不得编造业务日期，缺少模型数据时明确省略该模块。
 - 文风必须是学术、论文、技术报告风：证据化、克制、可追溯；不要写营销话术，不写未计算的显著性检验、p 值或因果断言。
 - 风险、建议、表格行和图表序列必须有真实可展示字段；无有效数据时跳过，不生成空白条目、空表或空图。
 - `level`、`green`、`blue`、`amber`、`red` 等状态值只作为内部样式/风险等级，不要作为页面可见说明直接输出；可见文本必须转成专业中文描述。
-- 整体报告必须围绕 4 类专项形成综合证据矩阵；缺失模块只说明未取得数据，不生成示例指标、风险或结论。
+- 将有数据的专项结果直接写入结果正文，不生成专项证据矩阵，不使用原业务、旧业务、此次改造等内部表述，不输出数据条件与复核事项章节。
 
 ## When to use
 
@@ -216,3 +244,19 @@ description: Backend-internal SONO report rendering workflow. Use in the second 
 - [ ] 最终 HTML 已按 `report_url` 的文件名保存到 `/app/report/`。
 - [ ] 成功时已回写报告状态 `status=1`；失败时已尽量回写 `status=2`。
 - [ ] 用户可见回复只包含或明确包含 `<sono-report>{report_url}</sono-report>`。
+
+
+## 统一正文与既有监测成果
+
+关联勘察的整体报告按固定report_id读取evidence；生成器将服务端完整勘察分析章节嵌入原结果正文，沿用原960px纸张，不追加另一张报告或模型JSON。圈选地块不要求原`plot_id`或既有监测周期。模型不得复制固定章节的指标或推导确定病因、已确认作物、实收产量、品质或准确率。
+
+
+## 完整内容与环境指标
+
+联合勘察专题与整体地块报告使用相同的后台取数、模板和生成流程；包含气象、土壤、遥感、分割与作物候选、WOFOST状态、异常识别、病虫害、气候灾害、长势综合评价、产量与品质预测状态。专题标题可不同，正文数据范围一致。首次纯区域勘察不能借用其他地块的数据。
+
+关联`survey_report_id`时，evidence按固定报告和可信归属读取，纯圈选勘察不要求`plot_id`。服务端固定章节已展示逐日气象、SoilGrids土壤参考、WOFOST历史和短期预测、异常巡查与专项分析；不要在模型撰写字段重复这些科学指标。模拟配置日期必须标注为情景假设，不能写成用户确认的播种日期。
+
+从真实`get_weather`、`get_wofost_report`以及地块专项返回中补充可取得的天气预报、模拟物候、收获器官生物量、水量收支和养分数据。没有返回则省略，禁止读取固定样例CSV。气象站实测、再分析/暂定天气、SoilGrids参考、遥感养分估算、WOFOST模拟分别标明来源和日期。人工反馈仅对应其候选业务日期，不能当作当前批次确认或准确率。
+
+报告页面以功能名呈现，标题不带R1/R2代码。卫星目录只读已登记真实观测，云量与有效覆盖分别说明。生育与水分历史仅绘趋势线，逐日数值保留在折叠表格。生成失败时保持原report_no、report_url及归属参数重试，禁止去掉报告编号生成无关联文件。
