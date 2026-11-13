@@ -622,6 +622,25 @@ class IrrigationControlPayloadTests(unittest.TestCase):
             plan_text,
         )
 
+    def test_irrigation_form_contract_rejects_preamble_and_flattened_syntax(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        form_text = (SKILL_DIR / "references" / "irrigation-form.md").read_text(
+            encoding="utf-8"
+        )
+
+        for required in (
+            "No natural-language preamble or analysis may appear before the Syntax",
+            "Each Syntax key must stay on its own physical line",
+            "Do not flatten the Syntax into a paragraph",
+            "the visible assistant message must contain only that Syntax",
+        ):
+            self.assertIn(required, form_text)
+
+        self.assertIn(
+            "Do not add any prose before or after the irrigation Syntax",
+            skill_text,
+        )
+
     def test_cli_stdio_is_utf8_without_python_encoding_environment(self):
         env = os.environ.copy()
         env.pop("PYTHONUTF8", None)
