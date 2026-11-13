@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { copyPdfJsWasm } from './scripts/copy-pdfjs-wasm.mjs'
 import { createRequire } from 'node:module'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueJsx from '@vitejs/plugin-vue-jsx'
 
@@ -54,7 +54,7 @@ const DEV_PROXY_TARGET =
   'http://localhost:8080'
 
 // Sumfen 渠道登录 API 代理，走 Vite 代理避免浏览器 CORS preflight 拦截自定义 header
-const SUMFEN_DEV_API_TARGET = process.env.VITE_SUMFEN_API_URL || 'http://192.168.3.38:3000'
+const SUMFEN_DEV_API_TARGET = process.env.VITE_SUMFEN_API_URL || 'http://192.168.3.36:3000'
 
 function resolveVueOfficePptxEntry(): string {
   try {
@@ -91,11 +91,15 @@ function pdfJsWasmAssets(): Plugin {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: process.env.VITE_BASE_PATH || '/',
   define: {
     __FRONTEND_VERSION__: JSON.stringify(FRONTEND_VERSION),
     __FRONTEND_COMMIT__: JSON.stringify(FRONTEND_COMMIT),
+    // Expose only this public instance identifier from the repository-root .env.
+    __SUMFEN_INSTANCE_ID__: JSON.stringify(
+      loadEnv(mode, resolve(__dirname, '..'), 'SUMFEN_INSTANCE_ID').SUMFEN_INSTANCE_ID?.trim() || 'knowage',
+    ),
   },
   build: {
     modulePreload: {
@@ -156,6 +160,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    strictPort: true,
     host: true,
     // 代理配置，用于开发环境
     proxy: {
@@ -230,4 +235,4 @@ export default defineConfig({
       },
     }
   }
-})
+}))

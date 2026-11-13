@@ -137,5 +137,17 @@ dest="$crate_dir/lib/$lib_dir"
 mkdir -p "$dest"
 cp "$crate_dir/target/$target/release/$lib_name" "$dest/$lib_name"
 
+# Rust's prebuilt standard library can retain embedded LLVM bitcode even after
+# the release build has emitted native code. Recent Go cgo checks reject those
+# sections in static archives. Remove only that metadata from the Linux copy
+# consumed by cgo; leave Cargo's output and its ThinLTO optimizations intact.
+# Cross-builds can select a target-capable tool with OBJCOPY=llvm-objcopy (or
+# the matching target-prefixed objcopy).
+case "$target" in
+  *-unknown-linux-*)
+    "${OBJCOPY:-objcopy}" --remove-section=.llvmbc --remove-section=.llvmcmd "$dest/$lib_name"
+    ;;
+esac
+
 echo "Wrote $dest/$lib_name"
 echo "Build WeKnora with the archive: go build -tags anydoc ./cmd/server"

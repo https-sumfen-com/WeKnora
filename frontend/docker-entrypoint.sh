@@ -16,11 +16,16 @@ if [ "$SKILL_MB" -gt 512 ] 2>/dev/null; then
   SKILL_MB=512
 fi
 
+# Encode the instance identifier before embedding it in JavaScript so quotes,
+# backslashes and line breaks from deployment configuration stay plain data.
+INSTANCE_ID_ENCODED=$(printf '%s' "${SUMFEN_INSTANCE_ID:-knowage}" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g')
+
 cat > /usr/share/nginx/html/config.js << EOF
 window.__RUNTIME_CONFIG__ = {
   MAX_FILE_SIZE_MB: ${FILE_MB},
   MAX_SKILL_BUNDLE_SIZE_MB: ${SKILL_MB},
-  DEFAULT_LOCALE: "${RUNTIME_DEFAULT_LOCALE}"
+  DEFAULT_LOCALE: "${RUNTIME_DEFAULT_LOCALE}",
+  SUMFEN_INSTANCE_ID: decodeURIComponent("${INSTANCE_ID_ENCODED}")
 };
 EOF
 

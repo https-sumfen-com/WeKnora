@@ -577,7 +577,14 @@ export async function sumfenAutoLogin(
     if (headers['entity-id']) reqHeaders['entity-id'] = headers['entity-id']
     if (headers['entity-info-id']) reqHeaders['entity-info-id'] = headers['entity-info-id']
 
-    const res = await fetch(SUMFEN_LOGIN_URL, { method: 'POST', headers: reqHeaders, body: '{}' })
+    const instanceId = window.__RUNTIME_CONFIG__?.SUMFEN_INSTANCE_ID?.trim()
+      || __SUMFEN_INSTANCE_ID__?.trim()
+      || 'knowage'
+    const res = await fetch(SUMFEN_LOGIN_URL, {
+      method: 'POST',
+      headers: reqHeaders,
+      body: JSON.stringify({ instance_id: instanceId }),
+    })
     const data: SumfenLoginResponse = await res.json()
     // code 非零且含 token/user/tenant 时视为成功（实测 code=1 表示成功）
     if (data.data?.token && data.data.raw?.user && data.data.raw?.active_tenant) {

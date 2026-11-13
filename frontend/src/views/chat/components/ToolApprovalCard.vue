@@ -345,7 +345,7 @@ const headerIcon = computed(() => {
 
 const targetLabel = computed(() => (
   t('agentStream.toolApproval.targetWithTool', {
-    service: props.serviceName,
+    service: isOperation.value ? 'SONO' : props.serviceName,
     tool: props.mcpToolName,
   })
 ))

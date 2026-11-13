@@ -1,5 +1,10 @@
 *.sh text eol=lf
 
+# Keep release manifests consistent when building a Windows checkout in WSL.
+go.mod text eol=lf
+go.sum text eol=lf
+licenses/sources/modules.tsv text eol=lf
+
 # Force LF on Go source + JSON golden fixtures so Windows checkouts
 # (with default core.autocrlf=true) don't trip byte-equal comparisons in
 # acceptance/contract envelope tests.

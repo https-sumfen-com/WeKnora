@@ -17,8 +17,10 @@ fi
 
 test -s licenses/sources/modules.tsv
 while read -r module_name module_version checksum; do
+    # Windows checkouts can leave a CR at the end of each manifest/go.mod line.
+    checksum="${checksum%$'\r'}"
     [[ "${checksum}" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid source checksum for ${module_name}" >&2; exit 1; }
-    actual_version="$(awk -v name="${module_name}" '$1 == name { print $2 }' go.mod)"
+    actual_version="$(awk -v name="${module_name}" '{ sub(/\r$/, "") } $1 == name { print $2 }' go.mod)"
     if [ "${actual_version}" != "${module_version}" ]; then
         echo "Update the source manifest for ${module_name}: expected ${module_version}, got ${actual_version}" >&2
         exit 1

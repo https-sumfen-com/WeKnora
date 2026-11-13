@@ -53,6 +53,27 @@ cmp "${fixture}/LICENSE" "${fixture}/release with spaces/LICENSE"
 cmp "${fixture}/THIRD_PARTY_NOTICES.md" "${fixture}/release with spaces/THIRD_PARTY_NOTICES.md"
 bash "${fixture}/scripts/check-license-bundle.sh" "${fixture}/release with spaces/licenses/sources"
 
+# Windows checkouts may convert either input to CRLF independently. Packaging
+# must still verify and copy the same source archives in every combination.
+cp "${fixture}/licenses/sources/modules.tsv" "${fixture}/modules.lf"
+cp "${fixture}/go.mod" "${fixture}/go.mod.lf"
+for crlf_input in manifest gomod both; do
+    cp "${fixture}/modules.lf" "${fixture}/licenses/sources/modules.tsv"
+    cp "${fixture}/go.mod.lf" "${fixture}/go.mod"
+    if [ "${crlf_input}" != gomod ]; then
+        awk '{ printf "%s\r\n", $0 }' "${fixture}/modules.lf" > "${fixture}/licenses/sources/modules.tsv"
+    fi
+    if [ "${crlf_input}" != manifest ]; then
+        awk '{ printf "%s\r\n", $0 }' "${fixture}/go.mod.lf" > "${fixture}/go.mod"
+    fi
+    release="${fixture}/crlf ${crlf_input}"
+    bash "${fixture}/scripts/copy-licenses.sh" "${release}"
+    for archive in mysql-v1.10.0.zip go-m1cpu-v0.1.6.zip; do
+        cmp "${fixture}/release with spaces/licenses/sources/${archive}" "${release}/licenses/sources/${archive}"
+    done
+    bash "${fixture}/scripts/check-license-bundle.sh" "${release}/licenses/sources"
+done
+
 if LICENSE_TEST_DOWNLOAD_FAILURE=1 bash "${fixture}/scripts/copy-licenses.sh" "${fixture}/failed download"; then
     echo 'Packaging accepted a failed source download' >&2; exit 1
 fi
