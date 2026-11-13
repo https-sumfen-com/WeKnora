@@ -2,14 +2,21 @@
   <div class="user-menu" :class="{ 'user-menu--collapsed': uiStore.sidebarCollapsed }" ref="menuRef">
     <div class="user-bar">
     <!-- 用户按钮 -->
-    <div class="user-button" data-guide="user-menu" @click="toggleMenu">
-      <div class="user-avatar">
+    <div class="user-button" data-guide="user-menu" @click="toggleMenu"
+      :title="authStore.isSumfenLogin ? t('general.settingsCenter') : undefined">
+      <div v-if="authStore.isSumfenLogin" class="settings-center-icon">
+        <t-icon name="setting" size="20px" />
+      </div>
+      <div v-else class="user-avatar">
         <img v-if="userAvatar" :src="userAvatar" :alt="$t('common.avatar')" />
         <span v-else class="avatar-placeholder">{{ userInitial }}</span>
       </div>
       <div v-if="!uiStore.sidebarCollapsed" class="user-info">
           <!-- 多空间 / superuser：首行空间名，次行 username · 角色。单空间：昵称 + 邮箱。 -->
-          <template v-if="showTenantIdentityLine">
+          <template v-if="authStore.isSumfenLogin">
+            <div class="user-name">{{ $t('general.settingsCenter') }}</div>
+          </template>
+          <template v-else-if="showTenantIdentityLine">
             <div class="user-tenant-name" :title="activeTenantName">{{ activeTenantName }}</div>
             <div class="user-tenant-meta">
               <span v-if="userName && userName !== activeTenantName" class="user-tenant-meta-name">{{ userName }}</span>
@@ -50,7 +57,7 @@
     <Transition name="dropdown">
       <div v-if="menuVisible" class="user-dropdown" @click.stop>
         <!-- 弹出菜单：账号（头像+昵称）／当前空间（名称+权限）；底部侧栏样式不改。 -->
-        <div v-if="userName" class="dropdown-user-header is-clickable" role="button" tabindex="0"
+        <div v-if="userName && !authStore.isSumfenLogin" class="dropdown-user-header is-clickable" role="button" tabindex="0"
           @click="handleQuickNav('userprofile')" @keydown.enter.prevent="handleQuickNav('userprofile')"
           @keydown.space.prevent="handleQuickNav('userprofile')">
           <div class="dropdown-user-avatar">
@@ -71,7 +78,7 @@
           </div>
         </div>
 
-        <div v-if="userName && !authStore.isLiteMode" ref="tenantMenuItemRef" class="dropdown-tenant-panel" :class="{
+        <div v-if="userName && !authStore.isLiteMode && !authStore.isSumfenLogin" ref="tenantMenuItemRef" class="dropdown-tenant-panel" :class="{
           'is-open': tenantSubmenuOpen,
           'is-clickable': showTenantSwitcher,
         }" @mouseenter="showTenantSwitcher && showTenantSubmenu()"
@@ -90,7 +97,7 @@
           <t-icon v-if="showTenantSwitcher" name="swap" class="dropdown-tenant-panel-trail"
             :title="$t('tenant.switcher.menuLabel')" />
         </div>
-        <div class="menu-divider"></div>
+        <div v-if="!authStore.isSumfenLogin" class="menu-divider"></div>
         <!-- 账号与空间是头像菜单的核心上下文；基础设施类配置统一收进「全部设置」。 -->
         <div class="menu-item" @click="handleQuickNav('general')">
           <t-icon name="user" class="menu-icon" />
@@ -149,7 +156,7 @@
             </svg>
           </span>
         </div> -->
-        <template v-if="!authStore.isLiteMode">
+        <template v-if="!authStore.isLiteMode && !authStore.isSumfenLogin">
           <div class="menu-divider"></div>
           <div class="menu-item danger" @click="handleLogout">
             <t-icon name="logout" class="menu-icon" />
@@ -163,7 +170,7 @@
          as the IM submenu. Data comes from authStore.memberships, kept fresh via
          GET /auth/me when the submenu opens (throttled) and after invite/create. -->
     <Teleport to="body">
-      <div v-if="tenantSubmenuOpen" class="tenant-submenu-floating" :style="tenantSubmenuStyle"
+      <div v-if="tenantSubmenuOpen && !authStore.isSumfenLogin" class="tenant-submenu-floating" :style="tenantSubmenuStyle"
         @mouseenter="showTenantSubmenu" @mouseleave="scheduleHideTenantSubmenu">
         <div class="tenant-submenu-header">
           {{ $t('tenant.switcher.menuLabel') }}
@@ -392,7 +399,7 @@ const switchableMemberships = computed<Membership[]>(() => {
 // TenantSelector for the "any tenant in the system" case, so we don't
 // double-show that here.
 const showTenantSwitcher = computed(() => {
-  return switchableMemberships.value.length >= 1
+  return !authStore.isSumfenLogin && switchableMemberships.value.length >= 1
 })
 
 const isCurrentTenant = (id: number) => {
@@ -646,6 +653,16 @@ onUnmounted(() => {
   &:active {
     transform: scale(0.98);
   }
+}
+
+.settings-center-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--td-text-color-secondary);
 }
 
 .user-avatar {

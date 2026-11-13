@@ -43,15 +43,18 @@ function hasPendingOIDCCallback() {
   return hash.includes('oidc_result=') || hash.includes('oidc_error=')
 }
 
-const SUMFEN_QUERY_KEYS = ['cid', 'token', 'terminal_id', 'entity_id', 'entity_info_id']
-
+// Keep underscore aliases first so existing links retain precedence if both appear.
 const SUMFEN_PARAM_MAP: Record<string, string> = {
   cid: 'cid',
   token: 'token',
   terminal_id: 'terminal-id',
+  'terminal-id': 'terminal-id',
   entity_id: 'entity-id',
+  'entity-id': 'entity-id',
   entity_info_id: 'entity-info-id',
+  'entity-info-id': 'entity-info-id',
 }
+const SUMFEN_QUERY_KEYS = Object.keys(SUMFEN_PARAM_MAP)
 
 function hasPendingSumfenParams(to: RouteLocationNormalized): boolean {
   return SUMFEN_QUERY_KEYS.some(k => to.query[k])
@@ -258,6 +261,7 @@ function persistLoginResponse(authStore: ReturnType<typeof useAuthStore>, respon
     const homeTenantId = response.user.tenant_id ?? activeTenant?.id ?? ''
     authStore.setUser(userInfoFromApi(response.user, homeTenantId))
     authStore.setToken(response.token)
+    authStore.setSumfenLogin(false)
     if (response.refresh_token) {
       authStore.setRefreshToken(response.refresh_token)
     }
@@ -315,6 +319,10 @@ router.beforeEach(async (to, from, next) => {
   // 只在参数明确出现时置 true，不在缺席时重置，确保 App.vue 清除参数后状态依然生效。
   if (to.query.hide_chat === '1') {
     uiStore.setHideChatMode(true)
+  }
+  // Keep the host's navigation choice after URL cleanup, SPA navigation and reload.
+  if (to.query.hide_nav === '1' || to.query.hide_nav === '0') {
+    uiStore.setHideNavMode(to.query.hide_nav === '1')
   }
 
   // Preserve bookmarks for tools that have moved out of Settings.
@@ -376,7 +384,8 @@ router.beforeEach(async (to, from, next) => {
       const headers: Record<string, string> = {}
       for (const qk of SUMFEN_QUERY_KEYS) {
         const val = to.query[qk]
-        if (val) headers[SUMFEN_PARAM_MAP[qk]] = String(val)
+        const header = SUMFEN_PARAM_MAP[qk]
+        if (val && !headers[header]) headers[header] = String(val)
       }
       const result = await sumfenAutoLogin(headers as any)
       if (result.success && result.loginData) {
@@ -385,6 +394,7 @@ router.beforeEach(async (to, from, next) => {
           authStore.logout()
         }
         persistLoginResponse(authStore, result.loginData)
+        authStore.setSumfenLogin(true)
         authStore.setSelectedTenant(null, null)
         // next() 不 next(location)：next(location) 重触发守卫，Pinia computed 尚未刷新会再次走到 /login
         // URL 渠道参数由 App.vue 用 history.replaceState 清理（不触发导航）

@@ -54,7 +54,7 @@
         </t-tooltip>
 
         <!-- 空间选择器：仅在用户可切换空间时显示 -->
-        <TenantSelector v-if="canAccessAllTenants && !uiStore.sidebarCollapsed" />
+        <TenantSelector v-if="canAccessAllTenants && !uiStore.sidebarCollapsed && !authStore.isSumfenLogin" />
 
         <!-- 侧栏边缘拖拽调宽，拖窄时自动收缩 -->
         <PanelResizeHandle edge="right" :label="t('knowledgeStages.resizeDrawer')"

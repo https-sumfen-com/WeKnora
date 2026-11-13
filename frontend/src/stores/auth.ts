@@ -15,6 +15,8 @@ import { useOrganizationStore } from '@/stores/organization'
 import { createSequencedRefresh } from '@/stores/sequencedRefresh'
 import { invalidateAuthRefresh } from '@/utils/authRefresh'
 
+const SUMFEN_LOGIN_USER_KEY = 'weknora_sumfen_login_user_id'
+
 /** 登出时丢弃 Pinia 内的空间级资源缓存，避免 SPA 重登复用上一账号数据。 */
 function clearSessionResourceCaches() {
   useChatResourcesStore().invalidate()
@@ -48,6 +50,7 @@ export const useAuthStore = defineStore('auth', () => {
   // so PR 3 can render a tenant-switcher UI without a store migration.
   const memberships = ref<Array<{ tenant_id: number; tenant_name?: string; role: string }>>([])
   const isLiteMode = ref(false)
+  const isSumfenLogin = ref(false)
   // pendingInvitationCount is the number of pending tenant invitations
   // addressed to the current user. Renders as a badge next to the
   // avatar; updated by fetchPendingInvitationCount, which runs after
@@ -189,12 +192,21 @@ export const useAuthStore = defineStore('auth', () => {
   })
 
   // 操作方法
+  const setSumfenLogin = (value: boolean) => {
+    isSumfenLogin.value = value && !!user.value?.id
+    try {
+      if (isSumfenLogin.value) sessionStorage.setItem(SUMFEN_LOGIN_USER_KEY, String(user.value!.id))
+      else sessionStorage.removeItem(SUMFEN_LOGIN_USER_KEY)
+    } catch { /* The current page still works if session storage is unavailable. */ }
+  }
+
   const setUser = (userData: UserInfo) => {
     const previousId = user.value?.id
     user.value = userData
     // 保存到localStorage
     localStorage.setItem('weknora_user', JSON.stringify(userData))
     if (previousId !== userData.id) {
+      setSumfenLogin(false)
       reloadUserPreferences()
     }
   }
@@ -482,6 +494,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('weknora_memberships')
     localStorage.removeItem('weknora_lite_mode')
     isLiteMode.value = false
+    setSumfenLogin(false)
     try {
       sessionStorage.removeItem('weknora_lite_last_path')
     } catch {
@@ -572,6 +585,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     isLiteMode.value = localStorage.getItem('weknora_lite_mode') === 'true'
+    try {
+      isSumfenLogin.value = !!token.value && !!user.value?.id
+        && sessionStorage.getItem(SUMFEN_LOGIN_USER_KEY) === String(user.value.id)
+    } catch { isSumfenLogin.value = false }
   }
 
   // 初始化时从localStorage恢复状态
@@ -605,6 +622,7 @@ export const useAuthStore = defineStore('auth', () => {
     hasRole,
     effectiveTenantId,
     isLiteMode,
+    isSumfenLogin,
 
     // 方法
     setUser,
@@ -625,6 +643,7 @@ export const useAuthStore = defineStore('auth', () => {
     acceptInvitationByTokenAndRefresh,
     getSelectedTenant,
     setLiteMode,
+    setSumfenLogin,
     logout,
     initFromStorage
   }

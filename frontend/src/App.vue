@@ -104,6 +104,7 @@ const persistOIDCLoginResponse = async (response: any) => {
   }
 
   authStore.setToken(response.token)
+  authStore.setSumfenLogin(false)
   if (response.refresh_token) {
     authStore.setRefreshToken(response.refresh_token)
   }
@@ -180,15 +181,18 @@ const SUMFEN_PARAM_MAP: Record<string, string> = {
   cid: 'cid',
   token: 'token',
   terminal_id: 'terminal-id',
+  'terminal-id': 'terminal-id',
   entity_id: 'entity-id',
+  'entity-id': 'entity-id',
   entity_info_id: 'entity-info-id',
+  'entity-info-id': 'entity-info-id',
 }
 const SUMFEN_QUERY_KEYS = Object.keys(SUMFEN_PARAM_MAP)
 
 // Sumfen 渠道登录已在 router guard 里阻塞完成；这里只负责清理 URL 里的渠道参数，
 // 避免用户看到带参数的地址栏，且不触发导航（history.replaceState 不重跑守卫）。
-// hide_chat 同理：router guard 已读取并落盘到 uiStore，这里只做 URL 清理。
-const IFRAME_CLEANUP_PARAMS = [...SUMFEN_QUERY_KEYS, 'hide_chat']
+// hide_chat / hide_nav 同理：router guard 已读取到 uiStore，这里只做 URL 清理。
+const IFRAME_CLEANUP_PARAMS = [...SUMFEN_QUERY_KEYS, 'hide_chat', 'hide_nav']
 
 const handleSumfenAutoLogin = () => {
   const params = new URLSearchParams(window.location.search)

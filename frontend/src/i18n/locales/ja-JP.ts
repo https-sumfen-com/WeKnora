@@ -5717,6 +5717,7 @@ export default {
     general: {
       title: '一般設定',
       allSettings: 'すべての設定',
+      settingsCenter: '設定センター',
       personalSettings: '個人設定',
       helpAndDocs: 'ヘルプとドキュメント',
       description: '言語や外観などの基本オプションを設定します',

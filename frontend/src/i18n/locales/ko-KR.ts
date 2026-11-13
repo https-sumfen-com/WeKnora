@@ -4212,6 +4212,7 @@ export default {
   general: {
     title: '일반 설정',
     allSettings: '모든 설정',
+    settingsCenter: '설정 센터',
     personalSettings: '개인 설정',
     helpAndDocs: '도움말 및 문서',
     description: '언어, 외관 등 기본 옵션 설정',

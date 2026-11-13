@@ -1,6 +1,12 @@
 import { defineStore } from 'pinia'
 import { clampSidebarWidth, SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_THRESHOLD } from '../utils/sidebarWidth'
 
+const HIDE_NAV_KEY = 'weknora_hide_nav'
+function readHideNavMode(): boolean {
+  try { return sessionStorage.getItem(HIDE_NAV_KEY) === 'true' }
+  catch { return false }
+}
+
 export const useUIStore = defineStore('ui', {
   state: () => ({
     showSettingsModal: false,
@@ -25,13 +31,14 @@ export const useUIStore = defineStore('ui', {
     manualEditorOnSuccess: null as null | ((payload: { kbId: string; knowledgeId: string; status: 'draft' | 'publish' }) => void),
     sidebarCollapsed: localStorage.getItem('sidebar_collapsed') === 'true',
     hideChatMode: false,
+    hideNavMode: readHideNavMode(),
     sidebarWidth: clampSidebarWidth(Number(localStorage.getItem('sidebar_width'))),
     sidebarResizing: false,
     sidebarBrowserStatus: localStorage.getItem('sidebar_browser_status') !== 'false',
   }),
 
   getters: {
-    sidebarDisplayWidth: (state) => state.sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth,
+    sidebarDisplayWidth: (state) => state.hideNavMode ? 0 : (state.sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth),
   },
 
   actions: {
@@ -171,6 +178,14 @@ export const useUIStore = defineStore('ui', {
 
     setHideChatMode(value: boolean) {
       this.hideChatMode = value
+    },
+
+    setHideNavMode(value: boolean) {
+      this.hideNavMode = value
+      try {
+        if (value) sessionStorage.setItem(HIDE_NAV_KEY, 'true')
+        else sessionStorage.removeItem(HIDE_NAV_KEY)
+      } catch { /* Keep the in-memory mode when session storage is unavailable. */ }
     }
   }
 })

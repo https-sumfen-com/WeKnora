@@ -4212,6 +4212,7 @@ export default {
   general: {
     title: 'Общие настройки',
     allSettings: 'Все настройки',
+    settingsCenter: 'Центр настроек',
     personalSettings: 'Личные настройки',
     helpAndDocs: 'Справка и документация',
     description: 'Настройка языка, внешнего вида и других базовых параметров',
